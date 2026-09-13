@@ -204,7 +204,15 @@ def refresh_system_prompt(plugins=None):
 
 SYSTEM_PROMPT = compose_system_prompt(CONTROL.get("role", ""))   # ← 人设/类型，改 control 文件即换模型人格
 CAP = CONTROL.get("capabilities", {})
-FULL_ACCESS = CONTROL.get("capabilities", {}).get("full_access", True)  # True=全权限(危险命令也不询问直接执行)；False=只读(每次执行都询问)
+FULL_ACCESS = CONTROL.get("capabilities", {}).get("full_access", False)  # 默认**只读**：危险命令要先确认；显式设 true 才全权限直执行
+# ---------------- 安全：监听地址 + 访问令牌（第一批任务 1） ----------------
+# 真实风险：以前默认 `host="0.0.0.0"` 且**没有任何鉴权** —— 同一个 WiFi 下任何人打开
+# http://<你的IP>:5000 就能聊天、翻你的会话、改你的配置。现在：默认只听本机；
+# 要局域网访问必须在控制文件里**显式**打开 lan_access 并设一个 access_token。
+LAN_ACCESS = bool(CONTROL.get("capabilities", {}).get("lan_access", False))
+ACCESS_TOKEN = str(CONTROL.get("capabilities", {}).get("access_token", "") or "").strip()
+# 除这些路径外，所有请求都要带令牌（/health 用于探活，不带敏感信息）
+_AUTH_EXEMPT = ("/health", "/favicon.ico")
 BEH = CONTROL.get("behavior", {})
 
 HISTORY_FILE = "xiaojiao_history.json"              # 对话上下文（持久化）
@@ -219,6 +227,7 @@ def reload_control():
     """从操控文件重新载入配置（设置页保存后即刻生效）。"""
     global CONTROL, MODEL_NAME, BRAIN_ENGINE, LLM_BASE, LLM_KEY, LLM_MODEL
     global SYSTEM_PROMPT, CAP, BEH, MAX_HISTORY, TEMPERATURE, MAX_TOKENS
+    global LAN_ACCESS, ACCESS_TOKEN, FULL_ACCESS
     CONTROL = _load_control()
     CONTROL.setdefault("dsh", {}).setdefault("enabled", True)
     MODEL_NAME = CONTROL.get("model_name", "xiaojiao1.0-4B")
@@ -233,6 +242,9 @@ def reload_control():
     MAX_HISTORY = int(CAP.get("context_len", 20))
     TEMPERATURE = float(BEH.get("temperature", 0.7))
     MAX_TOKENS = int(BEH.get("max_tokens", 1024))
+    LAN_ACCESS = bool(CAP.get("lan_access", False))
+    ACCESS_TOKEN = str(CAP.get("access_token", "") or "").strip()
+    FULL_ACCESS = bool(CAP.get("full_access", False))
 
 
 _ctlmtime = 0
@@ -2788,6 +2800,50 @@ def agent_run(user_input, lean=False):
 
 
 app = Flask(__name__)
+
+
+def _client_is_local():
+    """请求是不是来自本机（令牌只对"非本机访问"强制；本机自己用不折腾）。"""
+    try:
+        return request.remote_addr in ("127.0.0.1", "::1", "localhost")
+    except Exception:  # noqa: silent-ok — 取不到就当非本机，走鉴权
+        return False
+
+
+def _req_token():
+    """从 Header 或 query 取令牌（两种都支持，方便 curl / 浏览器）。"""
+    return (request.headers.get("X-Auth-Token") or request.args.get("token") or "").strip()
+
+
+@app.before_request
+def _require_token():
+    """访问令牌闸门（第一批任务 1）。
+
+    背景：以前 `host=0.0.0.0` 且**零鉴权** —— 同网段任何人打开 http://<你的IP>:5000
+    就能聊天、翻会话、改配置。现在：
+      · 默认只听 127.0.0.1（局域网根本连不上）；
+      · 若显式开了 `capabilities.lan_access`，则**必须**配 `capabilities.access_token`，
+        否则启动时直接拒绝开启（见 main()），且**非本机请求**一律要带令牌；
+      · 本机请求免令牌（你自己开浏览器不用每次带参数）；
+      · `/health` 永远免鉴权（给探活用，不含任何敏感信息）。
+    """
+    try:
+        p = request.path or ""
+        if p in _AUTH_EXEMPT or p.startswith("/static/"):
+            return None
+        if not LAN_ACCESS:
+            return None                       # 只听本机时不需要令牌
+        if _client_is_local():
+            return None
+        if ACCESS_TOKEN and _req_token() == ACCESS_TOKEN:
+            return None
+        from flask import jsonify as _j
+        return _j({"ok": False,
+                   "error": "未授权：请带上访问令牌（请求头 X-Auth-Token: <token>，或网址加 ?token=<token>）。"
+                            "令牌在 xiaojiao_control.json 的 capabilities.access_token 里配置。"}), 401
+    except Exception as e:  # noqa: silent-ok — 鉴权钩子自身异常不能把服务打死
+        LOG.warning("鉴权钩子异常（已放行）：%s", e)
+        return None
 
 
 @app.after_request
@@ -5370,7 +5426,16 @@ def main():
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 3608, e)
     threading.Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    # 监听地址：默认只本机。要局域网访问必须在控制文件显式开 lan_access + 设 access_token，
+    # 否则**拒绝开**（宁可开不了，也不要把"无鉴权的全权限助手"暴露到同网段）。
+    _host = "0.0.0.0" if LAN_ACCESS else "127.0.0.1"
+    if LAN_ACCESS and not ACCESS_TOKEN:
+        print("\n⚠️ 已开启局域网访问(lan_access)但没配 access_token —— 为避免裸奔，本次仍只听 127.0.0.1。")
+        print("   请在 xiaojiao_control.json 的 capabilities.access_token 填一个随机串后再启动。\n")
+        _host = "127.0.0.1"
+    if _host == "0.0.0.0":
+        print("  🌐 局域网访问已开启：http://<本机IP>:%d?token=<你的令牌>（非本机请求都要带令牌）" % port)
+    app.run(host=_host, port=port, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":
