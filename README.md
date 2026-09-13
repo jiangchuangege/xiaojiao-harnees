@@ -101,6 +101,7 @@ python start_xiaojiao.py
 | 🔗 **接 dsh / 客户端** | `http://127.0.0.1:5000/v1` | OpenAI 兼容，自动带上小焦人格 + 工具 |
 | 👁️ **视觉识图** | `POST /api/vision` | 截图 → 视觉模型描述（配 XIAOJIAO_VISION_URL） |
 | 💰 **成本看板** | `http://127.0.0.1:5000/cost` | 今日调用/本地Token/云端Token/花费/节省 |
+| ❤️ **探活 / 版本** | `GET http://127.0.0.1:5000/health` | 免鉴权，返回 `{"ok": true, "version": "1.0"}`；给启动脚本 / 监控 / 外部探活用 |
 
 ### 常用操作
 

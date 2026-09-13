@@ -114,6 +114,9 @@ if isinstance(CONTROL, dict):
     CONTROL.setdefault("dsh", {}).setdefault("enabled", True)  # DSH 桥接永远默认开(防静默翻false)
 
 MODEL_NAME = CONTROL.get("model_name", "xiaojiao1.0-4B")
+# Web 应用自己的版本号（给 /health 用）。改版本时务必与 CHANGELOG.md / README 对齐 ——
+# tools/check_principles.py 的 P9 会审这类"文档说 vX、代码没跟上"的不一致。
+APP_VERSION = "1.0"
 BRAIN = CONTROL.get("brain", {})
 BRAIN_ENGINE = BRAIN.get("engine", "auto")          # auto | llama | xiaojiao | api
 LLM_BASE = BRAIN.get("api", {}).get("base_url", "http://127.0.0.1:8080/v1")
@@ -2954,6 +2957,16 @@ def _require_token():
     except Exception as e:  # noqa: silent-ok — 鉴权钩子自身异常不能把服务打死
         LOG.warning("鉴权钩子异常（已放行）：%s", e)
         return None
+
+
+@app.route("/health")
+def health():
+    """探活接口。**永远免鉴权**（`_AUTH_EXEMPT` 里放行），且只回不含敏感信息的两项。
+
+    为什么要有：以前只有"大脑"有 /health，小焦 Web 自己没有 —— 想确认"服务活着没/是哪个版本"
+    只能去戳首页或 /api/xxx，前者重、后者要令牌。启动脚本、监控、外部探活统一用这个。
+    """
+    return jsonify({"ok": True, "version": APP_VERSION})
 
 
 @app.after_request
