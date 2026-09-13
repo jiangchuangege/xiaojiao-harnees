@@ -1582,9 +1582,45 @@ def _bg_run(jid, cmd, timeout):
         _BG[jid] = {"state": "error", "result": str(e)}
 
 
+_PLACEHOLDER_RE = re.compile(r"[\[\<（(]\s*(?:用户名|username|user|userprofile|项目路径|项目目录|"
+                               r"默认目录|当前目录|项目根)\s*[\]\>）)]", re.I)
+
+
+def _expand_path_placeholders(p):
+    r"""把模型嘴里的占位符换成**真实路径**（补充任务 7）。
+
+    真实缺陷：说"列出我桌面上的 HTML 文件"，模型把桌面写成 C:\Users\[用户名]\Desktop 这种
+    模板 → list_files 直接 WinError 3 找不到。提示词里给的其实一直是真实路径，但模型仍可能
+    "背模板"，所以工具侧再兜一层：把 [用户名]/<username>/%USERPROFILE% 换成真实值。
+    """
+    s = str(p or "")
+    if not s:
+        return s
+    home = os.path.expanduser("~")
+    s = _PLACEHOLDER_RE.sub("", s)
+    s = s.replace("%USERPROFILE%", home).replace("%USERNAME%", os.path.basename(home))
+    s = re.sub(r"[\\/]{2,}", "\\\\", s)
+    s = s.replace("\\Desktop", "\\Desktop")
+    if s.startswith("~"):
+        s = home + s[1:]
+    return s
+
+
+def _fix_args_paths(name, args):
+    """对"要路径"的工具，把参数里的占位符展开（只改值，不动别的参数）。"""
+    if name not in ("list_files", "read_file", "write_file", "edit_file", "open_app",
+                    "suggest_organize", "ci_read_file"):
+        return args
+    out = dict(args or {})
+    for k in ("path", "file", "dir", "directory"):
+        if isinstance(out.get(k), str):
+            out[k] = _expand_path_placeholders(out[k])
+    return out
+
+
 def run_tool(name, args, force=False):
     global PENDING
-    args = args or {}
+    args = _fix_args_paths(name, args or {})   # 补充任务 7：先把 [用户名] 这类占位符展开成真实路径
     # 权限模式：Full access(默认)=所有命令直接执行、危险命令也不询问；Read-only=每次执行命令都询问
     if not force:
         # 权限模式（第一批任务 2）：默认 full_access=false —— **只对危险命令**要确认，
@@ -2764,6 +2800,8 @@ def agent_run(user_input, lean=False):
         path_ctx = ("\n[环境] 当前时间：%s（本地时间，回答「现在几点/今天几号」必须用它，不要自己猜）；"
                     "当前工作目录：%s；用户主目录：%s；桌面：%s。"
                     "凡是要创建文件/文件夹/读写文件，一律用绝对路径（如桌面文件用 %s\\文件名）。"
+                    "上面给的都是**真实路径，请照抄**；禁止输出 [用户名] / <username> / %%USERPROFILE%% "
+                    "这类占位符（写占位符会导致找不到文件）。"
                     % (time.strftime("%Y-%m-%d %H:%M:%S %A"), os.getcwd(), home, desktop, desktop))
         # 运行时只再补两样：工具用法细则 + .md 技能文档（规则与清单已在 SYSTEM_PROMPT 里，
         # 这里绝不能再拼一遍 _TOOL_RULES，否则提示词白涨一大截）
