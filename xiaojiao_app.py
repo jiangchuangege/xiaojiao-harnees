@@ -5523,6 +5523,32 @@ async function saveSettings(){
 </script></body></html>"""
 
 
+def bind_host(port=None):
+    """决定 Web 服务的监听地址。返回 (host, 要打印的提示行列表)。
+
+    规则（与任务 1 的鉴权闸门配套）：
+      · 默认只听 127.0.0.1 —— 同网段连不上；
+      · 只有**明确开了 capabilities.lan_access 且 access_token 非空**才听 0.0.0.0；
+      · 只开 lan_access 不配令牌 → 仍听 127.0.0.1，并给出启动警告（宁可开不了，
+        也不要把"无鉴权的全权限助手"暴露到同网段）。
+
+    为什么抽成一个函数：`main()`（直接跑 xiaojiao_app.py）和 `start_xiaojiao.py`（一键启动器）
+    是**两条启动路径**。安全第一批·任务 A 实测发现，启动器里把 host 写死成 "0.0.0.0"，
+    把这里的防护整个绕过去了 —— 同网段无令牌就能打开小焦。两条路径共用这一个函数，
+    才不会再次各写各的、又悄悄跑偏。
+    """
+    lines = []
+    host = "0.0.0.0" if LAN_ACCESS else "127.0.0.1"
+    if LAN_ACCESS and not ACCESS_TOKEN:
+        lines.append("⚠️ 已开启局域网访问(lan_access)但没配 access_token —— 为避免裸奔，本次仍只听 127.0.0.1。")
+        lines.append("   请在 xiaojiao_control.json 的 capabilities.access_token 填一个随机串后再启动。")
+        host = "127.0.0.1"
+    if host == "0.0.0.0":
+        lines.append("🌐 局域网访问已开启：http://<本机IP>:%s?token=<你的令牌>（非本机请求都要带令牌）"
+                     % (port if port else "<端口>"))
+    return host, lines
+
+
 def main():
     print("=" * 46)
     print("  小焦 · XiaoJiao Web")
@@ -5547,15 +5573,10 @@ def main():
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 3608, e)
     threading.Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
-    # 监听地址：默认只本机。要局域网访问必须在控制文件显式开 lan_access + 设 access_token，
-    # 否则**拒绝开**（宁可开不了，也不要把"无鉴权的全权限助手"暴露到同网段）。
-    _host = "0.0.0.0" if LAN_ACCESS else "127.0.0.1"
-    if LAN_ACCESS and not ACCESS_TOKEN:
-        print("\n⚠️ 已开启局域网访问(lan_access)但没配 access_token —— 为避免裸奔，本次仍只听 127.0.0.1。")
-        print("   请在 xiaojiao_control.json 的 capabilities.access_token 填一个随机串后再启动。\n")
-        _host = "127.0.0.1"
-    if _host == "0.0.0.0":
-        print("  🌐 局域网访问已开启：http://<本机IP>:%d?token=<你的令牌>（非本机请求都要带令牌）" % port)
+    # 监听地址：走 bind_host()（与 start_xiaojiao.py 共用同一套规则，见该函数说明）。
+    _host, _host_lines = bind_host(port)
+    for _line in _host_lines:
+        print("  " + _line)
     app.run(host=_host, port=port, debug=False, use_reloader=False)
 
 

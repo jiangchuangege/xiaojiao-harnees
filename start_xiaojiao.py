@@ -260,15 +260,20 @@ def main():
         print("🐱 已跳过 N.E.K.O. 猫娘（不影响小焦启动；想开时单独运行本脚本并选 y 即可）")
 
     # 4. 打开浏览器
+    _host, _host_lines = app.bind_host(port)      # 与 main() 共用同一套监听规则，见该函数说明
     print(f"🌐 启动小焦 Web: http://127.0.0.1:{port}")
     threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+    for _line in _host_lines:
+        print("  " + _line)
     # N.E.K.O. 猫娘: Steam 桌面客户端(不是 web 页面)。start_neko 已确保拉起它。
     if neko_root:
         print("🐱 N.E.K.O. 猫娘桌面客户端已就绪 (Steam 客户端 / N.E.K.O.exe)")
 
     # 5. 启动 Web 服务（阻塞在这里）
+    # 以前这里写死 host="0.0.0.0" —— 把任务 1 的「默认只听本机 + 令牌鉴权」整个绕过去了，
+    # 实测同网段无令牌就能打开小焦（安全第一批·任务 A 修）。
     try:
-        app.app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+        app.app.run(host=_host, port=port, debug=False, use_reloader=False)
     finally:
         # 清理所有子进程
         if llama_proc:
