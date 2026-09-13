@@ -83,6 +83,32 @@ def _load_control():
         c["role"] = strip_search_rules(c["role"])
     return c
 
+
+# ================== 大脑密钥的来源（安全第一批·任务3） ==================
+# 为什么要有这段：密钥以前只能写在 xiaojiao_control.json 里，那是个**本地明文**文件 ——
+# 一旦被误发、误传、误提交，云端 Key 就等于公开了。改成"环境变量优先"之后：控制文件里
+# 可以留空，密钥只活在运行环境里；多机部署时各机各自设，不必互相传文件。
+LLM_KEY_ENV = "XIAOJIAO_API_KEY"
+
+
+def _resolve_llm_key(brain):
+    """解析大脑密钥。优先级：环境变量 XIAOJIAO_API_KEY > 控制文件 brain.api.api_key。
+
+    控制文件里还允许写 `"api_key": "env:某个名字"` 这种**间接引用**（模板
+    xiaojiao_control.json.example 就是这么写的）：这时读的是"某个名字"那个环境变量，
+    而不是把 "env:..." 这串字面量当密钥发出去（那会白白换来一个 401）。
+    """
+    env_key = (os.environ.get(LLM_KEY_ENV) or "").strip()
+    if env_key:
+        return env_key
+    api = brain.get("api", {}) if isinstance(brain, dict) else {}
+    raw = api.get("api_key", "") if isinstance(api, dict) else ""
+    raw = raw.strip() if isinstance(raw, str) else ""
+    if raw.lower().startswith("env:"):
+        return (os.environ.get(raw[4:].strip()) or "").strip()   # 控制文件指向环境变量
+    return raw
+
+
 CONTROL = _load_control()
 if isinstance(CONTROL, dict):
     CONTROL.setdefault("dsh", {}).setdefault("enabled", True)  # DSH 桥接永远默认开(防静默翻false)
@@ -91,7 +117,8 @@ MODEL_NAME = CONTROL.get("model_name", "xiaojiao1.0-4B")
 BRAIN = CONTROL.get("brain", {})
 BRAIN_ENGINE = BRAIN.get("engine", "auto")          # auto | llama | xiaojiao | api
 LLM_BASE = BRAIN.get("api", {}).get("base_url", "http://127.0.0.1:8080/v1")
-LLM_KEY = BRAIN.get("api", {}).get("api_key", "")
+# 密钥优先级：环境变量 XIAOJIAO_API_KEY > 控制文件 api_key（安全第一批·任务3）
+LLM_KEY = _resolve_llm_key(BRAIN)
 LLM_MODEL = BRAIN.get("api", {}).get("model", MODEL_NAME)
 # 检索铁律：写死在代码里，而不是只写在 control 文件里 —— 用户换人设/换模型也不会把这条规矩弄丢。
 # 真实缺陷防复发：小焦曾把功能字「用」当关键词去搜，搜回来的是"用（汉语汉字）"百科词条。
@@ -234,7 +261,7 @@ def reload_control():
     BRAIN = CONTROL.get("brain", {})
     BRAIN_ENGINE = BRAIN.get("engine", "auto")
     LLM_BASE = BRAIN.get("api", {}).get("base_url", "http://127.0.0.1:8080/v1")
-    LLM_KEY = BRAIN.get("api", {}).get("api_key", "")
+    LLM_KEY = _resolve_llm_key(BRAIN)
     LLM_MODEL = BRAIN.get("api", {}).get("model", MODEL_NAME)
     SYSTEM_PROMPT = compose_system_prompt(CONTROL.get("role", ""))   # 走统一合成，别把检索铁律丢掉
     CAP = CONTROL.get("capabilities", {})

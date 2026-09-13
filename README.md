@@ -543,6 +543,43 @@ flowchart TD
 - **危险命令会拦**：碰到 `rm / del / format / shutdown / reg delete / taskkill /f`，或往系统目录写文件，小焦会先挂起、等你点「✅ 确认执行」才执行。
 - **本地离线**：模型、记忆、会话都在你机器上，不上传。
 - **插件要自己信得过**：插件的 `execute` 能做的事 = 你代码能做的事，别装来路不明的插件。
+- **密钥用环境变量**：云端 API Key 优先从环境变量 `XIAOJIAO_API_KEY` 读，控制文件里可以留空（见下）。
+
+### 🔑 密钥用环境变量（推荐）
+
+`xiaojiao_control.json` 是**本地明文**文件。密钥写在里面，一旦被误发、误传、误提交就等于公开了。
+小焦读密钥的顺序是 **环境变量 `XIAOJIAO_API_KEY`  >  控制文件 `brain.api.api_key`**，
+所以推荐把密钥放进环境变量，控制文件里留空：
+
+```powershell
+# Windows：只在当前窗口有效（先试一下）
+$env:XIAOJIAO_API_KEY="sk-你的密钥"
+
+# Windows：永久生效（以后新开的窗口都有）
+setx XIAOJIAO_API_KEY "sk-你的密钥"
+```
+
+```
+# Linux / macOS
+export XIAOJIAO_API_KEY=sk-你的密钥
+```
+
+控制文件里两种写法都支持：
+
+```json
+"api_key": "",                       // 留空最省事 —— 环境变量已经优先生效
+"api_key": "env:XIAOJIAO_API_KEY"    // 或者显式写「去读这个环境变量」
+```
+
+自查还有没有明文密钥残留（输出会打码；退出码 1 = 有命中）：
+
+```powershell
+python tools/check_secrets.py              # 扫控制文件/配置文件及其副本
+python tools/check_secrets.py --fix-hint   # 顺带打印迁移步骤
+```
+
+> ⚠️ 密钥已经在明文文件里躺过，就建议去服务商后台**作废并重新生成**一把。
+> 即使文件被 `.gitignore` 忽略，只要它曾被提交过，Git 历史里就仍然留着明文。
 
 ---
 

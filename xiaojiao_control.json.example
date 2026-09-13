@@ -11,7 +11,7 @@
     "api": {
       "base_url": "http://127.0.0.1:9292/v1",        "//base_url": "任意 OpenAI 兼容端点；llama-swap 默认 9292",
       "model": "xiaojiao",
-      "api_key": "",                                 "//api_key": "云端模型才需要；本地留空"
+      "api_key": "env:XIAOJIAO_API_KEY",             "//api_key": "云端模型才需要；本地留空最省事。密钥推荐放**环境变量 XIAOJIAO_API_KEY**（优先级高于这里，且密钥不落文件）；这里也可以写 env:变量名 表示去读那个环境变量"
     },
     "llama_swap_port": 9292,
     "comfy_dir": "",                                 "//comfy_dir": "ComfyUI 目录（视频大脑）；留空=自动探测",
