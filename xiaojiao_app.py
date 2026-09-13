@@ -219,7 +219,13 @@ def compose_system_prompt(role, plugins=None):
     `SYSTEM_PROMPT = CONTROL.get("role","")`，把规则全丢了 —— 缺陷会悄悄复发。
     每条规则都只加**一份**：先剥掉人设里历史遗留的规则文本，再按固定顺序拼。
     """
-    return strip_search_rules(role) + _SEARCH_RULES + _TOOL_RULES + _plugin_list(plugins)
+    # 补偿第 6 项：**技能文档（.md 插件）也要进 SYSTEM_PROMPT**。
+    # 真实缺陷：PLUGIN_SKILLS 只在"每轮临时拼进 messages"那条路上用过，
+    # 而真正长期生效的 SYSTEM_PROMPT 里从来没有它 —— 技能文档等于白写。
+    _skills = globals().get("PLUGIN_SKILLS") or []
+    _skill_txt = ("\n\n[技能插件]\n" + "\n\n".join(c for _, c in _skills)) if _skills else ""
+    return (strip_search_rules(role) + _SEARCH_RULES + _TOOL_RULES + _plugin_list(plugins)
+            + _skill_txt)
 
 
 def refresh_system_prompt(plugins=None):
@@ -598,7 +604,12 @@ def _build_tools(only=None):
     global _TOOL2PLUGIN
     _TOOL2PLUGIN = {}
     tools = list(TOOLS)
-    _only = {x.lower() for x in only} if only else None
+    # 坑（第 1 步实测发现）：以前写的是 `if only`，于是 `only=[]`（空子集）会被当成 None
+    # → 反而把**全部** 77 个工具发出去（13891 token），正好和"收窄"的意图相反。
+    # 现在只有显式传 None 才是"全部"；空列表就是"一个都不给"。
+    if only is not None and not only:
+        LOG.warning("_build_tools(only=[])：本轮一个工具都不发；若本意是「全部」请传 None")
+    _only = {x.lower() for x in only} if only is not None else None
     _taken = {t["function"]["name"] for t in tools}       # 内置工具名先占位
     for pname, p in PLUGINS.items():
         if p.get("builtin") or not p.get("on"):
@@ -1286,6 +1297,11 @@ def _fallback_worthy(status):
     return status in (400, 401, 402, 403, 404, 429, 500, 502, 503)
 
 
+# 补偿第 3 项：云端"快切"阈值 —— 等 15 秒还不回就不再干等，直接交本地大脑。
+# （实测 Agnes 慢起来单次 60~100 秒；用户体感上"卡住"比"降级到本地"更糟。）
+CLOUD_TIMEOUT_S = 15
+
+
 def _llm_post(target, payload, timeout=90, tries=4):
     """往某个大脑目标 POST 一次（带重试）。返回 (response 或 None, 最后一次的状态码, 正文)。
 
@@ -1440,7 +1456,7 @@ def llm_chat(messages):
     payload = {"messages": messages, "temperature": TEMPERATURE, "max_tokens": MAX_TOKENS}
     for _t in _llm_targets():
         _p = dict(payload, model=_t["model"])
-        resp, code, body = _llm_post(_t, _p, timeout=90)
+        resp, code, body = _llm_post(_t, _p, timeout=(90 if _t.get('local') else CLOUD_TIMEOUT_S))
         if code == 200 and resp is not None:
             if _t["local"] and not _is_local_base(LLM_BASE):
                 _USED_LOCAL_FALLBACK.update({"on": True, "model": _t["model"], "reason": _LAST_LLM_ERROR})
@@ -1881,7 +1897,7 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
                    "max_tokens": (200 if lean else MAX_TOKENS),
                    "tools": ([] if lean else _build_tools(only=tools_subset))}
         try:
-            r, _code, _body = _llm_post(_t, payload, timeout=120)
+            r, _code, _body = _llm_post(_t, payload, timeout=(120 if _t.get('local') else CLOUD_TIMEOUT_S))
             if _code != 200 or r is None:
                 _note_llm_error("chat+tools", _code, _body)      # 真实原因必须留痕
                 if (_code is None or _fallback_worthy(_code)) and _ti + 1 < len(_targets):
@@ -2625,6 +2641,33 @@ def _asks_diagram(text):
     return any(h.lower() in q for h in _DIAGRAM_HINTS)
 
 
+# 常见命令动词（用于"这句话本身就是一条命令"的判定）
+_SHELL_VERBS = ("del", "erase", "rm", "rmdir", "rd", "dir", "echo", "type", "copy", "move", "ren",
+                "ipconfig", "ipconfig", "ping", "netstat", "tasklist", "taskkill", "systeminfo",
+                "where", "whoami", "hostname", "ver", "cls", "mkdir", "md", "cd", "tree", "findstr",
+                "powershell", "pwsh", "cmd", "python", "pip", "git", "node", "npm", "curl", "iwr",
+                "wget", "shutdown", "reg", "sc", "schtasks", "attrib", "fc", "comp", "sort", "more")
+
+
+def _looks_like_shell_command(text):
+    """这句话本身是不是一条 shell 命令？是就返回命令原文（否则返回 ""）。
+
+    判据保守：① 只有一个"逻辑行"（没有换行/问号/中文句子结构）；② 首词命中命令动词；
+    ③ 长度合理。避免把"echo 是什么"这种**提问**误判成命令（问句有 是什么/怎么/为什么 等词）。
+    """
+    q = (text or "").strip()
+    if not q or "\n" in q or len(q) > 400:
+        return ""
+    if re.search(r"(是什么|什么是|怎么|如何|为什么|吗\?|\?|？|请教|解释|教我)", q):
+        return ""
+    if re.search(r"[\u4e00-\u9fa5]", q) and "echo " not in q.lower():
+        return ""                                  # 中文叙述句基本不是命令
+    first = re.split(r"\s+", q, 1)[0].strip().lower().lstrip("@")
+    if first.endswith(".exe"):
+        first = first[:-4]
+    return q if first in _SHELL_VERBS else ""
+
+
 def _asks_net_ip(text):
     """问本机公网 IP / 归属地（本机自身信息 → net_ip 直答）。"""
     q = (text or "")
@@ -2649,6 +2692,322 @@ _TOOL_FALLBACK = {
 
 def _tool_fallback_for(name):
     return _TOOL_FALLBACK.get(name, [])
+
+
+# ================== 第 1 步：意图路由 —— 按需加载 system + tools（问题 1 + 9） ==================
+# 为什么要有它：以前**每一轮**都把全部 77 个工具（实测 13891 token）和整份规则（system ~5700 token）
+# 发给大脑 —— 光固定开销就顶穿本地 ctx（llama.ctx=20000），连"你好"都报 400/500；
+# 而且工具越多模型越容易摸错（用户实测：画图时跑去 read_memory）。
+# 这里**一个工具、一条规则都不删**，只决定"这一轮加载哪些"：闲聊 3 个工具、画图只给 archify 链，
+# 认不出来才回落 full（全部）。所有工具仍然注册在表里，随时可被点名调用。
+_INTENT_HINTS = {
+    # 查询类信号（会去查外部信息）
+    "query": ("搜索", "搜一下", "搜一搜", "查一下", "查查", "找一下", "帮我查", "百度", "谷歌",
+              "新闻", "漏洞", "cve", "公网", "归属地", "天气", "汇率", "最新", "多少钱"),
+    # 命令类信号（想让我动手执行）
+    "shell": ("执行命令", "运行命令", "跑一下命令", "命令行", "powershell", "cmd 里", "shell"),
+}
+# 闲聊只认**明确的寒暄/身份/道谢**这类；宁可漏判（落到 full），也不误判成闲聊而少给工具
+_CHAT_HINTS = ("你好", "您好", "hi", "hello", "嗨", "哈喽", "在吗", "在么", "早上好", "中午好",
+               "下午好", "晚上好", "晚安", "早安", "谢谢", "多谢", "感谢", "再见", "拜拜",
+               "你是谁", "你叫什么", "介绍一下你", "自我介绍一下", "哈哈", "嘿嘿", "嗯嗯")
+
+# 每个意图要加载的工具（名字必须**真实存在**；写了不存在的会被丢掉，不会静默变成"全部"）
+_INTENT_TOOLS = {
+    "chat": ("web_search", "read_memory", "list_files"),
+    "scrape": ("get", "make_request", "fetch", "stealthy_fetch", "bulk_get", "bulk_fetch",
+               "scrape_with_selector", "download", "screenshot", "web_search"),
+    "query": ("net_ip", "collect_vulnerabilities", "read_file", "web_search", "get_weather"),
+    "shell": ("run_command", "read_file", "write_file"),
+    "diagram": None,      # 特殊：archify_* 全链 + 读写文件（下面现算）
+    "full": None,         # None = 全部（兜底）
+}
+_CHAT_SYSTEM_HINT = ("\n[本轮模式] 闲聊：直接、自然地回话就行，**不要调用工具、不要联网搜索**。\n")
+_DIAGRAM_SYSTEM_HINT = (
+    "\n[本轮模式] 画图：严格按 Archify 工作流走 —— archify_read_skill → archify_guide → "
+    "archify_read_schema → archify_read_example → archify_validate → archify_deliver → "
+    "archify_visual_check；不要联网搜索，不要用别的画图方式。\n")
+# 每条消息的外壳（"role"/"content" 的键名、引号、括号、逗号）大约值多少 token。
+# 实测（第 1 步）：不把它算进去，估算比真实请求少几百 token → 历史裁了仍然超限。
+_MSG_OVERHEAD = 12
+
+
+def _tools_tokens(names):
+    """这组工具的 schema 大概占多少 token（估不出来就按 0，宁可少算也不抛）。"""
+    try:
+        return _estimate_tokens(json.dumps(_build_tools(only=names), ensure_ascii=False))
+    except Exception as e:      # noqa: silent-ok — 估不出来按 0，别让估算拖垮对话
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 2640, e)
+        return 0
+
+
+def all_tool_names():
+    """**全部**真实工具名（内置 + 插件），与 `_build_tools()` 的结果一致。
+
+    为什么不用 `real_tool_names()`：那个函数取的是 `_TOOL2PLUGIN` 的键，而 `_TOOL2PLUGIN`
+    **只登记插件工具**（内置工具走 TOOLS，不进路由表）。第 1 步实测踩到：用它当"真实工具表"
+    去校验子集，`run_command` / `read_file` / `list_files` 这些**内置**工具会被当成"不存在"而丢掉
+    —— 结果 shell 意图一个工具都不剩，悄悄回落成"全部工具"。
+    """
+    try:
+        return [((t or {}).get("function") or {}).get("name") for t in _build_tools()
+                if ((t or {}).get("function") or {}).get("name")]
+    except Exception as e:      # noqa: silent-ok — 取不到就当空表，调用方会回落
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 2640, e)
+        return []
+
+
+def _intent_tool_names(intent):
+    """该意图要加载的工具名列表；**None = 全部**（full 兜底，或子集一个都不存在时）。
+
+    返回前与真实工具表对一遍：不存在的名字直接丢弃（防止"以为给了工具、其实没给"）。
+    """
+    if intent not in _INTENT_TOOLS:
+        return None
+    if intent == "diagram":
+        want = [n for n in real_tool_names() if n.lower().startswith("archify")]
+        want += ["read_file", "open_app", "list_files"]
+    else:
+        want = list(_INTENT_TOOLS[intent] or [])
+    if not want:
+        return None                      # full：全部
+    real = set(all_tool_names())
+    got = [n for n in want if n in real]
+    if not got:
+        LOG.warning("意图 %s 的工具子集一个都不存在，本轮回落为全部工具（请检查工具名）", intent)
+        return None
+    if len(got) < len(want):
+        LOG.debug("意图 %s 的子集里有 %d 个工具名不存在，已忽略：%s",
+                  intent, len(want) - len(got), [n for n in want if n not in real])
+    return got
+
+
+def _is_chitchat(q):
+    """**保守**判断"这句就是寒暄"。把寒暄词剥掉后还剩实义内容 → 不算（落到 full，少给工具会误事）。"""
+    s = (q or "").strip().lower()
+    if not s or len(s) > 24:
+        return False
+    hits = [h for h in _CHAT_HINTS if h in s]
+    if not hits:
+        return bool(re.fullmatch(r"[\s\W_]+", s))      # 纯标点/表情
+    rest = s
+    for h in hits:
+        rest = rest.replace(h, "")
+    rest = re.sub(r"[\s\W_，。！？~～、,.!?]+", "", rest)
+    return len(rest) <= 4                              # 只剩"呀/啊/啦"这类语气词
+
+
+def _detect_intent(user_input):
+    """规则识别本轮意图：chat / scrape / diagram / query / shell / full。**不靠模型**。
+
+    顺序即优先级（越具体越靠前）：画图 > 网址 > 命令原文 > 查询 > 命令词 > 闲聊 > full 兜底。
+    """
+    q = (user_input or "").strip()
+    if not q:
+        return "chat"
+    if _asks_diagram(q):                 # 画图优先：'画一张 example.com 的架构图' 也算画图
+        return "diagram"
+    if _looks_like_url(q):               # 带网址 → 抓取
+        return "scrape"
+    if _looks_like_shell_command(q):     # "这句话本身就是一条命令"
+        return "shell"
+    if _asks_net_ip(q):                  # 我的公网 IP / 归属地
+        return "query"
+    low = q.lower()
+    if any(h in low for h in _INTENT_HINTS["query"]):
+        return "query"
+    if any(h in low for h in _INTENT_HINTS["shell"]):
+        return "shell"
+    if _is_chitchat(q):
+        return "chat"
+    return "full"                        # 兜底：能力不受损
+
+
+def _tool_index(only=None, plugins=None):
+    """本轮【当前已加载的工具】索引：内置工具 + 插件工具，按 `only` 收窄。
+
+    与传给大脑的 `tools` 参数**保持一致** —— 清单里出现的就是这一轮真能调的。
+    （`_plugin_list()` 只列插件工具，这里连内置工具一起列，所以闲聊/命令这类
+    以内置工具为主的意图也能正确显示。）一个都不匹配时如实说"当前无可用工具"。
+    """
+    _only = {x.lower() for x in only} if only is not None else None
+    items = []
+    try:
+        for t in TOOLS:
+            fn = (t or {}).get("function") or {}
+            nm = fn.get("name")
+            if nm and (_only is None or nm.lower() in _only):
+                items.append((nm, fn.get("description") or ""))
+        rows = plugins if plugins is not None else globals().get("PLUGINS") or {}
+        for pname, p in (rows or {}).items():
+            if not p.get("on") or p.get("type") == "skin":
+                continue
+            for t in (p.get("desc") or []):
+                if not isinstance(t, dict) or not t.get("name"):
+                    continue
+                if _only is not None and t["name"].lower() not in _only:
+                    continue
+                items.append((t["name"], t.get("description") or pname))
+    except Exception as e:      # 索引生成失败绝不能拖垮提示词
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 2680, e)
+        return _PLUGIN_LIST_TEMPLATE % "当前无可用工具"
+    if not items:
+        return _PLUGIN_LIST_TEMPLATE % "当前无可用工具"
+    seen, lines = set(), []
+    for nm, desc in items:
+        if nm in seen:
+            continue
+        seen.add(nm)
+        d = (desc or "").strip().replace("\n", " ")
+        if len(d) > 46:
+            d = d[:46] + "…"
+        lines.append("- %s：%s" % (nm, d))
+    return _PLUGIN_LIST_TEMPLATE % "\n".join(lines)
+
+
+def system_for_intent(intent, role=None, plugins=None):
+    """按本轮意图生成 system：**该给的规则一条不少，用不上的整段不加载**。
+
+    · chat    → 人设 + 一句"闲聊别调工具" + 3 个工具索引（实测 system < 400 token）
+    · diagram → 人设 + 检索铁律 + 工具规则 + archify 清单 + 画图工作流（问题 6 的代码层强制）
+    · 其它任务意图 → 人设 + 检索铁律 + 工具规则 + 本轮工具索引
+    · full    → 全套规则 + 全量索引（与老行为一致，兜底）
+
+    注意：这里**不含技能文档与工具用法** —— 那些由调用方按需追加，避免同一份被拼两遍
+    （老代码把 PLUGIN_SKILLS 拼了两遍，白涨 ~800 token）。
+    """
+    role = strip_search_rules(role if role is not None else CONTROL.get("role", ""))
+    if intent == "chat":
+        return role + _CHAT_SYSTEM_HINT + _tool_index(only=_intent_tool_names("chat"), plugins=plugins)
+    if intent == "full":
+        return role + _SEARCH_RULES + _TOOL_RULES + _tool_index(only=None, plugins=plugins)
+    only = _intent_tool_names(intent)
+    extra = _DIAGRAM_SYSTEM_HINT if intent == "diagram" else ""
+    return (role + _SEARCH_RULES + _TOOL_RULES + _tool_index(only=only, plugins=plugins) + extra)
+
+
+def _plan_tools(intent, system_text, current_text, max_ctx=None):
+    """定这一轮给哪些工具，并保证 `system + tools + 本轮问题` **一定塞得进 ctx**。
+
+    返回 (工具名列表, 预估 token)。列表为 None 表示"全部"。
+    这是"永远不报 ctx 超限"的最后一道保险：即使 intent=full（77 个工具 13891 token），
+    也会按预算从尾部裁到装得下为止 —— 工具都还在表里，只是这一轮不发那么多。
+    """
+    max_ctx = int(max_ctx or _max_context_tokens())
+    names = _intent_tool_names(intent)
+    budget = max_ctx - _estimate_tokens(system_text) - _estimate_tokens(current_text) - _MSG_OVERHEAD * 2
+    if names is None:
+        keep = list(all_tool_names())
+        full_set = True
+    else:
+        keep, full_set = list(names), False
+    tok = _tools_tokens(keep)
+    if tok > budget:                       # 超预算 → 从尾部丢（列表按重要性排序）
+        dropped = 0
+        while len(keep) > 1 and _tools_tokens(keep) > budget:
+            keep.pop()
+            dropped += 1
+        tok = _tools_tokens(keep)
+        if dropped:
+            LOG.warning("本轮工具预算不足（system=%d + 本轮=%d，上限 %d）："
+                        "已暂缓加载 %d 个工具，只发 %d 个%s",
+                        _estimate_tokens(system_text), _estimate_tokens(current_text), max_ctx,
+                        dropped, len(keep), "（full 兜底）" if full_set else "")
+    return keep, tok
+
+
+# ================== 上下文四层防护 · 第 1 层（滑动窗口 + 硬性截断） ==================
+# 背景：本地 ctx 是硬限制（llama.ctx=20000），拼好的 system+history+本轮问题一旦超限，
+# 大脑直接报 "request (N tokens) exceeds the available context size (M tokens)"。
+# 这里**不扩 ctx、不删工具/技能/规则、不丢记忆** —— 只做"发之前算 token、超了从最老的历史砍"。
+_CONTEXT_FIT_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "context_fit.log")
+
+
+def _estimate_tokens(text):
+    """粗略估算 token 数（不引第三方分词器，够用且零依赖）。
+
+    经验值：中文 1 字 ≈ 1 token；ASCII 约 4 字符 ≈ 1 token。宁可**高估**（少留点余量），
+    也不能低估——低估就会真的超限。
+    """
+    t = str(text or "")
+    if not t:
+        return 0
+    cjk = sum(1 for ch in t if "\u4e00" <= ch <= "\u9fff")
+    other = len(t) - cjk
+    # 实测校准（用户对照）：中文约 **1.5 token/字**（原来 1.05 低估约 40%，
+    # 于是 _fit_context 报"合计 4216 / 上限 19500"，实际请求却是 22562 —— 直接 400/500）。
+    # 原理：宁可高估（少留历史），也绝不低估（一旦低估就是硬报错）。
+    return int(cjk * 1.5 + other / 3) + 1
+
+
+def _max_context_tokens():
+    """本轮可用上限：优先 capabilities.max_context_tokens，否则按引擎取
+    （本地=brain.llama.ctx，云端=128000），再减去安全余量。"""
+    margin = int(CAP.get("context_safety_margin", 1000) or 1000)
+    try:
+        explicit = int(CAP.get("max_context_tokens", 0) or 0)
+    except Exception:
+        explicit = 0
+    if explicit > 0:
+        return max(1000, explicit - margin)
+    if str(BRAIN_ENGINE).lower() == "api":
+        base = 128000
+    else:
+        try:
+            base = int((CONTROL.get("brain", {}).get("llama", {}) or {}).get("ctx", 20000) or 20000)
+        except Exception:
+            base = 20000
+    return max(1000, base - margin)
+
+
+def _tol_tokens(text):
+    """对话历史里的"轮"是成对的（用户+小焦），这里不单独用，仅保留给后续步骤。"""
+    return _estimate_tokens(text)
+
+
+def _fit_context(system_text, history, current_text, max_ctx=None, min_rounds=2, tools_tokens=0):
+    """四层防护的第 3+4 层：滑动窗口（默认最近 10 轮）+ 硬性截断（从最老开始砍）。
+
+    规则（硬性）：**system 与本轮问题永远保留**；历史从最老的一端开始丢，
+    直到总 token ≤ max_ctx；至少保留 min_history_rounds 轮（丢到下限为止）。
+    `reserve`：本轮**除 messages 之外的固定开销**（最关键的是 function-calling 的 tools
+    schema —— 63 个工具的 JSON 有几千 token！上一版漏算它，所以裁剪后**仍然超限**）。
+    返回 (保留的历史列表, 说明文本)。
+    """
+    max_ctx = int(max_ctx or _max_context_tokens())
+    try:
+        win = int(CAP.get("history_window_rounds", 10) or 10)
+    except Exception:
+        win = 10
+    rounds = max(int(min_rounds or 2), win)
+    hist = list(history or [])
+    sys_tok = _estimate_tokens(system_text)
+    cur_tok = _estimate_tokens(current_text)
+    tools_tok = int(tools_tokens or 0)
+    # 每条消息的**外壳**（role/content 的键名与括号）也要占 token。第 1 步实测：
+    # 不把它算进去，估算会比真实请求少几百 token，于是"裁剪完了还是超限"。
+    fixed = sys_tok + cur_tok + tools_tok + _MSG_OVERHEAD * 2
+
+    def _hist_tok(rows):
+        return sum(_estimate_tokens(h.get("content", "")) + _MSG_OVERHEAD for h in rows)
+
+    kept = hist[-rounds:] if rounds > 0 else []
+    stayed = kept
+    while kept and fixed + _hist_tok(kept) > max_ctx:
+        kept = kept[1:]                      # 从最老的一条开始砍
+    used = fixed + _hist_tok(kept)
+    note = ("system=%d + tools=%d + 本轮=%d = 合计 %d / 上限 %d ｜ 历史 %d→%d 轮"
+            % (sys_tok, tools_tok, cur_tok, used, max_ctx, len(stayed), len(kept)))
+    try:
+        os.makedirs(os.path.dirname(_CONTEXT_FIT_LOG), exist_ok=True)
+        # 第 1 步起**每轮都记一行**：验收要看的就是 "system=a + tools=b + 本轮=c = 合计 d / 上限 e"
+        with open(_CONTEXT_FIT_LOG, "a", encoding="utf-8") as f:
+            f.write("[%s] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), note))
+    except Exception as e:  # noqa: silent-ok — 记日志失败不能影响对话
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 1120, e)
+    if fixed > max_ctx:
+        LOG.warning("本轮 system+问题 已超上限（%s）—— 会自动尽量发，但建议缩短本轮输入", note)
+    return kept, note
 
 
 # ================== 智能体 ==================
@@ -2761,6 +3120,22 @@ def agent_run(user_input, lean=False):
     #    另有两道硬闸：用户说"别搜/停止搜索"，或点名了已加载的工具 → 一次搜索都不发。
     info = []
     _named = _named_tools(user_input)
+    # ③0 用户消息**本身就是一条 shell 命令** → 规则直通 run_command（任务 9 对话层）
+    #     为什么：实测说 "del /f /q …" / "echo hello" 时，模型会**自己解释命令**而根本不调工具，
+    #     于是该确认的没确认、该执行的没执行。命令类输入不该交给模型"理解"。
+    #     危险命令会自然走进〔待确认〕流程（run_tool 里的 is_dangerous 判定）。
+    if answer is None and CAP.get("run_tools", True):
+        _sh = _looks_like_shell_command(user_input)
+        if _sh:
+            _r = str(run_tool("run_command", {"command": _sh}, force=False))
+            tool_trace = list(tool_trace or []) + [{"tool": "run_command",
+                                                    "args": {"command": _sh},
+                                                    "result": _r[:200]}]
+            if _r.startswith("〔待确认〕"):
+                answer = _r                       # 危险命令：把确认原文直接给用户
+            else:
+                answer = "💻 **已执行**：`%s`\n\n```\n%s\n```" % (_sh, _r.strip()[:1500])
+
     # ③a 句子里直接甩了网址 → 锁定抓取类：规则直连 get（失败自动 fetch → stealthy_fetch）
     if answer is None and CAP.get("run_tools", True) and _looks_like_url(user_input) \
             and not _asks_diagram(user_input):
@@ -2803,19 +3178,24 @@ def agent_run(user_input, lean=False):
                     "上面给的都是**真实路径，请照抄**；禁止输出 [用户名] / <username> / %%USERPROFILE%% "
                     "这类占位符（写占位符会导致找不到文件）。"
                     % (time.strftime("%Y-%m-%d %H:%M:%S %A"), os.getcwd(), home, desktop, desktop))
-        # 运行时只再补两样：工具用法细则 + .md 技能文档（规则与清单已在 SYSTEM_PROMPT 里，
+        # 运行时只再补两样：工具用法细则 + .md 技能文档（规则与清单已在 system 里，
         # 这里绝不能再拼一遍 _TOOL_RULES，否则提示词白涨一大截）
         tool_guidance = "\n[工具用法] 写文件/建网站/代码用 write_file(路径用 Windows 绝对路径, 会自动建目录); 查信息/运行命令用 run_command(PowerShell 语法, 不能用并字连接命令要用分号; 不要用 run_command 去写文件)。\n"
         skills = "\n\n[技能插件] " + "\n\n".join(c for _, c in PLUGIN_SKILLS) if PLUGIN_SKILLS else ""
-        skills = tool_guidance + skills
+        # ---- 第 1 步：先按意图决定"这一轮加载什么"，system 与 tools 必须一致 ----
+        intent = _detect_intent(user_input)
         if lean:
             # 语音精简模式: 短提示, 不背工具/技能, 生成快
             messages = [{"role": "system", "content": (SYSTEM_PROMPT[:240] + "\n[语音对话] 请简短、口语化、直接回答，一两句话；不要调用工具、不要长篇大论、不要列表。")}]
         else:
-            messages = [{"role": "system", "content": SYSTEM_PROMPT + path_ctx + skills}]
-        for h in history[-MAX_HISTORY:]:
-            messages.append({"role": "user" if h["role"] == "用户" else "assistant",
-                             "content": h["content"]})
+            sys_text = system_for_intent(intent)
+            if intent != "chat":
+                # 闲聊轮不需要工具用法与技能文档 —— 按需加载，system 才能压到 1000 token 以内
+                sys_text += path_ctx + tool_guidance + skills
+            messages = [{"role": "system", "content": sys_text}]
+        # ---- 第 1 步：**先把"本轮"拼完整，再算 token** ----
+        # 真实缺陷（第 1 步实测）：以前先裁剪、后拼"相关记忆/联网资料/小脑经验"，于是这些注入内容
+        # 完全没被算进去 —— 裁剪报告写"合计 18926 / 上限 19000"，实际请求却是 19898，照样超限。
         context = ""
         if mem_text:
             context += "（相关记忆）\n" + mem_text + "\n\n"
@@ -2829,17 +3209,23 @@ def agent_run(user_input, lean=False):
             _u = (user_input + "\n\n（这是画图任务：请严格按 Archify 工作流——archify_read_skill → "
                   "archify_guide → archify_read_schema → archify_read_example → archify_validate → "
                   "archify_deliver → archify_visual_check；不要联网搜索，不要用别的画图方式。）")
-        messages.append({"role": "user", "content": (context + "用户：" + _u) if context else _u})
+        _current = (context + "用户：" + _u) if context else _u
+        # 发之前先算 token —— 按意图取工具子集，并把工具裁到"装得下"为止
+        _subset, _reserve = _plan_tools(intent, messages[0].get("content", ""), _current)
+        LOG.info("意图=%s ｜ system=%d + tools=%d + 本轮=%d token ｜ 本轮工具 %s",
+                 intent, _estimate_tokens(messages[0].get("content", "")), _reserve,
+                 _estimate_tokens(_current),
+                 "全部" if _subset is None else "%d 个" % len(_subset))
+        _hist, _fit_note = _fit_context(messages[0].get("content", ""), history, _current,
+                                        tools_tokens=_reserve)
+        LOG.debug("上下文适配：%s", _fit_note)
+        for h in _hist:
+            messages.append({"role": "user" if h["role"] == "用户" else "assistant",
+                             "content": h["content"]})
+        messages.append({"role": "user", "content": _current})
         if CAP.get("run_tools", True):
-            # 按意图收窄本轮可用工具（第 3/4 层）：画图只给 archify 链；提到网址只给抓取类。
-            _subset, _budget = None, 0
-            if _asks_diagram(user_input):
-                _subset = [n for n in real_tool_names() if n.lower().startswith("archify")]
-                _subset += ["read_file", "open_app", "list_files"]
-                _budget = 240
-            elif _looks_like_url(user_input):
-                _subset = ["get", "make_request", "fetch", "stealthy_fetch", "bulk_get",
-                           "bulk_fetch", "scrape_with_selector", "download", "screenshot"]
+            # 工具子集已由上面的 _plan_tools() 按意图 + 预算定好；画图轮再给足时间预算（多步链路）
+            _budget = 240 if intent == "diagram" else 0
             answer, tool_trace = llm_chat_tools(
                 messages, lean=lean, max_rounds=_workflow_needs_more_rounds(user_input),
                 tools_subset=_subset, budget_s=_budget)
