@@ -4150,6 +4150,11 @@ def _cloud_key_problem(base, key, model):
     **判据只用 chat**：`GET /models` 在这里不可信 —— 实测连"空 Key / 乱写的 Key"都能时不时
     拿到 200（网关/缓存时不时不校验令牌）；拿它当"Key 有效"会把结论带偏（我就被带偏过一次）。
     """
+    if not (key or "").strip():
+        # 任务C 之后密钥只从环境变量来，所以"压根没有 Key"成了常见情况 —— 直接说清楚，
+        # 别拿空 Authorization 去撞 401，再报成"你的 Key 被服务商拒了"（那会把人带偏）。
+        return ("已切到云端大脑 %s，但**还没有可用的 Key**：请设置环境变量 XIAOJIAO_API_KEY"
+                "（或在控制文件 brain.api.api_key 里临时填一把）后重试。" % model)
     url = (base or "").rstrip("/") + "/chat/completions"
     hdr = {"Content-Type": "application/json"}
     if key:
@@ -4199,8 +4204,12 @@ def api_model_select():
                 brain["api"] = {"base_url": base or "http://127.0.0.1:9292/v1",
                                 "api_key": "", "model": model or "xiaojiao"}
             else:
-                brain["api"] = {"base_url": base, "api_key": m.get("api_key", ""), "model": model}
-                note = _cloud_key_problem(base, m.get("api_key", ""), model)   # 云端 Key 不通就当场说
+                # 任务C（原 3.5）：**绝不**把模型条目里的明文 Key 搬进 brain.api.api_key ——
+                # 否则在界面切一次模型，_save_control 就把明文写回控制文件，任务 3 的
+                # "环境变量优先"等于白做。这里只切 model 名，Key 统一由 _resolve_llm_key()
+                # 从环境变量 XIAOJIAO_API_KEY 读（本地/本机大脑本来就不需要 Key）。
+                brain["api"] = {"base_url": base, "api_key": "", "model": model}
+                note = _cloud_key_problem(base, _resolve_llm_key(brain), model)   # 云端 Key 不通就当场说
             _save_control(brain=brain)
             return jsonify({"ok": True, "engine": brain["engine"], "name": name,
                             "model": brain["api"]["model"], "note": note})
