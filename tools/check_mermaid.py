@@ -123,9 +123,13 @@ def main() -> int:
 
     files = args.files
     if args.all or not files:
-        files = sorted(glob.glob(os.path.join(ROOT, "*.md")) +
-                       glob.glob(os.path.join(ROOT, "docs", "*.md")) +
-                       glob.glob(os.path.join(ROOT, "tests", "**", "*.md"), recursive=True))
+        # **必须递归**：`docs/*.md` 那种不递归的写法会**漏掉子目录里的图**。
+        # 实测踩到：新增的 `docs/six-infinity-diagrams/*.md`（7 张图）在不递归时
+        # 既不在 `--all` 里、也不在 CI（stress-test.yml 跑的就是 `--all`）里 ——
+        # 图坏了没人发现，"0 问题"就成了一句空话。递归之后它们才真的被校验。
+        files = sorted(set(glob.glob(os.path.join(ROOT, "*.md")) +
+                           glob.glob(os.path.join(ROOT, "docs", "**", "*.md"), recursive=True) +
+                           glob.glob(os.path.join(ROOT, "tests", "**", "*.md"), recursive=True)))
     total_blocks = total_bad = 0
     for f in files:
         p = f if os.path.isabs(f) else os.path.join(ROOT, f)

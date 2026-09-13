@@ -497,6 +497,396 @@ def _tool_result_str(r):
         return str(r)
 
 
+# ================== 第 5 步：工具结果隔离（防串台） ==================
+# 真实缺陷（用户实测）：先让"用 Archify 画一张架构图"，再问"抓一下 <网址>"，第 2 轮答出来的
+# 竟然是第 1 轮 archify 吐的那坨 JSON —— 因为抓取/画图的**工具原始返回**被原样写进了会话历史，
+# 下一轮又整段当上下文发回给模型，模型顺手就把它抄回来了。上下文一被污染，答案就开始串台。
+#
+# 这里的分工（载体优先：隔离由框架层做，不靠模型自觉）：
+#   · 原始内容**照旧给用户看**（用户要的就是它，第 1 轮当场能读到完整 JSON/HTML）；
+#   · 但**进会话历史的那一版只留摘要**（工具名 + 状态码 + 前 200 字）；
+#   · 用户以后想再要原文 → 从**会话缓存**里取回（不必重抓，也不会消失）。
+#
+# ⚠️ 判据的关键：**不能**按"回答有多长"来决定摘不摘要。
+#    第 3 步"输出无限"写出来的 5 万字长文是**模型自己写的**，一个字都不能动
+#    （按长度判当场就把"输出无限"废掉）。所以只看"这段回答里是不是抄了工具的返回"。
+_TOOL_RESULT_KEEP = 500          # 工具原始返回超过这个字数 = "大结果" → 进历史前必须摘要化
+_HISTORY_SUMMARY_CHARS = 200     # 摘要里保留的正文开头长度
+_TOOL_CACHE_MAX_CHARS = 200000   # 单条缓存的硬上限（比这还大就不留了，别把磁盘写爆）
+_TOOL_CACHE_KEEP = 20            # 每个会话只留最近 N 条原文
+_TOOL_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "_tool_results")
+# 代码块（```lang ... ```）。用它把"装了工具原始返回"的那一块**整块**换掉 ——
+# 直接按字数截会把 Markdown 围栏切坏，聊天窗就渲染成一片乱码。
+_RAW_FENCE_RE = re.compile(r"```[a-zA-Z0-9_+\-]*\n(.*?)```", re.S)
+# 抓取/下载类工具（只有它们才需要"结果校验"——域名/标题特征）
+_FETCH_TOOLS = ("get", "make_request", "fetch", "stealthy_fetch", "download", "screenshot",
+                "bulk_get", "bulk_fetch", "bulk_stealthy_fetch")
+# 用户想"把刚才那条工具结果的原文再拿出来"时的说法。
+# 分两类：一类**本身就说清了**（"原始结果/完整内容/展开刚才"），一类是"刚才那/刚才抓的"这种
+# **必须再带上"结果/内容/原文"才算**的 —— 否则"刚才那个文件在哪"会被误判成要看工具原文，
+# 把缓存里的 JSON 摆到用户面前（答非所问）。
+_RAW_WANT_STRONG = ("原始结果", "原始内容", "工具原文", "完整结果", "完整内容", "完整版",
+                    "展开看看", "展开一下", "展开刚才", "再显示一遍", "重新显示", "全文给我")
+_RAW_WANT_WEAK = ("刚才的", "刚才抓", "刚才那", "刚抓的", "上一条")
+_RAW_WANT_TAIL = ("结果", "内容", "原文", "全文", "数据", "json", "JSON")
+
+
+def _status_code_of(text):
+    """从工具返回里抠 HTTP 状态码（抠不到返回空串）。
+
+    摘要是"工具名 + 状态码 + 前 200 字"，状态码就靠这里。
+    """
+    s = str(text or "")
+    try:
+        d = json.loads(s)
+        if isinstance(d, dict):
+            if d.get("status") not in (None, ""):
+                return str(d.get("status"))
+            _it = d.get("items")
+            if isinstance(_it, list) and _it:
+                return str((_it[0] or {}).get("status") or "")
+    except Exception:      # noqa: silent-ok — 不是 JSON 很正常，继续按文本找
+        pass
+    m = re.search(r"\bHTTP\s*(\d{3})\b", s[:400], re.I)
+    return m.group(1) if m else ""
+
+
+def _trace_is_raw(entry):
+    """这条工具轨迹算不算"大结果"（要进历史的原始内容）。
+
+    为什么看 `full_len` 而不是 `len(result)`：轨迹里的 `result` 是**故意截短**的
+    （抓取路径存的是一行摘要、模型路径只存 800 字），拿它判长度会把大结果全判成小结果，
+    隔离就形同虚设。所以真正执行工具的地方会顺手把原文长度记进 `full_len`。
+    """
+    try:
+        return int(entry.get("full_len") or len(str(entry.get("result") or ""))) > _TOOL_RESULT_KEEP
+    except Exception:      # noqa: silent-ok — 字段异常就当不是大结果，不影响对话
+        return False
+
+
+def _tool_cache_path(session_id=None):
+    """这个会话的工具原文缓存文件路径（会话 id 只保留安全字符，防目录穿越）。"""
+    sid = session_id
+    if not sid:
+        try:
+            sid = get_current_session()[0].get("id")
+        except Exception:      # noqa: silent-ok — 取不到会话就当 default，别让缓存拖垮对话
+            sid = ""
+    sid = re.sub(r"[^0-9A-Za-z_\-]", "", str(sid or "")) or "default"
+    return os.path.join(_TOOL_CACHE_DIR, "%s.jsonl" % sid)
+
+
+def _cache_tool_result(tool, args, text, session_id=None):
+    """把工具**原始返回**落进会话缓存（历史只留摘要，用户要原文时从这里取回）。
+
+    为什么不用内存字典：小焦是会长期开着的进程，重启后用户还想翻"刚才抓的那个页面"；
+    而且一个会话的原文可能上百 KB，全放内存不划算。一行一条 append-only，读时取最后一条。
+    """
+    body = str(text or "")
+    if len(body) <= _TOOL_RESULT_KEEP or len(body) > _TOOL_CACHE_MAX_CHARS:
+        return ""
+    try:
+        os.makedirs(_TOOL_CACHE_DIR, exist_ok=True)
+        key = datetime.now().strftime("%Y%m%d_%H%M%S%f")
+        path = _tool_cache_path(session_id)
+        rec = {"key": key, "time": datetime.now().isoformat(timespec="seconds"),
+               "tool": tool, "args": args if isinstance(args, (dict, list)) else str(args),
+               "status": _status_code_of(body), "chars": len(body), "text": body}
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        # 只留最近 N 条：不然一个会话聊一年，这文件能涨到几百 MB
+        try:
+            with open(path, encoding="utf-8") as f:
+                rows = [ln for ln in f if ln.strip()]
+            if len(rows) > _TOOL_CACHE_KEEP:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.writelines(rows[-_TOOL_CACHE_KEEP:])
+        except Exception as e:      # noqa: silent-ok — 修剪失败不影响本次缓存写入
+            LOG.debug("工具缓存修剪失败（忽略）(%s:%d): %s", __file__, 512, e)
+        return key
+    except Exception as e:      # noqa: silent-ok — 缓存失败不能让这一轮对话失败
+        LOG.debug("工具结果缓存失败（忽略）(%s:%d): %s", __file__, 516, e)
+        return ""
+
+
+def _cached_tool_result(session_id=None, key=None):
+    """从会话缓存取回工具原文；没有就返回 None。`key` 为空 → 取最近一条。"""
+    try:
+        path = _tool_cache_path(session_id)
+        if not os.path.exists(path):
+            return None
+        with open(path, encoding="utf-8") as f:
+            rows = []
+            for ln in f:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    rows.append(json.loads(ln))
+                except Exception:      # noqa: silent-ok — 单行坏了跳过，别丢整个缓存
+                    continue
+        if not rows:
+            return None
+        if key:
+            for r in reversed(rows):
+                if r.get("key") == key:
+                    return r
+            return None
+        return rows[-1]
+    except Exception as e:      # noqa: silent-ok — 读缓存失败就当没有，走正常回答
+        LOG.debug("读工具缓存失败（忽略）(%s:%d): %s", __file__, 538, e)
+        return None
+
+
+def _wants_raw_tool_result(text):
+    """用户是不是在要"刚才那条工具结果的原文"（要 → 从缓存原样给，不必重抓）。
+
+    判据刻意收紧到"短句 + 明确说法"：工具原文缓存是**上一轮**的东西，
+    触发错了就会拿一坨 JSON 顶掉本该正常回答的问题。
+    """
+    q = (text or "").strip()
+    if not q or len(q) > 40:
+        return False
+    if any(h in q for h in _RAW_WANT_STRONG):
+        return True
+    return (any(h in q for h in _RAW_WANT_WEAK)
+            and any(k in q for k in _RAW_WANT_TAIL))
+
+
+def _raw_omitted_note(entry, chars):
+    """被摘要掉的那块原始内容，用一行字在原位置顶上（用户看得懂、模型也不会当正文抄）。"""
+    return ("〔原始内容已摘要：%d 字，未写入对话历史。工具 `%s`%s，开头 200 字：%s…"
+            "需要原文就说「展开刚才的结果」〕"
+            % (chars, entry.get("tool") or "?",
+               ("，HTTP %s" % entry["status"]) if entry.get("status") else "",
+               str(entry.get("raw_head") or "").replace("\n", " ")[:_HISTORY_SUMMARY_CHARS]))
+
+
+def _raw_echo_span(answer, blob):
+    """回答里有没有一段**连续抄自 blob** 的内容？有就返回 (起, 止)，没有返回 None。
+
+    为什么按"连续片段"而不是整段比对：模型抄工具结果时几乎从不一字不差，
+    常见做法是"前面自己写一句 + 后面贴一段原文"，所以找的是**最长公共片段**。
+    用 60 字做步长滑窗（60 字相同已经远超巧合），宁可漏判也不误伤模型自己写的正文。
+    """
+    a = str(answer or "")
+    b = str(blob or "")
+    if len(b) < 60 or not a:
+        return None
+    step, win = 40, 60
+    for i in range(0, max(1, min(len(b), 1200) - win), step):
+        probe = b[i:i + win]
+        pos = a.find(probe)
+        if pos < 0:
+            continue
+        end = pos + win
+        # 往后尽量延长（把整段抄来的内容一次吃掉）
+        j = i + win
+        while j < len(b) and end < len(a) and b[j] == a[end]:
+            j += 1
+            end += 1
+        # 往前尽量延长
+        k = i
+        while k > 0 and pos > 0 and b[k - 1] == a[pos - 1]:
+            k -= 1
+            pos -= 1
+        return pos, end
+    return None
+
+
+def _shrink_raw_fences(text, raws):
+    """把"装了工具原始返回"的代码块**整块**换成摘要行（保留解读等模型自己写的内容）。
+
+    判据：块的正文里出现了某条大结果的 `raw_head`（前 200 字）——只有真把工具返回贴进来才命中，
+    模型自己写的长代码块不会被误伤。
+    """
+    out, pos = [], 0
+    for m in _RAW_FENCE_RE.finditer(text):
+        body = m.group(1) or ""
+        if len(body) <= _TOOL_RESULT_KEEP:
+            continue
+        owner = None
+        for e in raws:
+            head = str(e.get("raw_head") or "").strip()
+            if len(head) >= 40 and (head[:60] in body or body.strip()[:60] in head):
+                owner = e
+                break
+        if owner is None:
+            continue
+        out.append(text[pos:m.start()])
+        out.append(_raw_omitted_note(owner, len(body)))
+        pos = m.end()
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _history_summary_line(raws):
+    """兜底摘要：工具名 + 状态码 + 前 200 字（spec 要求的最小信息量）。"""
+    parts = []
+    for e in raws[:3]:
+        parts.append("· `%s`%s：%s…"
+                     % (e.get("tool") or "?",
+                        ("（HTTP %s）" % e["status"]) if e.get("status") else "",
+                        str(e.get("raw_head") or "").replace("\n", " ")[:_HISTORY_SUMMARY_CHARS]))
+    return "〔本轮工具原始结果已摘要，未写入对话历史（防串台）〕\n" + "\n".join(parts)
+
+
+def _has_data_blob(text, min_run=1200, ratio=0.25):
+    """这句话里有没有"一整段结构化数据"（长、几乎不断句、括号/引号/标签密度高）。
+
+    为什么需要它：`_raw_echo_span` 靠"连续 60 字相同"找工具原文，**模型改写过的**
+    工具结果就找不到了（它可能把 JSON 的键值顺序换一下）。但那种情况下回答里会留下
+    一大块"不像人话的字符" —— 中文正文每几个字就有句号/逗号，几千字不断句的只能是数据。
+    这条兜底专门抓那种，同时**不会**误伤模型自己写的长文（"第一段。"×3000 最长不断句段只有 4 字）。
+    """
+    s = str(text or "")
+    worst = 0
+    for seg in re.split(r"[。！？；\n]{1,}", s):
+        if len(seg) > worst:
+            worst = len(seg)
+            if worst >= min_run:
+                struct = sum(1 for ch in seg if ch in '{}[]<>":,=_\\/|')
+                if struct >= len(seg) * ratio:
+                    return True
+    return False
+
+
+def _history_safe_answer(answer, tool_trace):
+    """**进会话历史的那一版**回答：工具原始内容只留摘要，模型自己写的正文原样保留。
+
+    为什么必须有这个函数（真实缺陷）：抓回来的 JSON/HTML 被整段写进会话历史后，
+    下一轮又被当上下文发回模型 —— 用户实测"先画图再抓网页"，第 2 轮把第 1 轮的 archify JSON
+    原样吐了回来。隔离只做在历史这一侧：给用户的那份 `answer` 一个字都不动。
+
+    ⚠️ 判据**绝不能**是"回答有多长"：第 3 步"输出无限"那段 5 万字是模型自己写的，
+    按长度判会当场把"输出无限"废掉（实测踩过：拿它当判据时，"第一段。"×3000 的长文
+    被整段换成了摘要）。所以判据是**"这段回答里是不是抄/贴了工具的返回"**：
+      · 命中连续 60 字与工具返回相同   → 把那一段换成摘要（`_raw_echo_span`）
+      · 代码块里装着工具返回           → 整块换成摘要（`_shrink_raw_fences`）
+      · 没有命中，但有一大段"结构化数据块" → 兜底摘要（`_has_data_blob`）
+      · 都没有                          → 一个字都不动（模型自己的话）
+    """
+    a = str(answer or "")
+    if not a:
+        return a
+    raws = [t for t in (tool_trace or []) if isinstance(t, dict) and _trace_is_raw(t)]
+    if not raws:
+        return a                      # 本轮没有大工具结果 → 全是模型自己的话，原样保留
+    cut = a
+    hit = False
+    for e in raws:
+        span = _raw_echo_span(cut, e.get("result"))
+        if span:
+            cut = cut[:span[0]] + _raw_omitted_note(e, span[1] - span[0]) + cut[span[1]:]
+            hit = True
+    _shrunk = _shrink_raw_fences(cut, raws)
+    if _shrunk != cut:
+        hit = True
+        cut = _shrunk
+    cut = cut.strip()
+    # 兜底一：确实摘掉过内容、摘完还是超长 → 说明原文以别的形式还混在里面，只留一行摘要
+    if hit and len(cut) > _TOOL_RESULT_KEEP * 4:
+        LOG.info("回答里含工具原始内容且未能逐块摘掉 → 历史只留一行摘要")
+        cut = _history_summary_line(raws)
+    # 兜底二：没摘到，但回答里有一整段"结构化数据"（模型改写过的工具结果）→ 也摘要
+    elif not hit and _has_data_blob(cut):
+        LOG.info("回答里检测到大段结构化数据（疑似工具原文）→ 历史只留一行摘要")
+        cut = _history_summary_line(raws)
+    # 最后一道：**摘要绝不允许比原文更长**。实测出现过"1605 字的回答 → 1786 字的摘要"
+    # （本轮有多个大结果时 `_history_summary_line` 会拼好几条 raw_head，比原文还长）。
+    # 隔离的目的是让历史**更小**；没变小就说明这次隔离没做成，那就原样保留、别帮倒忙。
+    if len(cut) >= len(a):
+        return a
+    return cut
+
+
+def _validate_tool_result(tool, args, result):
+    """**结果校验**：工具返回的内容像不像"目标本身"？返回 (判定, 说明)。
+
+    为什么要它（真实缺陷）：抓取失败/被抓到风控页时，模型照样能说一句
+    "我已经抓取了 example.com，内容是……"——用户完全不知道这句是编的。
+    载体层能验的（域名、页面标题、状态码）就该载体层验，验不过的如实标"可能幻觉"。
+
+    判定三态（**不能**非黑即白，否则会大面积误报）：
+      · True  → 结果可信（正文里有目标域名/标题，或它是结构化 JSON 且状态码正常）
+      · False → **可能幻觉**（HTML/正文里找不到目标的任何痕迹，或正文短得不像内容）
+      · None  → 不适用（失败/被拦/不是抓取类工具）——失败由熔断逻辑负责，不算幻觉
+    """
+    if tool not in _FETCH_TOOLS:
+        return None, ""
+    url = ""
+    if isinstance(args, dict):
+        url = args.get("url") or ""
+        if not url and isinstance(args.get("urls"), list) and args["urls"]:
+            url = args["urls"][0]
+    if not url:
+        return None, ""
+    body = ""
+    status = ""
+    try:
+        d = json.loads(str(result or ""))
+        if isinstance(d, dict):
+            if d.get("error"):
+                return None, ""                       # 抓取失败 → 不算幻觉，交给熔断如实报错
+            body = str(d.get("content") or "")
+            status = str(d.get("status") or "")
+            if not body and d.get("items"):
+                _it = d["items"][0] or {}
+                body, status = str(_it.get("content") or ""), str(_it.get("status") or "")
+    except Exception:      # noqa: silent-ok — 非 JSON 返回按纯文本验，不因此报幻觉
+        body, status = str(result or ""), ""
+    if not body.strip():
+        return None, ""
+    if status and not str(status).startswith("2"):
+        return None, ""                               # 4xx/5xx 是失败，不是幻觉
+    host = ""
+    try:
+        from urllib.parse import urlparse as _up
+        host = (_up(url).hostname or "").lower()
+    except Exception:      # noqa: silent-ok — 解不出域名就退化成"只按标题验"
+        host = ""
+    low = body.lower()
+    if host and host in low:
+        return True, ""                               # 正文里有域名特征 → 可信
+    # 结构化接口（JSON）**本来就不含自己的域名**（实测 httpbin.org/json 就是纯 slideshow），
+    # 所以只要它解析出来是一个像样的 JSON 对象，就算"拿到了有效内容"，不能判成幻觉。
+    try:
+        jd = json.loads(body)
+        if isinstance(jd, (dict, list)) and len(body) > 40:
+            return True, ""
+    except Exception:      # noqa: silent-ok — 不是 JSON 就继续按 HTML/纯文本判断
+        pass
+    m = re.search(r"<title[^>]*>(.*?)</title>", body, re.S | re.I)
+    title = re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+    if title and host and host.split(".")[0].lower() in title.lower():
+        return True, ""                               # 标题里有站点名 → 可信
+    if len(body.strip()) < 80:
+        return False, ("⚠️ **可能幻觉**：`%s` 的返回正文只有 %d 字，短得不像一个真实页面。"
+                       "请勿把这段内容当成该页面的内容。" % (host or url, len(body.strip())))
+    if "<" in body[:200] or (host and not title):
+        # HTML 页面却既没有目标域名、也没有能对上的标题 → 大概率不是这个目标的真实内容
+        return False, ("⚠️ **可能幻觉**：返回内容里找不到目标 `%s` 的任何痕迹"
+                       "（正文无该域名、标题%s），不能确认这段内容属于该网址。"
+                       % (host or url, ("为「%s」" % title[:40]) if title else "为空"))
+    return True, ""
+
+
+def _trace_entry(tool, args, result):
+    """构造一条工具轨迹。**顺手记下"这是不是大结果"** —— 上下文隔离就靠这个判据。
+
+    为什么不在轨迹里直接塞原文：轨迹要经 HTTP 回给界面，塞原文等于把几百 KB 的
+    JSON/HTML 在网络上再搬一遍。原文另有去处（会话缓存），轨迹只留一行摘要 + 长度 + 前 200 字。
+    """
+    _r = str(result or "")
+    e = {"tool": tool, "args": args, "result": _r[:800]}
+    if len(_r) > _TOOL_RESULT_KEEP:
+        e["full_len"] = len(_r)
+        e["raw_head"] = _r[:_HISTORY_SUMMARY_CHARS]
+        e["status"] = _status_code_of(_r)
+        _cache_tool_result(tool, args, _r)
+    return e
+
+
 def run_plugin(name, params):
     """调用某个插件（由 LLM/Agent 决定何时用）。支持 py / api / js。始终返回字符串。"""
     p = PLUGINS.get(name)
@@ -708,6 +1098,14 @@ _SEARCH_FUNC_CHARS = "用搜找抓查看搞请帮要想来去呗吧的了呢吗�
 _SEARCH_MEANINGLESS = set(_SEARCH_FUNC_CHARS)
 # 空格后可以直接删的"纯助词/动作词"（删了不会把真词切坏：在线/未来/用户 都不在这个集合里）
 _SEARCH_MID_FUNC = "的了是用搜找查抓看请帮"
+# 第 5 步加强：**动作词本身**的用字。为什么需要它 ——
+# 真实缺陷（本轮实测抓到）：「请帮我搜索」这句话里 filler「帮我搜」先把「帮我搜」整段吃掉，
+# 只剩「请 索」，再按"去掉开头功能字"把「请」洗掉 —— 最后拿**单个「索」**去搜百科。
+# 这跟当初拿「用」去搜是同一个病：**功能字被切了一半，剩下的半个字照样被当关键词**。
+# 所以判据不能只看"整句是不是功能字"，得看"把功能字/动作词/助词全部剔掉之后还剩不剩东西"。
+_SEARCH_ACTION_WORDS = ("搜索", "检索", "查询", "联网", "上网", "工具", "功能")
+_SEARCH_NOISE_CHARS = (set("".join(_SEARCH_FILLERS)) | set(_SEARCH_FUNC_CHARS)
+                       | set("".join(_SEARCH_ACTION_WORDS)) | set(_SEARCH_MID_FUNC))
 # 纯寒暄/自我介绍：这种话不该拿去联网搜（搜出来只会是"你（汉语文字）_百度百科"这类词条）
 _SEARCH_GREETINGS = {
     "你好", "您好", "哈喽", "在吗", "在么", "谢谢", "多谢", "辛苦了", "早", "早上好", "晚上好",
@@ -782,7 +1180,13 @@ def _is_meaningless_query(q):
         return True
     if q.lower() in _SEARCH_GREETINGS:          # 寒暄/自我介绍类，本来就不该联网搜
         return True
-    return all((ch in _SEARCH_MEANINGLESS) or (not ch.isalnum()) for ch in q)
+    if all((ch in _SEARCH_MEANINGLESS) or (not ch.isalnum()) for ch in q):
+        return True
+    # 第 5 步加强：把**功能字 + 动作词 + 助词**全剔掉，剩下不到 2 个字就是"没内容"。
+    # 这条抓的是"被 filler 切剩的半个动作词"（「搜索」→「索」）和"整句都是动作词"
+    # （「用工具搜」→「工具搜」）—— 它们以前都会漏过去，真的发出去搜。
+    residue = [ch for ch in q if ch.isalnum() and ch not in _SEARCH_NOISE_CHARS]
+    return len(residue) < 2
 
 
 def _strip_think(text):
@@ -1276,6 +1680,41 @@ def _generate_long(task, system, on_chunk=None):
 # ================== 第 4 步：大输入切片（无限 2：输入无限） ==================
 # 用户能贴任意长度（10 万字文章、50 万字报告），模型单次装不下。
 # 载体切片 → 逐片调模型 → 每片落 logs/_chunks/ → 拼装（再去重/断句）。用户只看到"完整总结"。
+_PAGE_TOOLS = ("get", "fetch", "stealthy_fetch", "make_request", "scrape_with_selector",
+               "bulk_get", "bulk_fetch", "session_fetch", "session_make_request", "download")
+
+
+def _trace_has_page(trace):
+    """这一轮**真的抓到网页**了吗（不只是"调过工具"）。
+
+    为什么不能用 `not tool_trace` 当兜底判据：**真实缺陷（用户实测画架构图没反应）**——
+    模型可能调了个**别的**工具（比如 write_file / list_files）把 tool_trace 填上了，
+    但用户要的活（抓网页 / 出图）一件没干。只看"轨迹空不空"就会漏掉这种情况，
+    兜底链被静默跳过。判据要落在**结果**上：有没有成功拿到页面内容。
+    """
+    for t in (trace or []):
+        if t.get("tool") not in _PAGE_TOOLS:
+            continue
+        r = str(t.get("result") or "")
+        if not r or '"error"' in r[:200].lower():
+            continue
+        if "status" in r and re.search(r'"status"\s*:\s*(200|201|204)', r):
+            return True
+        if len(r) > 200 and "禁止访问" not in r and "SSRF" not in r:
+            return True
+    return False
+
+
+def _trace_has_diagram(trace):
+    """这一轮**真的把图交付**了吗（走完 archify 且 deliver 成功）。"""
+    for t in (trace or []):
+        if t.get("tool") == "archify_deliver":
+            r = str(t.get("result") or "")
+            if r and "FAIL" not in r[:120] and "失败" not in r[:120]:
+                return True
+    return False
+
+
 def _needs_input_split(text):
     """输入是否超过单片上限（spec：> 5000 token 就切片）。"""
     try:
@@ -1365,6 +1804,34 @@ def append_msg(role, content):
     if role == "用户" and len(s["messages"]) == 1 and not s.get("title") or s.get("title") == "新对话":
         s["title"] = content[:24]
     _save_sessions(d)
+
+
+def replace_pending_msg(sid, content):
+    """把**指定会话**里那条 ⏳__pending__ 占位消息换成真实回答。
+
+    为什么必须按会话 id 定点替换（真实缺陷，第 5 步实测抓到）：
+      原来这里是"取**当前**会话、替换它的 pending" —— 而"当前会话"是**全局可变状态**：
+      网页端在看 A 会话、脚本/第二个标签页在 B 会话提问时，`current` 会被切到 A。
+      于是 B 会话这一问的回答被写进了 A 会话，B 自己永远停在"⏳ 正在回答"，
+      下一轮历史里又带着这个占位符 —— 正是第 5 步要防的**串台**。
+      修法：调用方在写占位符时就把会话 id 记下来，回答出来时**按 id 定点回填**。
+    """
+    if not sid:
+        return False
+    try:
+        d = _sessions()
+        for s in d.get("sessions", []):
+            if s.get("id") != sid:
+                continue
+            for m in reversed(s.get("messages", [])):
+                if m.get("role") == "小焦" and "__pending__" in str(m.get("content", "")):
+                    m["content"] = content
+                    _save_sessions(d)
+                    return True
+            break
+    except Exception as e:      # noqa: silent-ok — 回填失败不该影响这次回答（回答已经给用户了）
+        LOG.debug("回填占位消息失败（忽略）(%s:%d): %s", __file__, 1420, e)
+    return False
 
 
 # ================== 大脑：LLM 调用 ==================
@@ -2040,13 +2507,17 @@ def _map_tool(name, args):
     return name, args
 
 
-def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget_s=0):
+def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget_s=0,
+                   workflow=""):
     """带 function calling 的大脑调用：模型自己“想”并调用工具（优先），循环直到给出最终回答。
 
     返回 (answer, tool_trace)。兼容 OpenAI tool_calls 与 Qwen <tool_call> XML。
 
     云端大脑授权失败（401/403/404/429…）时自动兜到**本地大脑**再试一次 —— 免得用户被
     "一句固定的模型调用出错"卡死（真实事故：Agnes Key 失效后整机等于残废）。
+
+    `workflow="diagram"`（第 5 步）：画图轮启用**工作流强制** —— 先 `archify_read_skill`、
+    交付前必须有 `archify_validate`，模型漏了由代码层补调（见 `_archify_prereq`）。
     """
     # 内存守卫: 生成前卸载另一个 llama 模型——8G 上保证单个 llama 占满显存(防龟速/OOM)
     try:
@@ -2063,6 +2534,50 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
     _fail_streak = {"tool": "", "n": 0}              # 同一工具连续失败次数（熔断用）
     _bad_tools = {}                                  # 工具名 → 已失败次数（第 4 层：换候选/停止）
     _t_start = time.time()                           # 本轮时间预算（画图这种多步链路防跑飞）
+    _wf_on = (workflow == "diagram")                 # 画图轮：开工作流强制
+    _wf_called = set()                               # 本轮已经调用过的工具（工作流判据用）
+
+    def _run_tool_checked(tname, targs):
+        """执行一次工具调用（含画图工作流的代码层补调）。
+
+        返回 `(result, forced_note)`：
+          · `forced_note` 为空串 → 原调用真的执行了，`result` 是它的返回；
+          · `forced_note` 非空 → 前置步骤没做，代码层**先补调了前置**，本轮**不执行原调用**，
+            把 `forced_note` 交回模型让它基于前置结果重来（`result` 为 None）。
+        """
+        if _wf_on:
+            _pre = _archify_prereq(tname, _wf_called)
+            if _pre:
+                _pargs = _archify_prereq_args(_pre, tname, targs)
+                LOG.info("画图工作流强制：模型直接调 %s，代码层先补调 %s", tname, _pre)
+                try:
+                    _pres = _tool_result_str(run_tool(_pre, _pargs, force=True))
+                except Exception as e:      # noqa: silent-ok — 补调失败也要如实交回模型，不能崩
+                    _pres = "前置工具 %s 调用异常：%s" % (_pre, e)
+                _wf_called.add(_pre)
+                tool_trace.append(_trace_entry(_pre, _pargs, _pres))
+                if _pre == _ARCHIFY_GATE and _tool_failed(_pres):
+                    # 校验没过 → **不许交付**：把报错原样交回模型去改（而不是把没验过的图塞给用户）
+                    return None, ("（代码层强制：交付前必须先通过校验，这次 `%s` 已被拦下。"
+                                  "校验结果如下，请据此改完 spec 再重新交付）\n%s" % (tname, _pres))
+                if _pre == _ARCHIFY_FIRST:
+                    return None, ("（代码层强制：画图第一步必须先读技能，已替你调用 `%s`，"
+                                  "请据此继续，然后重新发起你刚才的调用）\n%s" % (_pre, _pres))
+                # 补调的是 validate 且通过了 → 放行，继续执行原本的交付调用
+        result = _tool_result_str(run_tool(tname, targs))
+        _wf_called.add(tname)
+        return result, ""
+
+    def _after_call(tname, targs, result):
+        """统一的收尾：结果校验 → 轨迹记录。返回给模型看的提示文本（可为空）。"""
+        _vok, _vnote = _validate_tool_result(tname, targs, result)
+        _e = _trace_entry(tname, targs, result)
+        if _vok is False:
+            _e["suspect"] = True
+            LOG.warning("工具 %s 的结果未通过校验（%s）", tname, _vnote[:80])
+        tool_trace.append(_e)
+        return _vnote
+
     for _ in range(max_rounds):
         if budget_s and (time.time() - _t_start) > budget_s and tool_trace:
             LOG.warning("本轮工具链已用 %d 秒，超过预算 %d 秒 → 停止继续调用",
@@ -2109,15 +2624,18 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
             m.append({"role": "assistant", "content": content})
             for name, args in xmlcalls:
                 tname, targs = _map_tool(name, args)
-                result = _tool_result_str(run_tool(tname, targs))
+                result, _forced = _run_tool_checked(tname, targs)
+                if _forced:
+                    m.append({"role": "tool", "content": _forced})
+                    break
+                _vnote = _after_call(tname, targs, result)
                 _tripped = _tool_breaker(_fail_streak, tname, result, tool_trace)
-                tool_trace.append({"tool": tname, "args": targs, "result": result[:800]})
                 if _tripped:
                     return _tripped, tool_trace
                 if result.startswith("〔待确认〕"):
                     m.append({"role": "tool", "content": result})
                     return result, tool_trace
-                m.append({"role": "tool", "content": result})
+                m.append({"role": "tool", "content": result + _vnote})
             continue
         # OpenAI 标准工具调用
         m.append({"role": "assistant", "content": msg.get("content"), "tool_calls": tool_calls})
@@ -2128,9 +2646,12 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
             except Exception:
                 args = {}
             tname, targs = _map_tool(fn.get("name", ""), args)
-            result = _tool_result_str(run_tool(tname, targs))
+            result, _forced = _run_tool_checked(tname, targs)
+            if _forced:
+                m.append({"role": "tool", "tool_call_id": tc.get("id"), "content": _forced})
+                continue
+            _vnote = _after_call(tname, targs, result)
             _tripped = _tool_breaker(_fail_streak, tname, result, tool_trace)
-            tool_trace.append({"tool": tname, "args": targs, "result": result[:800]})
             if _tripped:
                 return _tripped, tool_trace
             _stop = _layer4_after_call(_bad_tools, tname, result, tool_trace)
@@ -2140,7 +2661,8 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
             if result.startswith("〔待确认〕"):
                 m.append({"role": "tool", "tool_call_id": tc.get("id"), "content": result})
                 return result, tool_trace
-            m.append({"role": "tool", "tool_call_id": tc.get("id"), "content": result + _hint})
+            m.append({"role": "tool", "tool_call_id": tc.get("id"),
+                      "content": result + _vnote + _hint})
     # 循环到上限但已执行工具 -> 用工具结果生成总结(不让用户看到空/报错)
     if tool_trace:
         # 挑一个"成功"的结果最后展示(跳过 路径不存在/失败/Error)
@@ -2251,6 +2773,49 @@ def _workflow_needs_more_rounds(user_input):
     return 6
 
 
+# ===== 第 5 步：画图工作流的**代码层强制**（不靠模型自觉）=====
+# 真实缺陷（用户实测）：让 Archify 画图，模型跳过 `archify_read_skill` 直接写 spec ——
+# 写出来的 spec 缺字段、校验一路 FAIL，模型再一条条改，来回烧掉 200 多秒（`_tool_breaker` 就是
+# 为这个加的熔断）。另一个更坏：模型**没校验就交付**，把没验过的图当成品塞给用户。
+# 载体优先的意思是：这两步由**代码层**把关 —— 模型漏了，代码替它补调；模型想跳过，代码拦住。
+_ARCHIFY_FIRST = "archify_read_skill"       # 第一步：技能文档里写着 spec 格式，跳过它写出来的基本过不了校验
+_ARCHIFY_GATE = "archify_validate"          # 交付前的闸门：必须校验过
+_ARCHIFY_DELIVERISH = ("archify_deliver", "archify_render", "archify_preview")
+# 纯诊断类（查环境/看指标）跟"画图"没关系，不该被逼着先去读技能 —— 逼了只是白等一次调用。
+_ARCHIFY_DIAG = ("archify_doctor", "archify_metrics", "archify_check", "archify_visual_check")
+
+
+def _archify_prereq(tool, called):
+    """画图工作流缺了哪一步前置？返回必须**先补调**的工具名（不缺返回 ""）。
+
+    · 任何画图类 archify 调用之前必须先 `archify_read_skill`（一步没读就直接画 = 盲写 spec）；
+    · `archify_deliver`/`render`/`preview` 之前必须有 `archify_validate`（没校验就交付）。
+    """
+    name = (tool or "").lower()
+    if not name.startswith("archify") or name in _ARCHIFY_DIAG:
+        return ""
+    if _ARCHIFY_FIRST not in called and name != _ARCHIFY_FIRST:
+        return _ARCHIFY_FIRST
+    if name in _ARCHIFY_DELIVERISH and _ARCHIFY_GATE not in called:
+        return _ARCHIFY_GATE
+    return ""
+
+
+def _archify_prereq_args(prereq, tool, args):
+    """补调前置步骤时要用什么参数。
+
+    `validate` 与 `deliver` 共用 `diagram_type/spec_json/quality`（见 plugins/archify.py 的
+    schema），所以**照抄模型本来要交付的那份 spec** 去校验 —— 校验的必须是"即将交付的那张图"，
+    拿别的 spec 校验等于没校验。
+    """
+    a = args if isinstance(args, dict) else {}
+    if prereq == _ARCHIFY_FIRST:
+        return {}
+    return {"diagram_type": a.get("diagram_type") or "architecture",
+            "spec_json": a.get("spec_json") or "",
+            "quality": a.get("quality") or "showcase"}
+
+
 # ===== 强制工具执行：意图检测 + 让模型生成工具JSON（兼容任何模型） =====
 _TOOL_HINTS = [
     ("run_command", ["运行", "执行", "命令", "跑一下", "建文件夹", "创建文件夹", "新建目录", "建目录",
@@ -2336,12 +2901,26 @@ _SCRAPE_DOMAIN_RE = re.compile(r"\b([a-z0-9][a-z0-9\-]*\.(?:com|cn|org|net|io|de
 _SCRAPE_IGNORE_ROBOTS_HINTS = ("忽略robots", "忽略 robots", "无视robots", "无视 robots",
                                "不管robots", "不管 robots", "不看robots", "跳过robots",
                                "ignore robots")
+# "看内容"类说法：句子里有网址 + 这类词 → 就是要那个网址的内容（第 5 步加）
+_SCRAPE_LOOK_HINTS = ("看看", "看一下", "看下", "瞧瞧", "写了啥", "写了什么", "写的啥", "写的什么",
+                      "内容是", "内容是什么", "返回什么", "返回了", "是什么", "有什么", "里面是")
+# 句子里有这些词时**不抢**：网址只是宾语，用户要的是别的动作（写文件/下载/截图…）。
+# 真实风险：若不排除，"把这个网址的内容写到 C:\\a.txt" 会被当成"抓网页"，文件就不会被创建。
+_URL_OTHER_ACTION_HINTS = ("写到", "写入", "写进", "保存到", "保存为", "存到", "存为", "另存",
+                           "下载", "输出到", "导出", "截图", "监控", "定时")
 
 
 def _detect_scrape_intent(q):
     """识别"抓网页"意图 → 返回 (工具名, 参数)；识别不到返回 None。
 
     支持的表达：抓取/爬一下/抓网页 + 网址（可带多个网址 → 自动走批量工具）。
+
+    **第 5 步：网址本身就是意图**（意图路由强制）。
+    真实缺陷（用户实测）：说「帮我看看 https://httpbin.org/json 写了啥」时，
+    意图识别判成了 `scrape`（`_looks_like_url` 命中），可这里**又要求句子里先有动作词**
+    （抓取/爬一下/…）才肯给工具 —— "看看"不在表里，于是直通被跳过，交给模型；
+    模型回一句"这个页面写的是…"，工具轨迹是空的，等于**没抓就答**。
+    网址已经摆在句子里了，用户要的就是它的内容 —— 代码层要直接去抓，不能指望模型自觉。
     """
     ql = (q or "").lower()
     tool = None
@@ -2349,15 +2928,21 @@ def _detect_scrape_intent(q):
         if any(k.lower() in ql for k in kws):
             tool = name
             break
-    if not tool:
-        return None
-    urls = _SCRAPE_URL_RE.findall(q or "")
+    urls = _SCRAPE_URL_RE.findall(q or "")           # 显式 http(s):// 网址
+    explicit = bool(urls)
     if not urls:
         m = _SCRAPE_DOMAIN_RE.search(q or "")
         if m:
             urls = ["https://" + m.group(1)]
     if not urls:
         return None
+    if any(k in (q or "") for k in _URL_OTHER_ACTION_HINTS):
+        return None         # 用户要的是"把网址内容存下来/截图"这类别的动作，别抢
+    if not tool:
+        if explicit or any(k in (q or "") for k in _SCRAPE_LOOK_HINTS):
+            tool = "get"                    # 有网址 + 想看内容 → 直接抓（get 失败会自动升级候选）
+        else:
+            return None
     # 用户显式说"忽略 robots / 不管robots / 无视robots" → 本次放行（默认仍严格遵守）
     ignore = any(k in ql for k in _SCRAPE_IGNORE_ROBOTS_HINTS)
     if len(urls) > 1:      # 多个网址 → 批量工具
@@ -2689,21 +3274,45 @@ def _scrape_direct(user_input, tool_trace):
     # 第 4 层：抓取类**自动升级** —— get 失败(被拦/403/空正文) → fetch → stealthy_fetch。
     # 用户实测："抓 https://www.cloudflare.com" 被风控挡住时原来直接报错；
     # 该升级就自动升级，而不是把失败原样丢回给用户。
+    # 第 5 步再加一道：**结果校验没过也算"没抓到"**，一样升级到下一个候选 ——
+    # 拿回一坨跟目标毫无关系的内容（比如风控提示页、缓存错页）比抓不到更坏：用户会被它骗。
     _chain = [_tn] + [x for x in _tool_fallback_for(_tn) if x != _tn]
     _res, _used, _tried = "", _tn, []
+    _suspect_note = ""
     for _name in _chain:
         try:
             _res = _tool_result_str(run_tool(_name, _ta, force=True))
         except Exception as e:
             _res = json.dumps({"error": "%s: %s" % (type(e).__name__, str(e)[:80])}, ensure_ascii=False)
         _tried.append(_name)
-        if not _scrape_failed(_res):
-            _used = _name
-            break
-        LOG.info("抓取 %s 没成功，自动升级到下一个候选（已试：%s）", _name, _tried)
-    tool_trace = list(tool_trace or []) + [{"tool": _used, "args": _ta,
-                                            "result": _trace_summary(_res),
-                                            "tried": _tried}]
+        if _scrape_failed(_res):
+            LOG.info("抓取 %s 没成功，自动升级到下一个候选（已试：%s）", _name, _tried)
+            continue
+        _vok, _vnote = _validate_tool_result(_name, _ta, _res)
+        if _vok is False and _name != _chain[-1]:
+            LOG.warning("抓取 %s 返回内容不含目标特征（%s），升级到下一个候选", _name, _vnote[:60])
+            _suspect_note = _vnote
+            continue
+        _used = _name
+        _suspect_note = _vnote if _vok is False else ""
+        if _vok is False:
+            LOG.warning("抓取 %s 的结果校验未通过，如实标注可能幻觉（已无更多候选）", _name)
+        break
+    _entry = _trace_entry(_used, _ta, _res)
+    _entry["tried"] = _tried
+    # `raw_head` 改成**用户实际看到的那段正文**：抓取路径下用户看的是页面正文，
+    # 外层 `{"url":…,"status":…,"content":…}` 只是壳。历史隔离要按"用户看到的东西"比对，
+    # 否则围栏里的正文匹配不上 raw_head，"抓取结果进历史"这条隔离会直接漏掉（实测踩到）。
+    try:
+        _jb0 = json.loads(_res)
+        _bhead0 = str((_jb0 or {}).get("content") or "").strip()
+        if len(_bhead0) > _TOOL_RESULT_KEEP:
+            _entry["raw_head"] = _bhead0[:_HISTORY_SUMMARY_CHARS]
+    except Exception as e:      # noqa: silent-ok — 不是 JSON 就沿用原 raw_head，不影响隔离兜底
+        LOG.debug("解析抓取结果用于隔离比对失败（忽略）(%s:%d): %s", __file__, 2810, e)
+    if _suspect_note:
+        _entry["suspect"] = True          # 结果校验没过 → 轨迹里留痕，界面/复盘都看得到
+    tool_trace = list(tool_trace or []) + [_entry]
     try:
         _jd = json.loads(_res)
         _err = (_jd.get("error") or "").strip()
@@ -2731,9 +3340,439 @@ def _scrape_direct(user_input, tool_trace):
         _exp = _explain_content(_body, _jd.get("url", ""))
         if _exp:
             _ans += "\n\n---\n\n📖 **小焦解读**\n\n" + _exp
+        if _suspect_note:
+            # 校验没过的**如实报告**：内容照给（用户可能就是想看看风控页），但必须标明它可能不是目标页面
+            _ans = _suspect_note + "\n\n" + _ans
         return _ans, tool_trace
     except Exception:
         return (_res[:3000], tool_trace)             # 非 JSON 就原样给
+
+
+# ===== 第 5 步：画图意图的**载体兜底**（模型一个工具都不调时，代码层把工作流走完）=====
+# 真实缺陷（本轮实测，比"模型跳过 read_skill"更彻底）：说「用 Archify 画一张架构图」，
+# 本地 4B 模型**一个工具都不调** —— 它直接画了一屏 ASCII 框图，或者吐一段自以为是的 JSON
+# （字段跟 archify schema 完全不符：少了 schema_version/meta/components，多了 title/kind/nodes）。
+# 工具轨迹是空的 —— 于是 `llm_chat_tools` 里的工作流强制**根本没有机会触发**：
+# 那套逻辑是"模型调了工具之后再纠正"，而这里模型压根没调。
+#
+# 载体优先的解法：模型不挑工具，载体就替它挑、替它按顺序走完 ——
+#   读技能 → 取指南 → 读 schema → 读示例 → 模型只负责写 JSON → 校验（不过就把报错交回模型改，
+#   最多 3 轮）→ 交付。工具**一个都没被跳过、也没有一个是编出来的**（全部真调用 archify_*）。
+# 校验始终过不了就**如实报告**，绝不把没验过的图说成"已完成"。
+_DIAGRAM_TYPE_HINTS = (
+    ("architecture", ("架构图", "架构", "部署图", "拓扑", "组件图", "模块图", "architecture")),
+    ("workflow", ("流程图", "流程", "步骤图", "workflow", "flowchart")),
+    ("sequence", ("时序图", "时序", "调用链", "sequence")),
+    ("dataflow", ("数据流", "data flow", "dataflow")),
+    ("lifecycle", ("生命周期", "状态图", "状态机", "lifecycle", "state")),
+)
+_DIAGRAM_MAX_TRIES = 3          # spec 写不对就带着报错让它重写，最多 3 轮（跟"连续 2 次调错即停"一个尺度）
+
+
+def _diagram_type_of(text):
+    """用户这句话要画哪种图（archify 的五种类型之一，认不出来按架构图）。"""
+    q = (text or "").lower()
+    for _t, _kws in _DIAGRAM_TYPE_HINTS:
+        if any(k.lower() in q for k in _kws):
+            return _t
+    return "architecture"
+
+
+def _diagram_layout_inject(spec_json):
+    """载体层给 spec 补一套**自己算的网格布局**（模型只负责"有什么"，不负责"摆哪儿"）。
+
+    为什么要载体算：4B 模型能写对 components/connections 的**内容**，但**几乎不可能**写对像素坐标
+    —— 实测它给的 `pos` 让 Archify 的 clean-flow 校验一次连报几十条（"连线段只有 20px，太短"、
+    "这条线穿过了无关节点"）。而"摆位置"本来就是个**机械活**，正是载体该干的：
+      · 按连接关系做 BFS 分层 → 每层一列（`layout.mode="grid"` + 组件上的 `col`）；
+      · 同层节点按出现顺序依次排行（`row`）；
+      · 顺手删掉模型自己写的 `pos`/`size` 与布线提示（fromSide/toSide/labelDy）——
+        留着两套坐标只会互相打架（这也是"edge-through-node"的根源）。
+    schema 依据：`architecture` schema 里 `layout.mode` 只有 `grid` 一个取值，
+    组件支持 `row`/`col`（整数，最小 0）作为格子坐标。
+
+    返回补好布局的 spec；解析不了就原样返回。
+    """
+    try:
+        d = json.loads(spec_json)
+    except Exception:      # noqa: silent-ok — 不是 JSON 就没什么可补的
+        return spec_json
+    if not isinstance(d, dict):
+        return spec_json
+    comps = d.get("components") or d.get("nodes") or []
+    conns = d.get("connections") or d.get("edges") or []
+    ids = [c.get("id") for c in comps if isinstance(c, dict) and c.get("id")]
+    if not ids or not isinstance(conns, list):
+        return spec_json
+    # ---- ① BFS 分层：入度为 0 的当起点，逐层往右排（画不出层级的孤立点单独放最后一列）----
+    outs, indeg = {}, {i: 0 for i in ids}
+    for c in conns:
+        if not isinstance(c, dict):
+            continue
+        a, b = c.get("from"), c.get("to")
+        if a in indeg and b in indeg:
+            outs.setdefault(a, []).append(b)
+            indeg[b] += 1
+    level = {}
+    frontier = [i for i in ids if indeg[i] == 0] or ids[:1]
+    for i in frontier:
+        level[i] = 0
+    _lvl = 0
+    while frontier and _lvl < 12:
+        nxt = []
+        for a in frontier:
+            for b in outs.get(a, []):
+                if b not in level:
+                    level[b] = _lvl + 1
+                    nxt.append(b)
+        frontier, _lvl = nxt, _lvl + 1
+    _maxl = max(level.values()) if level else 0
+    for i in ids:                                  # 环里的/没连上的 → 兜底放最后一列
+        if i not in level:
+            level[i] = _maxl
+    # ---- ①b 重心排序（barycenter）：同一列里按"邻居的平均行号"重排，减少连线交叉 ----
+    # 为什么要有：Archify 的 showcase 校验有一条 `[composition/proper-crossing]`
+    # —— 连线互相穿过要报错。分层摆放本身不保证不交叉，按邻居重心排一遍是**机械**且有效的降交叉法
+    # （Sugiyama 那一套里最便宜的一步），比让 4B 模型"调整节点顺序"靠谱得多。
+    # ⚠️ 第一版这里写错了：重心只取"**同一列**里的邻居"，而同一列的邻居行号就是它自己，
+    #    等于什么都没算（实测交叉一条没少）。重心必须取**相邻列**邻居的行号，才是真正的降交叉。
+    by_col = {}
+    for i in ids:
+        by_col.setdefault(level.get(i, 0), []).append(i)
+    nbrs = {}
+    for c in conns:
+        if isinstance(c, dict) and c.get("from") in indeg and c.get("to") in indeg:
+            nbrs.setdefault(c["from"], []).append(c["to"])
+            nbrs.setdefault(c["to"], []).append(c["from"])
+    order = {i: k for k, i in enumerate(ids)}      # 初始行序 = 出现顺序
+    for _sweep in range(4):                        # 左右交替扫，收敛更快
+        for _col in (sorted(by_col) if _sweep % 2 == 0 else sorted(by_col, reverse=True)):
+            _here = set(by_col.get(_col, []))
+
+            def _bc(n, _here=_here):
+                _ns = [order[x] for x in nbrs.get(n, []) if level.get(x, _col) != _col
+                       and x in order and x not in _here]
+                return sum(_ns) / float(len(_ns)) if _ns else order.get(n, 0)
+
+            for k, n in enumerate(sorted(by_col[_col], key=_bc)):
+                order[n] = k
+    colrow, seen = {}, {}
+    for i in sorted(ids, key=lambda x: (level.get(x, 0), order.get(x, 0))):
+        col = level.get(i, 0)
+        row = seen.get(col, 0)
+        seen[col] = row + 1
+        colrow[i] = (col, row)
+    # ---- ② 机械改写：位置/布线一律由载体给，模型写的坐标与布线提示全删 ----
+    for c in comps:
+        if not isinstance(c, dict) or c.get("id") not in colrow:
+            continue
+        for k in _DIAGRAM_LAYOUT_KEYS + _DIAGRAM_ROUTE_KEYS:
+            c.pop(k, None)
+        col, row = colrow[c["id"]]
+        c["col"], c["row"] = col, row
+    for c in conns:
+        if isinstance(c, dict):
+            for k in _DIAGRAM_ROUTE_KEYS:
+                c.pop(k, None)
+    # ---- ③ 出/入边方向由**格子几何**推出来（校验器提示的正是这个修法：adjust fromSide/toSide）----
+    #     为什么要载体给：Archify 会"按坐标推断该从哪条边走"，模型自己给的 fromSide 常常和它给的
+    #     坐标矛盾（于是报"does not honor fromSide"）。而格子坐标是载体算的，方向自然推得准，
+    #     由方向决定的布线也就不会绕到别的节点上去（`[composition/proper-crossing]` 的成因之一）。
+    for c in conns:
+        if not isinstance(c, dict):
+            continue
+        _a, _b = colrow.get(c.get("from")), colrow.get(c.get("to"))
+        if not _a or not _b:
+            continue
+        if _b[0] > _a[0]:
+            c["fromSide"], c["toSide"] = "right", "left"
+        elif _b[0] < _a[0]:
+            c["fromSide"], c["toSide"] = "left", "right"
+        elif _b[1] > _a[1]:
+            c["fromSide"], c["toSide"] = "bottom", "top"
+        else:
+            c["fromSide"], c["toSide"] = "top", "bottom"
+    d["layout"] = {"mode": "grid", "cols": max(1, _maxl + 1), "gapX": 140, "gapY": 110}
+    return json.dumps(d, ensure_ascii=False)
+
+
+# 载体层能机械改掉的"布局类"字段（改法与报错一一对应，不需要模型参与）
+_DIAGRAM_ROUTE_KEYS = ("fromSide", "toSide", "labelDy", "waypoints", "via", "route", "bend")
+_DIAGRAM_LAYOUT_KEYS = ("pos", "size")
+
+
+def _repair_diagram_spec(spec_json, err_text):
+    """载体层的**确定性修错**：报错里明说了怎么改的字段，直接改掉，不让模型反复试。
+
+    为什么要有它（本轮实测）：读技能/读 schema/读示例/出 JSON 全做对了，可 4B 模型
+    **写不对像素级布局** —— 连续 3 轮都卡在同一类报错上：
+        `connections[i] does not honor fromSide "top" … keep automatic routing`
+    它自己给的 fromSide/toSide 跟坐标对不上。这类错误的修法**是完全机械的**：
+    把布局提示删掉，让 Archify 自己布线。让模型去"试"这种错，只会烧掉几分钟再失败一次。
+    （第 4 层"同一工具连续 2 次调错就停"管的是工具层面；这里管的是**产物**层面的纠错。）
+
+    返回修好的 spec 字符串；没改到东西就原样返回（调用方据此决定还要不要问模型）。
+    """
+    try:
+        d = json.loads(spec_json)
+    except Exception:      # noqa: silent-ok — spec 不是 JSON 就没什么可修的
+        return spec_json
+    if not isinstance(d, dict):
+        return spec_json
+    e = str(err_text or "").lower()
+    changed = False
+    # ① 标签压住组件：Archify 的报错**自带修法**（"给该关系加 labelDy: 12（或 -12）"），
+    #    这是纯机械活 —— 按报错点名的关系补上 labelDy，别让模型为这种像素事重写整个 spec。
+    for m in re.finditer(r'label\s*[「"\']([^」"\']+)[」"\']\s*overlaps', str(err_text or ""), re.I):
+        _lab = m.group(1)
+        for c in (d.get("connections") or d.get("edges") or []):
+            if isinstance(c, dict) and str(c.get("label") or "") == _lab and "labelDy" not in c:
+                c["labelDy"] = 12
+                changed = True
+    if any(k in e for k in ("side", "route", "segment", "waypoint", "bend", "labeldy", "layout")):
+        for c in (d.get("connections") or d.get("edges") or []):
+            if isinstance(c, dict):
+                for k in _DIAGRAM_ROUTE_KEYS:
+                    if k in c and not (k == "labelDy" and c.get(k) == 12):
+                        c.pop(k, None)
+                        changed = True
+    if any(k in e for k in ("overlap", "bounds", "collision", "out of")):
+        for c in (d.get("components") or d.get("nodes") or []):
+            if isinstance(c, dict):
+                for k in _DIAGRAM_LAYOUT_KEYS:
+                    if k in c:
+                        c.pop(k, None)
+                        changed = True
+    # ②bis **标签压到连线走线**（`label-route-clearance`）—— 这是本次实测真正卡住的那一类。
+    #   报错长这样：
+    #     `[composition/label-route-clearance] ... label "SQL" on connections[3] id "persist-order"`
+    #   它和①的"标签压住组件"不是一回事：①修的是 label 与**节点**重叠，这一条是 label 与
+    #   **连线路径**重叠。修法同样是机械的，而且分两步升级（一次做太狠会白丢信息）：
+    #     第 1 次 → 给该连线加 labelDy（把标签推离走线）；
+    #     第 2 次还报同一条 → 直接把这条连线的 label 去掉。
+    #   宁可少一个连线文字，也不能让整张图卡在校验上出不来（用户要的是图，不是报错）。
+    if "label-route-clearance" in e or "label_route_clearance" in e:
+        for m in re.finditer(r'label\s*[「"\']([^」"\']+)[」"\']\s*on\s*connections?\[?(\d+)?', str(err_text or ""), re.I):
+            _lab = m.group(1)
+            for c in (d.get("connections") or d.get("edges") or []):
+                if not (isinstance(c, dict) and str(c.get("label") or "") == _lab):
+                    continue
+                if "labelDy" not in c:
+                    c["labelDy"] = 14              # 第一步：推开
+                else:
+                    c.pop("label", None)           # 第二步：还压着 → 去掉文字保住图
+                changed = True
+    return json.dumps(d, ensure_ascii=False) if changed else spec_json
+
+
+def _extract_json_object(text):
+    """从模型回复里抠出第一个**括号配平**的 JSON 对象（容忍 ```json 围栏和前后废话）。
+
+    为什么不用 `re.search(r"\\{.*\\}")`：那个贪婪写法在"围栏里一个 JSON + 后面又跟一段解释"
+    时会把两段都吞进去，`json.loads` 直接失败 —— 而模型几乎总是会多写两句解释。
+    """
+    s = str(text or "")
+    start = s.find("{")
+    while start >= 0:
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(s)):
+            ch = s[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    cand = s[start:i + 1]
+                    try:
+                        json.loads(cand)
+                        return cand
+                    except Exception:      # noqa: silent-ok — 这段不是 JSON，往后找下一个 '{'
+                        break
+        start = s.find("{", start + 1)
+    return ""
+
+
+def _diagram_direct(user_input, tool_trace):
+    """画图意图的载体兜底：真调用 archify 全链把图做出来。返回 (answer 或 None, tool_trace)。
+
+    模型自己肯调工具时**不会**走到这里（`llm_chat_tools` 那条路已经带了工作流强制）；
+    只有"模型一个工具都没调"才会兜到这条 —— 也就是本地小模型最常见的失败姿势。
+    """
+    try:
+        _build_tools()                  # 填充 _TOOL2PLUGIN，确保插件工具可被调用
+    except Exception as e:      # noqa: silent-ok — 建表失败下面会以"未知工具"如实反映
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 3300, e)
+    _trace = list(tool_trace or [])
+    _dtype = _diagram_type_of(user_input)
+
+    def _call(name, args):
+        """真调一次 archify 工具并记轨迹（异常也如实记，不吞）。"""
+        try:
+            _r = _tool_result_str(run_tool(name, args, force=True))
+        except Exception as e:      # noqa: silent-ok — 单个工具异常不该中断整条工作流
+            _r = "%s 调用异常：%s: %s" % (name, type(e).__name__, e)
+        _trace.append(_trace_entry(name, args, _r))
+        return _r
+
+    _skill = _call("archify_read_skill", {})
+    if "未知工具" in _skill or "archify" not in _skill.lower():
+        LOG.warning("Archify 技能读不到（插件未就绪），画图兜底放弃，交回普通回答")
+        return None, tool_trace        # 工具真不在 → 不硬来，交回上层
+    _guide = _call("archify_guide", {"scenario": user_input, "lang": "zh"})
+    _schema = _call("archify_read_schema", {"diagram_type": _dtype})
+    _example = _call("archify_read_example", {"diagram_type": _dtype})
+    _basis = ("你是 Archify 的 JSON 生成器，只输出 JSON，不解释、不聊天。\n\n"
+              "[技能文档]\n%s\n\n[写作指南]\n%s\n\n[%s 类型 schema]\n%s\n\n[%s 类型完整示例]\n%s"
+              % (_skill[:4000], _guide[:2000], _dtype, _schema[:6000], _dtype, _example[:4000]))
+    _err, _spec, _passed = "", "", False
+    _anchored = ""                      # 锚定兜底生效时给用户的如实说明（空 = 没走锚定）
+    for _i in range(_DIAGRAM_MAX_TRIES):
+        # ① 先对**已有的 spec** 做机械修错（报错明说了怎么改的，载体直接改，别让模型瞎试）
+        if _spec and _err:
+            _fixed = _repair_diagram_spec(_spec, _err)
+            if _fixed != _spec:
+                LOG.info("画图兜底：按报错机械修错（%d 字 → %d 字）", len(_spec), len(_fixed))
+                _spec = _fixed
+                _vres = _call("archify_validate", {"diagram_type": _dtype, "spec_json": _spec,
+                                                   "quality": "showcase"})
+                if not _tool_failed(_vres):
+                    _passed = True
+                    break
+                _err = _vres
+        # ② 让模型按 schema/示例写（或按报错重写）
+        _ask = ("请输出**一份** %s 类型的 Archify spec JSON。\n"
+                "硬性要求：只输出 JSON 本体，不要 ``` 围栏、不要任何解释；"
+                "字段名与层级严格照 schema，结构照示例；上一条报错要**一次性全部改完**。\n"
+                "**不要写 fromSide / toSide / labelDy 这类布线提示**，让 Archify 自己布线。\n\n"
+                "用户的原话：%s\n%s"
+                % (_dtype, user_input,
+                   ("\n上次校验的报错（请全部改掉）：\n" + _err[:2500]) if _err else ""))
+        _reply = llm_chat([{"role": "system", "content": _basis},
+                           {"role": "user", "content": _ask}])
+        _new = _extract_json_object(_reply or "")
+        if not _new:
+            LOG.warning("画图兜底：第 %d 轮模型没吐出可解析的 JSON", _i + 1)
+            continue
+        _spec = _new
+        # 第 5 步：**摆放位置由载体算**（模型写坐标基本必错，见 `_diagram_layout_inject`）
+        _spec = _diagram_layout_inject(_spec)
+        _vres = _call("archify_validate", {"diagram_type": _dtype, "spec_json": _spec,
+                                           "quality": "showcase"})
+        if not _tool_failed(_vres):
+            _passed = True
+            break
+        LOG.info("画图兜底：第 %d 轮 spec 校验未过，带着报错让模型重写", _i + 1)
+        _err = _vres
+    if not _passed:
+        # ---- 载体**锚定兜底**（第 5 步）：本地小模型写不出能过校验的**布局** ----
+        # 这是模型能力的硬限制，不是载体的强制没生效：实测它连"读技能→读 schema→出 JSON"
+        # 全做对了，却反复卡在 `label-route-clearance` 这类**像素级**校验上。
+        # 但 Archify 的**官方示例本身是已验证 PASS 的**（实测 9/9 全过）。
+        # 于是载体换个分工：**几何（pos/size/结构/布线）直接用那份已验证的示例**，
+        # 只把「文字」（标题 + 各组件名称）换成用户要的内容 —— 布局由载体保证，文案由模型提供。
+        # 这和整个项目的分工完全一致：模型只管当前这一小块（起名字），载体负责装配与校验。
+        _spec2, _note = _anchor_diagram_on_example(_example, user_input, _dtype, _call)
+        if _spec2:
+            _spec, _passed, _anchored = _spec2, True, _note
+    if _passed:
+        _dres = _call("archify_deliver", {"diagram_type": _dtype, "spec_json": _spec,
+                                          "output_name": "xiaojiao_%s" % _dtype,
+                                          "quality": "showcase"})
+        if _tool_failed(_dres):
+            # 校验过了、交付没成（例如渲染环境有问题）→ **如实说**，并把 spec 交出去让用户能手动出图
+            return ("⚠️ **图已通过 Archify 校验，但交付这一步没成功**（如实报告，不假装完成）。\n\n"
+                    "交付工具的返回：\n\n```\n%s\n```\n\n下面是**已通过校验**的 spec，"
+                    "可以复制到 Archify 里手动出图：\n\n```json\n%s\n```"
+                    % (_dres.strip()[:1000], _spec[:4000])), _trace
+        return ("🎨 **图已交付**（Archify 全流程：读技能 → 读指南 → 读 schema/示例 → 校验通过 → 交付）\n\n"
+                "```\n%s\n```\n\n%s通过校验的 spec：\n\n```json\n%s\n```"
+                % (_dres.strip()[:1200], _anchored, _spec[:2500])), _trace
+    return ("⚠️ **画图没完成：spec 连续 %d 轮没通过 Archify 校验。**\n\n"
+            "最后一次报错原文如下（可以据此人工修正，或者说「再试一次」）：\n\n```\n%s\n```\n\n"
+            "说明：小焦已经把「读技能 → 读指南 → 读 schema/示例 → 出 JSON → 校验」全走完了，"
+            "**一步都没跳过**；也不会把没验过的图说成已完成。"
+            % (_DIAGRAM_MAX_TRIES, str(_err).strip()[:1800])), _trace
+
+
+def _anchor_diagram_on_example(example_text, user_input, dtype, call):
+    """载体锚定：拿**已验证 PASS 的官方示例**当地基，只换文字。
+
+    返回 (spec_json 或 None, 给用户的说明)。做法：
+      ① 先把示例本身validate一遍，确认真是"已验证的地基"（不是想当然）；
+      ② 让模型只干一件小事：给这张关于「用户原话」的图起个标题 + 给 N 个组件起中文名
+         （**不让它碰坐标/结构/布线** —— 那正是它写不对的部分）；
+      ③ 把名字填进示例的 `label` 里，再 validate；过了就交出去；
+      ④ 名字填进去后万一仍没过（换名字可能改变标签宽度），就退回"只换标题"的版本
+         （几何一字未动，必定过）；再不行才放弃。
+    这样用户**一定拿得到一张真的图**，而不是一段"没通过校验"的报错 —— 但文案是模型的，
+    结构是通用模板，所以答案里会**如实说明**这一点，不冒充满分交付。
+    """
+    try:
+        _m = re.search(r"\{.*\}", example_text or "", re.S)
+        base = json.loads(_m.group(0)) if _m else None
+        if not isinstance(base, dict) or not base.get("components"):
+            return None, ""
+        comps = base["components"]
+        # ① 先确认地基真的能过（不能拿一块"以为能过"的地基去兜底）
+        _v = call("archify_validate", {"diagram_type": dtype,
+                                       "spec_json": json.dumps(base, ensure_ascii=False),
+                                       "quality": "showcase"})
+        if _tool_failed(_v) or "PASS" not in str(_v):
+            LOG.warning("画图锚定：官方示例本身没过校验，放弃锚定（交回如实报错）")
+            return None, ""
+        # ② 让模型只起名字（这是 4B 模型干得了的事）
+        _ask = ("给一张关于「%s」的架构图起名字。只输出 JSON，不要解释、不要围栏：\n"
+                '{"title":"整张图的标题（≤16 字）","labels":["组件1名称","组件2名称",...]}\n'
+                "labels 必须正好 %d 个，每个 ≤ 8 个中文字，按这个顺序对应：%s"
+                % (user_input[:80], len(comps),
+                   ", ".join(str(c.get("id")) for c in comps)))
+        _rep = llm_chat([{"role": "system", "content": "你只输出 JSON，不解释。"},
+                         {"role": "user", "content": _ask}])
+        _names = _extract_json_object(_rep or "") or ""
+        title, labels = "", []
+        if _names:
+            try:
+                _nj = json.loads(_names)
+                title = str(_nj.get("title") or "").strip()[:32]
+                labels = [str(x).strip()[:16] for x in (_nj.get("labels") or []) if str(x).strip()]
+            except Exception:      # noqa: silent-ok — 名字没解析出来就退回"只换标题"
+                labels = []
+        # ③ 换文字（标题 + 组件名），几何一字不动
+        def _build(fill_labels):
+            j = json.loads(json.dumps(base))
+            if title:
+                j.setdefault("meta", {})["title"] = title
+            if fill_labels:
+                for c, nm in zip(j["components"], labels):
+                    c["label"] = nm
+            return json.dumps(j, ensure_ascii=False)
+        for _fill in (True, False):
+            if _fill and len(labels) < len(comps):
+                continue
+            _cand = _build(_fill)
+            _v2 = call("archify_validate", {"diagram_type": dtype, "spec_json": _cand,
+                                            "quality": "showcase"})
+            if not _tool_failed(_v2) and "PASS" in str(_v2):
+                _note = ("\n> 说明（如实告知）：本次的**布局**用的是 Archify 官方已验证示例作为地基"
+                         "（本地小模型写不出能过校验的像素级布局），"
+                         + ("标题与组件名称已按你的要求替换。\n" if _fill else
+                            "只替换了标题，组件名称仍是示例里的通用名 —— 本地模型起的名字没通过校验。\n"))
+                LOG.info("画图锚定成功（%s）：几何取自已验证示例", "换了名字" if _fill else "只换标题")
+                return _cand, _note
+        return None, ""
+    except Exception as e:
+        LOG.debug("画图锚定失败（忽略）(%s:%d): %s", __file__, 3600, e)
+        return None, ""
 
 
 def _summarize_tool(user_input, result, tool):
@@ -3257,6 +4296,24 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
     _CTX["user_input"] = user_input          # 工具层要用（判断模型是否只给了碎片检索词）
     history = current_messages()
 
+    # ---- 第 5 步：要"刚才那条工具结果的原文" → 从**会话缓存**取回（工具结果隔离的配套）----
+    # 历史里只留了摘要（防串台），可用户有时候就是想再看一眼那条原始 JSON/HTML。
+    # 让他重抓一遍是最差的做法（慢、还可能已经变了），所以载体把原文存在会话缓存里按需取回。
+    if _wants_raw_tool_result(user_input):
+        _rec = _cached_tool_result()
+        if _rec:
+            _txt = str(_rec.get("text") or "")
+            LOG.info("从会话缓存取回工具原文：%s（%d 字，%s 前）",
+                     _rec.get("tool"), len(_txt), _rec.get("time"))
+            return ("📄 **刚才 `%s` 的完整原始结果**（共 %d 字%s，从会话缓存取回，未重抓）\n\n"
+                    "```\n%s\n```"
+                    % (_rec.get("tool") or "?", len(_txt),
+                       ("，HTTP %s" % _rec["status"]) if _rec.get("status") else "",
+                       _txt[:20000]),
+                    True, [], False,
+                    [{"tool": _rec.get("tool") or "?", "args": _rec.get("args"),
+                      "result": "从会话缓存取回原始结果（%d 字）" % len(_txt), "cached": True}])
+
     # ---- 第 4 步：输入无限 —— 贴了超长内容就切片循环处理（无限 2）----
     # 放在最前面：超长输入一旦进入下面那条链（记忆检索/意图识别/装 ctx），
     # 无论怎么裁都装不下 —— 必须**在入口就分流**，由载体切好、循环、再拼装。
@@ -3294,9 +4351,12 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
                 LOG.warning("漏洞查询不可用：抓取插件未加载，回退常规检索")
             else:
                 _rows = max(0, sum(1 for _l in _vbody.splitlines() if _l.startswith("|")) - 2)
-                tool_trace.append({"tool": "collect_vulnerabilities", "args": _vq,
-                                   "result": "NVD 漏洞表：%d 行（%s，最近 %d 天）"
-                                             % (_rows, _vq["severity"], _vq["days"])})
+                # 第 5 步：这张表常有 1~2 千字，属于"大结果" → 轨迹记长度 + 前 200 字，
+                # 原文进会话缓存；这样下一轮的历史里不会再出现整张漏洞表（防串台）。
+                _ve = _trace_entry("collect_vulnerabilities", _vq, _vbody)
+                _ve["result"] = ("NVD 漏洞表：%d 行（%s，最近 %d 天）"
+                                 % (_rows, _vq["severity"], _vq["days"]))
+                tool_trace.append(_ve)
                 answer = _vbody or ("⚠️ 漏洞查询失败：%s" % (_verr or "接口没有返回内容，请稍后重试"))
                 if _asks_asset_list(user_input):
                     # **真实缺陷**：用户问的是"含这些漏洞的 IP / 主机 / 资产"，而这条路只会
@@ -3489,16 +4549,36 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
         elif CAP.get("run_tools", True):
             # 工具子集已由上面的 _plan_tools() 按意图 + 预算定好；画图轮再给足时间预算（多步链路）
             _budget = 240 if intent == "diagram" else 0
-            answer, tool_trace = llm_chat_tools(
-                messages, lean=lean, max_rounds=_workflow_needs_more_rounds(user_input),
-                tools_subset=_subset, budget_s=_budget)
+            try:
+                answer, tool_trace = llm_chat_tools(
+                    messages, lean=lean, max_rounds=_workflow_needs_more_rounds(user_input),
+                    tools_subset=_subset, budget_s=_budget,
+                    workflow=("diagram" if intent == "diagram" else ""))
+            except Exception as e:
+                # **真实缺陷（用户实测：画架构图返回"大脑没有应答"）**：本地 4B 模型偶尔会吐一个
+                # **参数不是合法 JSON 的工具调用**，llama-server 直接回 HTTP 500
+                # （`Failed to parse tool call arguments as JSON`）。这一句以前没有 try，
+                # 异常直接把整轮对话打穿 —— ②的兜底链（抓取直通 / 画图载体兜底）**根本没机会跑**，
+                # 用户看到的就是"没答上"。载体优先的含义就是：**模型出错是模型的锅，
+                # 载体必须自己把活干完**，而不是把错误原样丢给用户。
+                LOG.warning("模型调用失败（%s），转入载体的代码层兜底：%s",
+                            "工具调用参数不是合法 JSON" if "parse tool call" in str(e)
+                            else e.__class__.__name__, str(e)[:160])
+                answer, tool_trace = None, []
         else:
-            answer = llm_chat(messages)
+            try:
+                answer = llm_chat(messages)
+            except Exception as e:
+                LOG.warning("模型调用失败（%s），转入载体的代码层兜底", e.__class__.__name__)
+                answer = None
 
     # ② 兜底：抓取类意图直通（模型没自己调工具时走这条）
-    if not tool_trace and CAP.get("run_tools", True) and has_llm:
+    #     判据是"没有抓到东西"，不只是 tool_trace 为空 —— 见下面 ②c 的说明。
+    if not _trace_has_page(tool_trace) and CAP.get("run_tools", True) and has_llm:
         if _detect_scrape_intent(user_input):
-            answer, tool_trace = _scrape_direct(user_input, tool_trace)
+            _sans, _str = _scrape_direct(user_input, tool_trace)
+            if _sans:
+                answer, tool_trace = _sans, _str
 
     # ②b 兜底：其它"执行类操作" → 用 plan 强制生成一次工具调用
     if not tool_trace and CAP.get("run_tools", True) and has_llm:
@@ -3508,8 +4588,23 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
             if tname:
                 tname, targs = _map_tool(tname, targs)
                 result = _tool_result_str(run_tool(tname, targs, force=True))
-                tool_trace.append({"tool": tname, "args": targs, "result": result[:800]})
+                tool_trace.append(_trace_entry(tname, targs, result))
                 answer = _summarize_tool(user_input, result, tname)
+
+    # ②c 兜底：**画图意图但图没真的交付** → 载体自己把 archify 工作流走完（第 5 步）
+    #     真实缺陷（本轮实测）：本地 4B 模型被要求画架构图时，直接画一屏 ASCII 框图就交差，
+    #     一个 archify 工具都不调（工具轨迹为空）。`llm_chat_tools` 里的工作流强制只能纠正
+    #     "模型调错了工具"，纠正不了"模型根本不调工具" —— 那种情况必须由载体接手。
+    #     判据是 `_trace_has_diagram`（真的交付了吗），不是 `not tool_trace`（有没有调过工具）：
+    #     模型随便调个别的小工具，也不该让这条兜底被跳过（用户实测就是这么漏的）。
+    #     放在抓取兜底之后：画图轮本来就不该去抓网页（`_detect_scrape_intent` 对画图句返回 None）。
+    if (not _trace_has_diagram(tool_trace)) and CAP.get("run_tools", True) \
+            and _asks_diagram(user_input):
+        _dans, _dtr = _diagram_direct(user_input, tool_trace)
+        if _dans:
+            LOG.info("画图兜底：图没交付，载体自己走完 archify 工作流（工具轨迹 %s）",
+                     [t.get("tool") for t in (_dtr or [])])
+            answer, tool_trace = _dans, _dtr
 
     # ③ 大模型不在线但有执行类操作 → 明确提示，不胡诌
     if not has_llm and answer is None and CAP.get("run_tools", True):
@@ -4559,6 +5654,10 @@ def api_chat():
     # 先写用户 + 占位(空)小焦消息：刷新后能读到"正在回答"
     append_msg("用户", user_input)
     append_msg("小焦", "⏳__pending__")
+    # 第 5 步：**把这次提问落在哪个会话 id 记下来**，回答出来时按 id 定点回填。
+    # 不能等回答完再问"当前是哪个会话" —— 那期间别的客户端（网页/脚本/第二个标签页）
+    # 切换会话就会把回答写错地方，自己的会话永远停在"正在回答"（实测踩到）。
+    _sid = get_current_session()[0].get("id")
     lean = bool((request.get_json(force=True, silent=True) or {}).get("lean", False))
     answer, online, info, needs_confirm, tool_trace = agent_run(user_input, lean=lean)
     answer = _strip_think(answer)                  # 双保险：任何路径的 <think> 都不许进正文/会话
@@ -4566,12 +5665,15 @@ def api_chat():
     answer_final = answer
     if not answer_final:
         answer_final = "🤖 大脑没有应答，这一问没答上。请确认模型配置正确、端口可达。" + llm_error_suffix()
-    s, d = get_current_session()
-    for m in s.get("messages", []):
-        if m.get("role") == "小焦" and "__pending__" in str(m.get("content", "")):
-            m["content"] = answer_final
-    _save_sessions(d)
-    log_id = _record_interaction(user_input, answer_final, tool_trace)   # 内置·自动记录
+    # ---- 第 5 步：工具结果隔离 —— 用户拿到的 `answer` 一个字不动，**进历史的只留摘要**。
+    #      真实缺陷：抓回来的原始 JSON/HTML 整段写进会话，下一轮又被当上下文发回模型，
+    #      于是"先画图再抓网页"，第 2 轮把第 1 轮的 JSON 原样吐了回来（串台）。
+    _hist_text = _history_safe_answer(answer_final, tool_trace)
+    if _hist_text != answer_final:
+        LOG.info("上下文隔离：本轮回答 %d 字含工具原始内容 → 历史只存 %d 字摘要",
+                 len(answer_final), len(_hist_text))
+    replace_pending_msg(_sid, _hist_text)
+    log_id = _record_interaction(user_input, _hist_text, tool_trace)   # 内置·自动记录
     # 回答是否真的用上了检索资料（"只搜到不算，读进去才算"）
     g = _grounding(answer, info, user_input)
     if g.get("grounded") is False:
@@ -4629,6 +5731,11 @@ def api_chat_stream():
             append_msg("小焦", "⏳__pending__")
         except Exception:      # noqa: silent-ok — 会话落盘失败不该挡住回答
             pass
+        # 第 5 步：记下"这次提问落在哪个会话"（与 /api/chat 同理，避免并发切会话时回答写错地方）
+        try:
+            _sid = get_current_session()[0].get("id")
+        except Exception:      # noqa: silent-ok — 取不到就当没有，回填自然跳过
+            _sid = ""
         buf = []
         try:
             import queue
@@ -4669,18 +5776,20 @@ def api_chat_stream():
                 answer = ("🤖 大脑没有应答，这一问没答上。请确认模型配置正确、端口可达。"
                           + llm_error_suffix())
             # 把占位消息换成真实回答 + 记录本次交互（与 /api/chat 一致）
+            # 第 5 步：同样只往历史里写**摘要**（工具原始内容不进历史，防串台）
             try:
-                s, d = get_current_session()
-                for m in s.get("messages", []):
-                    if m.get("role") == "小焦" and "__pending__" in str(m.get("content", "")):
-                        m["content"] = answer
-                _save_sessions(d)
-            except Exception:  # noqa: silent-ok — 落盘失败不影响这次回答
-                pass
-            log_id = _record_interaction(user_input, answer, tool_trace)
+                _hist_text = _history_safe_answer(answer, tool_trace)
+            except Exception as e:      # noqa: silent-ok — 摘要失败就退化成原文，绝不能中断推流
+                LOG.debug("上下文隔离摘要失败（忽略）(%s:%d): %s", __file__, 4860, e)
+                _hist_text = answer
+            if _hist_text != answer:
+                LOG.info("上下文隔离（流式）：本轮回答 %d 字含工具原始内容 → 历史只存 %d 字摘要",
+                         len(answer), len(_hist_text))
+            replace_pending_msg(_sid, _hist_text)
+            log_id = _record_interaction(user_input, _hist_text, tool_trace)
             yield _sse({"type": "meta", "brain_online": online, "tool_trace": tool_trace,
                         "tools_on": bool(CAP.get("run_tools", True)),
-                        "session_id": get_current_session()[0].get("id"), "log_id": log_id,
+                        "session_id": _sid or get_current_session()[0].get("id"), "log_id": log_id,
                         "needs_confirm": needs_confirm,
                         "sources": [{"title": t, "content": c, "url": u} for t, u, c in info]})
             yield _sse({"type": "done", "answer": answer})
@@ -6191,6 +7300,11 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
   }
   clearInterval(timer);if(th.parentNode)th.remove();stopBtn.remove();
   if(!buf){add('bot','⚠️ 大脑没有应答。请确认模型配置正确、端口可达。');loadSessions();return;}
+  // **真实缺陷（用户实测：看不到工具轨迹 / 回答不对劲）**：
+  // 普通回答（不走续写）根本不会推 chunk 事件 —— 正文只在最后的 done 里。而气泡是在
+  // "收到第一个 chunk" 时才建的，于是这条路径上 body 一直是 null，正文**永远不会被插进页面**。
+  // 这里补一次 ensureBubble()：无论正文是 chunk 来的还是 done 来的，都必须先有气泡再渲染。
+  ensureBubble();
   // 收尾：渲染 Markdown（表格加宽）+ 工具轨迹 + 会话/日志
   if(body){const full=renderMd(buf);if(full.indexOf('<table')>=0){body.classList.add('wide');bubble.classList.add('widem');}
     body.innerHTML=full;}
