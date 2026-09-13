@@ -1,0 +1,72 @@
+# 小焦 · 危险命令黑名单（第一批安全加固 · 任务 2）
+#
+# 用法：一行一个**正则**（大小写不敏感）。命中 → 执行前会先把命令原文发给用户，
+#       用户回复「确认」（或点界面确认按钮）才真正执行；安全命令直接跑、不打扰。
+# 维护：加/删词只改这个文件即可，不用动代码。以 # 开头的是注释。
+# 关闭确认：在 xiaojiao_control.json 里设 capabilities.full_access = true（不建议）。
+
+# ---------- 删除 / 破坏性文件操作 ----------
+\brm\b
+\bdel\b
+\berase\b
+\brd\b
+\brmdir\b
+\bremove-item\b.*-recurse
+\bdel\s+/[fqs]
+\bformat\b
+\bmkfs\b
+\bdiskpart\b
+\bdd\s+if=
+\bshred\b
+\bwipe\b
+\bcipher\s+/w
+\bsdelete\b
+
+# ---------- 关机 / 重启 / 系统状态 ----------
+\bshutdown\b
+\breboot\b
+\brestart-computer\b
+\bstop-computer\b
+\bhalt\b
+\bpoweroff\b
+
+# ---------- 注册表 / 权限 / 服务 ----------
+\breg\s+delete\b
+\breg\s+add\b
+\bregedit\b
+\bicacls\b.*\/(grant|deny|reset)
+\btakeown\b
+\bsc\s+(delete|stop|config)\b
+\bnet\s+(user|localgroup)\b
+\bnetsh\b
+\bwmic\b.*delete
+\bgpupdate\b.*\/force
+
+# ---------- 进程 / 磁盘 / 卷 ----------
+\btaskkill\b.*\/f
+\btskill\b
+\bStop-Process\b.*-Force
+\bchkdsk\b.*\/f
+\bvssadmin\b
+\bwevtutil\s+cl
+\bclear-eventlog\b
+
+# ---------- 下载后执行 / 远程代码（最典型的"一条命令拿到你机器"） ----------
+iwr\b.*\|\s*iex
+invoke-webrequest\b.*\|\s*invoke-expression
+invoke-expression\b
+\biex\b
+curl\b.*\|\s*(ba)?sh
+wget\b.*\|\s*(ba)?sh
+\|\s*(cmd|powershell|pwsh)\b
+start-process\b.*-verb\s+runas
+\bcertutil\b.*-urlcache.*-split.*-f
+\bmshta\b.*http
+\bregsvr32\b.*\/i:http
+\bpowershell\b.*-enc(odedcommand)?
+
+# ---------- 凭据 / 密钥外带 ----------
+\bget-credential\b
+\bcmdkey\b.*\/list
+\bInvoke-RestMethod\b.*-Method\s+Post
+\bcurl\b.*-d\s+.*(password|token|key)

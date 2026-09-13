@@ -1487,7 +1487,36 @@ TOOLS = [
 ]
 
 
-DANGEROUS_CMD = re.compile(r"\b(rm|del|rd|format|shutdown|reboot|mkfs|dd|reg\s+delete|taskkill\s+/f|net\s+user|netsh|icacls|takeown|chkdsk\s+/f|tskill|vssadmin)\b", re.I)
+# 危险命令黑名单（第一批任务 2）：**独立文件**维护，加/删词不用动代码。
+# tools/dangerous_commands.txt 一行一个正则（# 为注释）；文件缺失/读不到时用兜底正则。
+_DANGEROUS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "tools", "dangerous_commands.txt")
+_DANGEROUS_FALLBACK = (r"\b(rm|del|rd|format|shutdown|reboot|mkfs|dd|reg\s+delete|taskkill\s+/f|"
+                       r"net\s+user|netsh|icacls|takeown|chkdsk\s+/f|tskill|vssadmin|"
+                       r"iwr\s+.*\|\s*iex|invoke-expression)\b")
+
+
+def _load_dangerous_patterns():
+    """读黑名单文件（每行一个正则）；读不到就退回兜底正则。"""
+    pats = []
+    try:
+        with open(_DANGEROUS_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    pats.append(line)
+    except Exception as e:  # noqa: silent-ok — 文件缺失就用兜底，不影响主流程
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 1180, e)
+    if not pats:
+        pats = [_DANGEROUS_FALLBACK]
+    try:
+        return re.compile("|".join("(?:%s)" % p for p in pats), re.I)
+    except re.error as e:      # 某行正则写错 → 报出来并退回兜底，绝不静默失效
+        LOG.warning("dangerous_commands.txt 里有非法正则（%s），已退回兜底规则", e)
+        return re.compile(_DANGEROUS_FALLBACK, re.I)
+
+
+DANGEROUS_CMD = _load_dangerous_patterns()
 SAFE_ROOT = os.path.abspath(os.getcwd())
 PENDING = None          # 待用户确认的危险动作 (name, args)
 # 语音模型全局缓存（懒加载）。**必须定义在这里**：以前 `api_voice_warm` 里没写 `global`，
@@ -1528,11 +1557,18 @@ def run_tool(name, args, force=False):
     args = args or {}
     # 权限模式：Full access(默认)=所有命令直接执行、危险命令也不询问；Read-only=每次执行命令都询问
     if not force:
-        ask = (not FULL_ACCESS and name in ("run_command", "write_file", "open_app"))
+        # 权限模式（第一批任务 2）：默认 full_access=false —— **只对危险命令**要确认，
+        # 安全命令（echo/dir/type/ipconfig/python…）照常直接执行，不打扰用户。
+        # 显式设 capabilities.full_access=true 则完全不询问（危险操作自担风险）。
+        ask = (not FULL_ACCESS) and is_dangerous(name, args)
         if ask:
             PENDING = (name, args)
-            desc = f"运行命令「{args.get('command','')}」" if name == "run_command" else f"写入文件「{args.get('path','')}」"
-            return f"〔待确认〕小焦想执行：{desc}。请用户确认后再执行。"
+            if name == "run_command":
+                desc = "运行这条命令：\n\n```\n%s\n```" % args.get("command", "")
+            else:
+                desc = "写入文件「%s」" % args.get("path", "")
+            return ("〔待确认〕小焦想执行**危险操作**，先把原文给你过目：\n\n%s\n\n"
+                    "确认无误请回复「**确认**」（或点界面确认按钮）；不想执行回复「取消」。" % desc)
     PENDING = None
     try:
         if name == "web_search":
