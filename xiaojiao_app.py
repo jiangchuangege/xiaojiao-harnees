@@ -1273,6 +1273,38 @@ def _generate_long(task, system, on_chunk=None):
         return None
 
 
+# ================== 第 4 步：大输入切片（无限 2：输入无限） ==================
+# 用户能贴任意长度（10 万字文章、50 万字报告），模型单次装不下。
+# 载体切片 → 逐片调模型 → 每片落 logs/_chunks/ → 拼装（再去重/断句）。用户只看到"完整总结"。
+def _needs_input_split(text):
+    """输入是否超过单片上限（spec：> 5000 token 就切片）。"""
+    try:
+        return _estimate_tokens(text) > int(CAP.get("input_split_threshold", 5000) or 5000)
+    except Exception:      # noqa: silent-ok — 判不出来就当普通输入处理
+        return False
+
+
+def _process_long_input(text, on_progress=None):
+    """把超长输入切片、循环、拼装成一份完整结果；失败返回 None（回落普通回答）。"""
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core import input_splitter as _sp
+        # 长文处理用"完整 system"（不按意图裁剪）：这里本来就不是闲聊，规则给足更稳
+        system = compose_system_prompt(CONTROL.get("role", ""))
+        res = _sp.process_long_input(
+            text, system,
+            max_chunk=int(CAP.get("input_split_chunk", 5000) or 5000),
+            on_progress=on_progress)
+        LOG.info("长输入切片：%d token → 拆成 %d 片处理 / 输出 %d 字 / 耗时 %.1fs（产出存 logs/_chunks/）",
+                 res["tokens_in"], res["slices"], len(res["answer"]), res["elapsed_s"])
+        return res["answer"] or None
+    except Exception as e:
+        LOG.warning("长输入处理失败，回落普通回答：%s", e)
+        return None
+
+
 # ================== 上下文 ==================
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -3209,11 +3241,13 @@ def _fit_context(system_text, history, current_text, max_ctx=None, min_rounds=2,
 
 
 # ================== 智能体 ==================
-def agent_run(user_input, lean=False, on_chunk=None):
+def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
     """全部问题统一走这条流程：记忆 → 联网检索 → 大脑(小焦模型/外接LLM) → 记忆自学习。
 
     `on_chunk(text, n, total_chars)`：只在"用户要长文"时会被回调（第 3 步的 SSE 推流用）。
-    普通问答完全不碰它 —— 短内容不走分段，用户无感。
+    `on_progress(done, total)`：只在"输入超长被切片"时回调，给界面一个**不含片号**的
+      "正在处理…"信号（无限 5：用户看不到"第 X/Y 片"这种技术痕迹）。
+    普通问答完全不碰这两个 —— 短内容不走分段也不切片，用户无感。
 
     注：不再代理给 DSH 桥接（那会造成 小焦→桥接→小焦 的死循环）。
     DSH 兼容的正确方式是：DSH harness 连小焦的 /v1 当模型，DSH 的插件在 DSH 里自己跑。
@@ -3222,6 +3256,15 @@ def agent_run(user_input, lean=False, on_chunk=None):
     _USED_LOCAL_FALLBACK.update({"on": False, "model": "", "reason": ""})   # 每次提问复位兜底标签
     _CTX["user_input"] = user_input          # 工具层要用（判断模型是否只给了碎片检索词）
     history = current_messages()
+
+    # ---- 第 4 步：输入无限 —— 贴了超长内容就切片循环处理（无限 2）----
+    # 放在最前面：超长输入一旦进入下面那条链（记忆检索/意图识别/装 ctx），
+    # 无论怎么裁都装不下 —— 必须**在入口就分流**，由载体切好、循环、再拼装。
+    if _needs_input_split(user_input):
+        _long_in = _process_long_input(user_input, on_progress=on_progress)
+        if _long_in:
+            _remember_turn(user_input, _long_in, None)
+            return _long_in, True, [], False, []
 
     # 1. 相关记忆（受操控文件 capabilities 控制）
     mem_text = ""
@@ -4595,11 +4638,16 @@ def api_chat_stream():
                 buf.append(text)
                 q.put(_sse({"type": "chunk", "text": text, "n": n, "chars": total}))
 
+            def _on_progress(done, total):
+                # 只报"还在处理"，**不报第几片**（无限 5：界面不出现技术痕迹）
+                q.put(_sse({"type": "progress"}))
+
             holder = {}
 
             def _work():
                 try:
-                    holder["r"] = agent_run(user_input, on_chunk=_on_chunk)
+                    holder["r"] = agent_run(user_input, on_chunk=_on_chunk,
+                                            on_progress=_on_progress)
                 except Exception as e:
                     holder["err"] = str(e)
                 finally:
@@ -6135,6 +6183,7 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
     if(!line)continue;
     let d;try{d=JSON.parse(line);}catch(e){continue;}
     if(d.type==='chunk'){ensureBubble();buf+=d.text;body.textContent=buf;feed.scrollTop=feed.scrollHeight;}
+    else if(d.type==='progress'){const s=th.querySelector('.stag');if(s)s.textContent='⏳ 正在处理…';}
     else if(d.type==='meta'){meta=d;}
     else if(d.type==='error'){ensureBubble();buf+=(buf?'\n\n':'')+'⚠️ '+d.error;body.textContent=buf;}
     else if(d.type==='done'){meta=meta||d;if(d.answer&&!buf){buf=d.answer;}}
