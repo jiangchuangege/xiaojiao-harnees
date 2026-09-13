@@ -2865,6 +2865,53 @@ def agent_run(user_input, lean=False):
 app = Flask(__name__)
 
 
+# ================== 聊天接口限流（安全第一批·任务4） ==================
+# 为什么要有：/api/chat 每问一次都真调大脑（云端还花钱）。网页连点、脚本刷、或端口被同网段
+# 的人打，都能把云端额度刷爆。这里放一个**令牌桶**：按"每分钟 N 次"匀速回填，桶里最多攒
+# burst 个；桶空了返回 429 并告诉用户等几秒 —— 挡得住突发，也不误伤正常聊天。
+# 只挂在 /api/chat 这一个入口（工具、静态资源、其它接口一律不受影响）。
+_RATE = {"tokens": None, "at": 0.0}      # tokens=None → 还没初始化（首次请求时填满）
+_RATE_LOCK = threading.Lock()            # 桶的"读-改-写"必须原子，否则并发会漏放
+
+
+def _rate_config():
+    """(每分钟次数, 突发额度)。由 capabilities.rate_limit_per_minute 配置，默认 30，夹在 1~600。"""
+    try:
+        limit = float(CAP.get("rate_limit_per_minute", 30) or 30)
+    except (TypeError, ValueError):
+        limit = 30.0
+    if limit != limit or limit <= 0:         # NaN / 非正数 → 回默认，别把接口锁死
+        limit = 30.0
+    limit = max(1.0, min(600.0, limit))
+    return limit, max(1.0, min(5.0, limit))  # 突发额度最多 5
+
+
+def rate_limited():
+    """令牌桶。返回 (是否被限流, 建议等待秒数)；按经过时间补令牌，桶容量 = 突发额度。
+
+    加锁：Flask 是多线程的。两个并发请求若同时"读-改-写"桶，会各自都看到桶里还有令牌，
+    突发就被放过去了（实测并发打 5 次本该只过 2 次）。桶只在这一处改，锁住即可。
+    """
+    limit, burst = _rate_config()
+    rate = limit / 60.0
+    with _RATE_LOCK:
+        now = time.time()
+        if _RATE["tokens"] is None:          # 首次调用：先填满，别让第一波正常请求被误伤
+            _RATE["tokens"] = burst
+            _RATE["at"] = now
+        else:
+            delta = max(0.0, now - _RATE["at"])   # 时钟回拨时不倒扣令牌
+            _RATE["tokens"] = min(burst, _RATE["tokens"] + delta * rate)
+            _RATE["at"] = now
+        if _RATE["tokens"] >= 1.0:
+            _RATE["tokens"] -= 1.0
+            limited, wait = False, 0
+        else:
+            limited = True
+            wait = int((1.0 - _RATE["tokens"]) / rate) + 1   # 向上取整：别让用户等完还差一点
+    return limited, wait
+
+
 def _client_is_local():
     """请求是不是来自本机（令牌只对"非本机访问"强制；本机自己用不折腾）。"""
     try:
@@ -3777,6 +3824,17 @@ def api_history():
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     maybe_reload_control()
+    _limited, _wait = rate_limited()
+    if _limited:
+        # 429 也要带 answer/tools_on：前端拿到非 200 时直接读 d.answer 渲染、并会调
+        # setToolsOn(d.tools_on)，缺了就会显示成空白气泡 + 工具开关被误判成"关"。
+        _msg = ("请求太频繁：每分钟最多 %d 次（突发额度已用完），请等 %d 秒再试。"
+                "可在 xiaojiao_control.json 的 capabilities.rate_limit_per_minute 调大。"
+                % (int(_rate_config()[0]), _wait))
+        return jsonify({"ok": False, "error": _msg, "answer": _msg, "brain_online": False,
+                        "needs_confirm": False, "tool_trace": [], "sources": [],
+                        "tools_on": bool(CAP.get("run_tools", True)),
+                        "grounding_note": ""}), 429
     data = request.get_json(force=True, silent=True) or {}
     user_input = (data.get("message") or "").strip()
     if not user_input:
