@@ -13,9 +13,16 @@
 
 用法：
     python tools/check_secrets.py                 # 扫默认的候选配置文件
+    python tools/check_secrets.py --include-logs  # 连 logs/ 下的历史备份一起扫（"确认没残留"用）
     python tools/check_secrets.py --fix-hint      # 额外打印「怎么改成环境变量」
     python tools/check_secrets.py 某文件.json      # 只扫指定文件
 退出码：0 = 未发现明文密钥；1 = 发现了（需要处理）
+
+为什么要有 --include-logs：默认只扫仓库根目录的配置文件，而 logs/ 里的历史备份
+（backup_before_*/xiaojiao_control.json、_ctl_backup.json 之类）**同样带着明文密钥**。
+真实教训：本工具第一次跑默认扫描时报"未发现明文密钥"，可 logs/ 下其实还躺着 4 个文件、
+8 处明文 —— 假阴性比不报还危险。默认不扫它们是因为"备份是回滚安全网、常年留着很正常"，
+但想做一次彻底确认，就用 --include-logs。
 """
 from __future__ import annotations
 
@@ -94,6 +101,24 @@ def candidate_files():
     return sorted(found)
 
 
+# --include-logs 时要跳过的二进制/大文件后缀（它们不可能"改去环境变量"，扫了只有噪音）
+LOG_SKIP_EXT = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp",
+                ".pth", ".pkl", ".zip", ".bin", ".pt", ".onnx", ".db",
+                ".woff", ".woff2", ".ttf", ".mp4", ".mp3", ".wav", ".pdf")
+
+
+def log_files():
+    """logs/ 下的历史备份（递归）。默认不扫：备份是回滚安全网，常年留着很正常 ——
+    但它们确实可能带着明文密钥，所以用 --include-logs 做一次彻底确认。"""
+    out = []
+    for dirpath, _dirnames, filenames in os.walk(os.path.join(ROOT, "logs")):
+        for fn in filenames:
+            if fn.lower().endswith(LOG_SKIP_EXT):
+                continue
+            out.append(os.path.join(dirpath, fn))
+    return sorted(out)
+
+
 def scan_file(path):
     """扫单个文件，返回命中列表 [{'line': n, 'kind':..., 'masked_line':...}]。"""
     try:
@@ -122,6 +147,8 @@ def scan_file(path):
 def main():
     ap = argparse.ArgumentParser(description="扫出配置文件里的明文密钥（默认只提醒，不改文件）")
     ap.add_argument("paths", nargs="*", help="只扫这些文件；不给就扫默认候选文件")
+    ap.add_argument("--include-logs", action="store_true",
+                    help="连 logs/ 下的历史备份一起扫（做一次彻底确认时用）")
     ap.add_argument("--fix-hint", action="store_true", help="额外打印「怎么改成环境变量」")
     args = ap.parse_args()
 
@@ -133,6 +160,8 @@ def main():
         files = [p for p in files if os.path.isfile(p)]
     else:
         files = candidate_files()
+        if args.include_logs:
+            files = sorted(set(files) | set(log_files()))
 
     print("=" * 62)
     print("  明文密钥自查（优先读环境变量 XIAOJIAO_API_KEY）")
