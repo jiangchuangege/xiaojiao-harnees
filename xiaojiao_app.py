@@ -1126,6 +1126,104 @@ def recall(query):
     return [item for _, item in scored[:3]]
 
 
+# ================== 第 2 步：对话记忆向量库（无限 1：记忆无限） ==================
+# 定位：上面那套 `remember/recall` 存的是**联网学到的知识**（xiaojiao_knowledge_memory.json），
+# 这里补的是**历史对话本身** —— 全部永久存进外部向量库（logs/xiaojiao_memory_vec.jsonl），
+# 不占模型 ctx；每轮按需检索 top-K 注入 system。
+# 载体优先：检索、衰减、阈值、token 预算、写入全在 core/ 里，模型只负责"看到就用"。
+_MEMORY_INSTRUCTION = (
+    "\n【相关记忆】是**用户本人过去亲口说过的话**（记忆里的「我」= 用户，**不是指你小焦**）。"
+    "回答与用户本人有关的问题（名字/家人/住址/偏好/设备/工作…）时，**必须优先按它回答**；"
+    "与本次问题无关就忽略。**只许用记忆里写着的事实，不许编造**。\n")
+_MEMORY_LAST = {"rid": "", "text": "", "tokens": 0}      # 供写回"模型是否使用"
+
+
+def _memory_cfg():
+    """记忆检索参数（操控文件 capabilities 可覆盖，全部有默认值）。"""
+    return {"top_k": int(CAP.get("memory_top_k", 5) or 5),
+            "threshold": float(CAP.get("memory_threshold", 0.6)
+                               if CAP.get("memory_threshold") is not None else 0.6),
+            "max_tokens": int(CAP.get("memory_max_tokens", 2000) or 2000)}
+
+
+def _retrieve_memory(query):
+    """从对话向量库检索相关历史；返回注入文本（失败一律返回空串，绝不拖垮对话）。"""
+    if not CAP.get("memory", True) or not (query or "").strip():
+        return ""
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core import retriever as _r
+        cfg = _memory_cfg()
+        res = _r.retrieve(query, top_k=cfg["top_k"], threshold=cfg["threshold"],
+                          max_tokens=cfg["max_tokens"])
+        _MEMORY_LAST.update({"rid": res["rid"], "text": res["text"],
+                             "tokens": res["tokens"]})
+        if res["text"]:
+            LOG.info("记忆检索：命中 %d 条 / 注入 %d 条 · %d token · %.1fms（后端 %s）",
+                     len(res["hits"]), len(res["used"]), res["tokens"],
+                     res["latency_ms"], res["backend"])
+        return res["text"]
+    except Exception as e:      # noqa: silent-ok — 记忆检索失败照常对话，不能因此报错
+        LOG.debug("记忆检索失败（忽略）(%s:%d): %s", __file__, 1105, e)
+        return ""
+
+
+def _memory_used(inject_text, question, answer):
+    """判断"模型到底有没有用上注入的记忆" —— 给日志的"使用率"一个如实口径。
+
+    做法：把注入文本里的**实义词**（连续中文 ≥2 字）挑出来，去掉问题里本来就有的，
+    再看答案里有没有出现。出现即算"用上了"。粗糙但可核对，不猜。
+    """
+    try:
+        if not inject_text or not answer:
+            return False, ""
+        qset = set(re.findall(r"[\u4e00-\u9fff]{2,}", question or ""))
+        cand = set(re.findall(r"[\u4e00-\u9fff]{2,}", inject_text))
+        # 只留"记忆里独有的"实义词，避免把「我们」「什么」这类通用词算成命中
+        for tok in sorted(cand - qset, key=len, reverse=True):
+            if len(tok) < 2:
+                continue
+            if tok in answer:
+                return True, tok
+        return False, ""
+    except Exception:      # noqa: silent-ok — 判定失败就当"没用上"，宁可不虚报
+        return False, ""
+
+
+def _remember_turn(user_input, answer, tool_trace=None):
+    """把这一轮对话永久写进向量库（无限 1：所有历史对话永久保存）。"""
+    if not CAP.get("memory", True) or not (user_input or "").strip() or not (answer or "").strip():
+        return ""
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core import memory_vec as _mv
+        # 存「用户问了什么 + 小焦答了什么」：
+        #   · 索引键用**用户那句话**（key_text）—— 检索的本质就是"按用户问过的去找"。
+        #     实测：若拿整段原文去算向量，用户那句「我叫张三」会被小焦几百字的寒暄淹掉，
+        #     问「我叫什么」时 cos 掉到阈值以下、一条都检索不到（注入 0 条）。
+        #   · 注入用的正文里，回答只留**摘要**（spec 也是这么要求的）：去掉 Markdown 记号，
+        #     压到一句话以内。存全量回答既占硬盘又冲淡事实。
+        _a = (answer or "").strip()
+        _a = re.sub(r"```.*?```", " ", _a, flags=re.S)          # 代码块不往记忆里塞
+        _a = re.sub(r"^[#>\-\*\s|]+", "", _a, flags=re.M)       # 去掉标题/列表/表格记号
+        _a = re.sub(r"\s+", " ", _a).strip()
+        _q = (user_input or "").strip().replace("\n", " ")
+        text = "用户：%s\n小焦：%s" % (_q[:300], _a[:200] or "（已回答）")
+        ents = []
+        for _m in re.finditer(r"https?://[^\s，。；]+", text):
+            ents.append(_m.group(0)[:80])
+        kinds = {t.get("tool") for t in (tool_trace or []) if t.get("tool")}
+        kind = "tool" if kinds else "dialogue"
+        return _mv.add_memory(text, kind=kind, entities=sorted(ents)[:5], key_text=_q)
+    except Exception as e:      # noqa: silent-ok — 存记忆失败不能让这一轮对话失败
+        LOG.debug("写记忆失败（忽略）(%s:%d): %s", __file__, 1140, e)
+        return ""
+
+
 # ================== 上下文 ==================
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -2084,15 +2182,35 @@ _TOOL_HINTS = [
 
 
 def detect_tool_intent(q):
-    """粗略判断用户请求是否属于“执行类操作”，返回工具类型或 None（仅作兜底提示）。"""
+    """粗略判断用户请求是否属于“执行类操作”，返回工具类型或 None（仅作兜底提示）。
+
+    **真实缺陷（第 2 步实测抓到，代价很实在）**：这里原来用**光杆动词**判"要新建"，
+    `is_create` 里就一个 `"写"` 字。于是用户问
+        「我平时最喜欢用什么语言写代码」
+    —— 里面有个"写"，被判成 `write_file`；接着 `plan_tool` 让 4B 模型把它转成工具调用，
+    真的执行了一次 `run_command whoami`，最后把返回的**用户名 "jiao"** 总结成
+        「已在 jiao 目录下创建了 jiao 文件夹。」
+    答非所问、还谎报"已执行"。一句话被理解成"让我建文件"，只因为含了个"写"字。
+
+    修法：新建类判据只认**带宾语的动作短语**（写一个/写个/创建/新建/保存…），
+    不再认光杆的"写""生成" —— 问句里描述话题的"写代码""写小说"不再被当成命令。
+    """
     ql = q.lower()
-    is_create = any(k in ql for k in ("创建", "新建", "写", "保存", "生成", "建立", "做一个", "写一个"))
+    is_create = any(k in ql for k in ("创建", "新建", "建立", "做一个", "写一个", "写个", "写一份",
+                                      "写一段", "帮我写", "给我写", "请写", "替我写",
+                                      "生成一个", "生成一份", "生成个", "保存", "导出"))
     is_file = any(k in ql for k in (".txt", ".py", ".html", ".md", ".json", ".js", "index.", "文件", "file",
                                    "html", "网页", "网站", "页面", "自我介绍", "文档", "代码", "内容", "博客", "h5"))
     is_folder = any(k in ql for k in ("文件夹", "目录", "folder", "dir"))
+    # 「文件夹」里含「文件」——不先剔掉的话，"创建一个文件夹"会被当成"写文件"，
+    # 于是用户的建目录请求变成了往磁盘写一个文件。剔掉再判 is_file 才对。
+    ql_nofolder = ql.replace("文件夹", "").replace("folder", "")
+    is_file = is_file and any(k in ql_nofolder for k in
+                              (".txt", ".py", ".html", ".md", ".json", ".js", "index.", "文件", "file",
+                               "html", "网页", "网站", "页面", "自我介绍", "文档", "代码", "内容", "博客", "h5"))
     if is_create and is_file:
         return "write_file"
-    if is_create and is_folder and not is_file:
+    if is_create and is_folder:
         return "run_command"
     if any(k in ql for k in ("运行", "执行", "命令", "跑一下", "删掉", "删除", "移动", "复制", "清理", "关机", "格式化", "mkdir", "安装", "卸载", "重启", "启动服务")):
         return "run_command"
@@ -2734,8 +2852,9 @@ _CHAT_SYSTEM_HINT = ("\n[本轮模式] 闲聊：直接、自然地回话就行�
 # 让"帮我算一下这个文件里的和"这类没命中关键词的任务丧失动手能力。所以这里给的是
 # "照常动手，需要别的工具就点名"的版本：工具目录仍在 system 里，点名即下轮装载。
 _CHAT_FALLBACK_HINT = (
-    "\n[本轮模式] 直接回话；**明确要你做事就照常调用工具**。当前只装载了最常用的几个工具，"
-    "需要别的工具时直接说出工具名，下一轮就会为你装上。\n")
+    "\n[本轮模式] 直接回话。**没真调用过工具就不许说「已创建/已执行/已完成/已保存」** "
+    "（编造执行结果是最严重的问题）；只有用户明确要你动手时才调用工具。"
+    "当前只装载了最常用的几个工具，需要别的工具时直接说出工具名，下一轮就会为你装上。\n")
 _DIAGRAM_SYSTEM_HINT = (
     "\n[本轮模式] 画图：严格按 Archify 工作流走 —— archify_read_skill → archify_guide → "
     "archify_read_schema → archify_read_example → archify_validate → archify_deliver → "
@@ -3222,6 +3341,15 @@ def agent_run(user_input, lean=False):
             if intent != "chat":
                 # 闲聊轮不需要工具用法与技能文档 —— 按需加载，system 才能压到 1000 token 以内
                 sys_text += path_ctx + tool_guidance + skills
+            # ---- 第 2 步：从对话向量库检索相关历史，注入 system（无限 1：记忆无限）----
+            # 为什么注入 system 而不是拼进用户消息：
+            #   ① 记忆是"背景事实"，本来就属于 system 的职责；
+            #   ② 它一进 system，下面的 _plan_tools / _fit_context 就会把它**算进 token**，
+            #      不会再出现"注入完了才发现超限"的老毛病（第 1 步刚修好的那条链）。
+            _MEMORY_LAST.update({"rid": "", "text": "", "tokens": 0})
+            _mem_inject = _retrieve_memory(user_input)
+            if _mem_inject:
+                sys_text += _MEMORY_INSTRUCTION + "【相关记忆】\n" + _mem_inject + "\n"
             messages = [{"role": "system", "content": sys_text}]
         # ---- 第 1 步：**先把"本轮"拼完整，再算 token** ----
         # 真实缺陷（第 1 步实测）：以前先裁剪、后拼"相关记忆/联网资料/小脑经验"，于是这些注入内容
@@ -3301,6 +3429,23 @@ def agent_run(user_input, lean=False):
             _learn_skill(user_input, _t.get("tool", ""), _t.get("args"), not _bad, _r)
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 1427, e)
+
+    # 4c. 【第 2 步】把这一轮对话永久写进向量库 + 回填"模型是否真用上了检索到的记忆"
+    #     为什么写回要放在这一轮结束时：只有答案出来了才知道记忆有没有被用上；
+    #     这条回填就是验收里"使用率 ≥70%"的唯一依据，必须如实记，不能自己给自己打高分。
+    if answer and not lean:
+        _remember_turn(user_input, answer, tool_trace)
+        if _MEMORY_LAST.get("rid"):
+            _mu, _mhit = _memory_used(_MEMORY_LAST.get("text", ""), user_input, answer)
+            try:
+                root_m = os.path.dirname(os.path.abspath(__file__))
+                if root_m not in sys.path:
+                    sys.path.insert(0, root_m)
+                from core import retriever as _r2
+                _r2.record_usage(_MEMORY_LAST["rid"], _mu,
+                                 "命中词=%s" % (_mhit or "无"))
+            except Exception as e:      # noqa: silent-ok — 回填失败不能影响对话
+                LOG.debug("记忆使用回填失败（忽略）(%s:%d): %s", __file__, 1180, e)
 
     # 5. 落地上下文（顺手剥掉模型偶尔吐出的 <think> 思维标签，别让标签进聊天记录）
     if answer:
