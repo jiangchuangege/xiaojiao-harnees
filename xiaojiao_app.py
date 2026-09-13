@@ -2696,10 +2696,10 @@ def _tool_fallback_for(name):
 
 # ================== 第 1 步：意图路由 —— 按需加载 system + tools（问题 1 + 9） ==================
 # 为什么要有它：以前**每一轮**都把全部 77 个工具（实测 13891 token）和整份规则（system ~5700 token）
-# 发给大脑 —— 光固定开销就顶穿本地 ctx（llama.ctx=20000），连"你好"都报 400/500；
+# 发给大脑 —— 光固定开销就顶穿本地 ctx（llama.ctx=20224），连"你好"都报 400/500；
 # 而且工具越多模型越容易摸错（用户实测：画图时跑去 read_memory）。
 # 这里**一个工具、一条规则都不删**，只决定"这一轮加载哪些"：闲聊 3 个工具、画图只给 archify 链，
-# 认不出来才回落 full（全部）。所有工具仍然注册在表里，随时可被点名调用。
+# 认不出来的也走 chat（最省上下文）。所有工具仍然注册在表里，随时可被点名调用。
 _INTENT_HINTS = {
     # 查询类信号（会去查外部信息）
     "query": ("搜索", "搜一下", "搜一搜", "查一下", "查查", "找一下", "帮我查", "百度", "谷歌",
@@ -2707,10 +2707,17 @@ _INTENT_HINTS = {
     # 命令类信号（想让我动手执行）
     "shell": ("执行命令", "运行命令", "跑一下命令", "命令行", "powershell", "cmd 里", "shell"),
 }
-# 闲聊只认**明确的寒暄/身份/道谢**这类；宁可漏判（落到 full），也不误判成闲聊而少给工具
+# 闲聊只认**明确的寒暄/身份/道谢**这类；认不出来的一律走 chat 兜底（见 `_detect_intent`）。
+# 这条判据现在只用来决定"要不要加『闲聊别调工具』那句话"，不再决定给几个工具。
 _CHAT_HINTS = ("你好", "您好", "hi", "hello", "嗨", "哈喽", "在吗", "在么", "早上好", "中午好",
                "下午好", "晚上好", "晚安", "早安", "谢谢", "多谢", "感谢", "再见", "拜拜",
                "你是谁", "你叫什么", "介绍一下你", "自我介绍一下", "哈哈", "嘿嘿", "嗯嗯")
+
+# `full` 的**核心集**：不再是"全部 77 个"（那是 13891 token 的工具 schema，
+# 单这一项就把本地 20224 的 ctx 挤爆）。完整工具目录仍随 system 下发（工具名 + 一句话），
+# 模型要点名哪个，下一轮按意图装载 —— **能力一个不少，只是不在一轮里全塞**。
+_FULL_CORE_TOOLS = ("run_command", "write_file", "read_file", "list_files", "web_search",
+                    "get", "fetch", "net_ip", "collect_vulnerabilities", "save_memory")
 
 # 每个意图要加载的工具（名字必须**真实存在**；写了不存在的会被丢掉，不会静默变成"全部"）
 _INTENT_TOOLS = {
@@ -2720,9 +2727,15 @@ _INTENT_TOOLS = {
     "query": ("net_ip", "collect_vulnerabilities", "read_file", "web_search", "get_weather"),
     "shell": ("run_command", "read_file", "write_file"),
     "diagram": None,      # 特殊：archify_* 全链 + 读写文件（下面现算）
-    "full": None,         # None = 全部（兜底）
+    "full": _FULL_CORE_TOOLS,   # 核心集（不再是"全部"）；完整目录由 system 里的工具索引下发
 }
 _CHAT_SYSTEM_HINT = ("\n[本轮模式] 闲聊：直接、自然地回话就行，**不要调用工具、不要联网搜索**。\n")
+# 认不出意图时走的是 chat（最省上下文），但**不能**对用户说"别调工具" —— 那会真的
+# 让"帮我算一下这个文件里的和"这类没命中关键词的任务丧失动手能力。所以这里给的是
+# "照常动手，需要别的工具就点名"的版本：工具目录仍在 system 里，点名即下轮装载。
+_CHAT_FALLBACK_HINT = (
+    "\n[本轮模式] 直接回话；**明确要你做事就照常调用工具**。当前只装载了最常用的几个工具，"
+    "需要别的工具时直接说出工具名，下一轮就会为你装上。\n")
 _DIAGRAM_SYSTEM_HINT = (
     "\n[本轮模式] 画图：严格按 Archify 工作流走 —— archify_read_skill → archify_guide → "
     "archify_read_schema → archify_read_example → archify_validate → archify_deliver → "
@@ -2758,24 +2771,29 @@ def all_tool_names():
 
 
 def _intent_tool_names(intent):
-    """该意图要加载的工具名列表；**None = 全部**（full 兜底，或子集一个都不存在时）。
+    """该意图要加载的工具名列表。**永不返回 None**（None 的旧含义是"全部 77 个"）。
+
+    第 1 步之前：认不出意图 → full → None → 一次性把 77 个工具的完整 schema（13891 token）
+    发出去，单这一项就把本地 20224 的 ctx 挤爆 —— 这正是"说句你好都撞 ctx 墙"的根因。
+    现在 full 也是**核心集**：能力靠「完整工具目录随 system 下发 + 下一轮按需装载」保证，
+    而不是靠一轮里全塞。工具一个没删、一个没停用，只是不在一轮里全发。
 
     返回前与真实工具表对一遍：不存在的名字直接丢弃（防止"以为给了工具、其实没给"）。
     """
     if intent not in _INTENT_TOOLS:
-        return None
+        return list(_FULL_CORE_TOOLS)    # 未知意图：给核心集，绝不回落全量
     if intent == "diagram":
         want = [n for n in real_tool_names() if n.lower().startswith("archify")]
         want += ["read_file", "open_app", "list_files"]
     else:
         want = list(_INTENT_TOOLS[intent] or [])
     if not want:
-        return None                      # full：全部
+        want = list(_FULL_CORE_TOOLS)    # 空子集：给核心集，不给全量
     real = set(all_tool_names())
     got = [n for n in want if n in real]
     if not got:
-        LOG.warning("意图 %s 的工具子集一个都不存在，本轮回落为全部工具（请检查工具名）", intent)
-        return None
+        LOG.warning("意图 %s 的工具子集一个都不存在，本轮改发核心集（请检查工具名）", intent)
+        got = [n for n in _FULL_CORE_TOOLS if n in real]
     if len(got) < len(want):
         LOG.debug("意图 %s 的子集里有 %d 个工具名不存在，已忽略：%s",
                   intent, len(want) - len(got), [n for n in want if n not in real])
@@ -2783,7 +2801,10 @@ def _intent_tool_names(intent):
 
 
 def _is_chitchat(q):
-    """**保守**判断"这句就是寒暄"。把寒暄词剥掉后还剩实义内容 → 不算（落到 full，少给工具会误事）。"""
+    """**保守**判断"这句就是寒暄"。把寒暄词剥掉后还剩实义内容 → 不算（交给兜底分支）。
+
+    只用来决定 system 里加哪一句"本轮模式"：真寒暄 → 明确禁止调工具；其余 → 照常动手。
+    """
     s = (q or "").strip().lower()
     if not s or len(s) > 24:
         return False
@@ -2800,7 +2821,10 @@ def _is_chitchat(q):
 def _detect_intent(user_input):
     """规则识别本轮意图：chat / scrape / diagram / query / shell / full。**不靠模型**。
 
-    顺序即优先级（越具体越靠前）：画图 > 网址 > 命令原文 > 查询 > 命令词 > 闲聊 > full 兜底。
+    顺序即优先级（越具体越靠前）：画图 > 网址 > 命令原文 > 查询 > 命令词 > 闲聊 > chat 兜底。
+
+    **兜底是 chat，不是 full**（第 1 步）：full 以前等于"全部 77 个工具"，一轮就把 ctx 挤爆；
+    而现在 chat 只发 3 个工具，完整工具目录仍在 system 里 —— 模型要求哪个，下一轮就装哪个。
     """
     q = (user_input or "").strip()
     if not q:
@@ -2819,8 +2843,9 @@ def _detect_intent(user_input):
     if any(h in low for h in _INTENT_HINTS["shell"]):
         return "shell"
     if _is_chitchat(q):
-        return "chat"
-    return "full"                        # 兜底：能力不受损
+        return "chat"                    # 明确的寒暄 → 最省的 chat
+    # 兜底走最省上下文的 chat；工具目录仍在 system 里，模型要求哪个下轮加载
+    return "chat"
 
 
 def _tool_index(only=None, plugins=None):
@@ -2865,21 +2890,26 @@ def _tool_index(only=None, plugins=None):
     return _PLUGIN_LIST_TEMPLATE % "\n".join(lines)
 
 
-def system_for_intent(intent, role=None, plugins=None):
+def system_for_intent(intent, role=None, plugins=None, user_input=""):
     """按本轮意图生成 system：**该给的规则一条不少，用不上的整段不加载**。
 
-    · chat    → 人设 + 一句"闲聊别调工具" + 3 个工具索引（实测 system < 400 token）
+    · chat    → 人设 + 一句"本轮模式" + 3 个工具索引（实测 system < 400 token）
+                 真寒暄 → "闲聊别调工具"；认不出意图的兜底 → "照常动手，要别的工具就点名"
     · diagram → 人设 + 检索铁律 + 工具规则 + archify 清单 + 画图工作流（问题 6 的代码层强制）
     · 其它任务意图 → 人设 + 检索铁律 + 工具规则 + 本轮工具索引
-    · full    → 全套规则 + 全量索引（与老行为一致，兜底）
+    · full    → 全套规则 + **全量工具目录**（保留供"工具目录查询"，不再由意图识别触发）
 
     注意：这里**不含技能文档与工具用法** —— 那些由调用方按需追加，避免同一份被拼两遍
     （老代码把 PLUGIN_SKILLS 拼了两遍，白涨 ~800 token）。
     """
     role = strip_search_rules(role if role is not None else CONTROL.get("role", ""))
     if intent == "chat":
-        return role + _CHAT_SYSTEM_HINT + _tool_index(only=_intent_tool_names("chat"), plugins=plugins)
+        hint = _CHAT_SYSTEM_HINT if _is_chitchat(user_input) else _CHAT_FALLBACK_HINT
+        return role + hint + _tool_index(only=_intent_tool_names("chat"), plugins=plugins)
     if intent == "full":
+        # 保留供工具目录查询，不再由意图识别触发（`_detect_intent` 兜底已改为 chat）。
+        # 这里 `only=None` 是**故意的**：本轮 schema 只发核心集，但目录要列全 77 个，
+        # 模型才知道"还有哪些工具可点名"。
         return role + _SEARCH_RULES + _TOOL_RULES + _tool_index(only=None, plugins=plugins)
     only = _intent_tool_names(intent)
     extra = _DIAGRAM_SYSTEM_HINT if intent == "diagram" else ""
@@ -2889,35 +2919,28 @@ def system_for_intent(intent, role=None, plugins=None):
 def _plan_tools(intent, system_text, current_text, max_ctx=None):
     """定这一轮给哪些工具，并保证 `system + tools + 本轮问题` **一定塞得进 ctx**。
 
-    返回 (工具名列表, 预估 token)。列表为 None 表示"全部"。
-    这是"永远不报 ctx 超限"的最后一道保险：即使 intent=full（77 个工具 13891 token），
-    也会按预算从尾部裁到装得下为止 —— 工具都还在表里，只是这一轮不发那么多。
+    返回 (工具名列表, 预估 token)。
+
+    **说法纠正（第 1 步）**：这里以前会把"本轮因为额度不够，所以少发了 N 个工具"写进日志 ——
+    那是**错的**。工具一个都没删、没停用、没缩减，`plugins/` 目录 77 个一个不少；
+    只是**这一轮**不发那么多 schema，完整工具目录始终随 system 下发，模型点名哪个，
+    下一轮就按意图装载哪个。所以日志改成中性表述。
     """
     max_ctx = int(max_ctx or _max_context_tokens())
     names = _intent_tool_names(intent)
     budget = max_ctx - _estimate_tokens(system_text) - _estimate_tokens(current_text) - _MSG_OVERHEAD * 2
-    if names is None:
-        keep = list(all_tool_names())
-        full_set = True
-    else:
-        keep, full_set = list(names), False
+    keep = list(names) if names else list(_FULL_CORE_TOOLS)
     tok = _tools_tokens(keep)
-    if tok > budget:                       # 超预算 → 从尾部丢（列表按重要性排序）
-        dropped = 0
+    if tok > budget:                       # 超预算 → 收敛"本轮装载量"（列表按重要性排序）
         while len(keep) > 1 and _tools_tokens(keep) > budget:
             keep.pop()
-            dropped += 1
         tok = _tools_tokens(keep)
-        if dropped:
-            LOG.warning("本轮工具预算不足（system=%d + 本轮=%d，上限 %d）："
-                        "已暂缓加载 %d 个工具，只发 %d 个%s",
-                        _estimate_tokens(system_text), _estimate_tokens(current_text), max_ctx,
-                        dropped, len(keep), "（full 兜底）" if full_set else "")
+        LOG.info("本轮按意图装载 %d 个工具（完整工具表仍在 plugins/ 目录，按需加载）", len(keep))
     return keep, tok
 
 
 # ================== 上下文四层防护 · 第 1 层（滑动窗口 + 硬性截断） ==================
-# 背景：本地 ctx 是硬限制（llama.ctx=20000），拼好的 system+history+本轮问题一旦超限，
+# 背景：本地 ctx 是硬限制（llama.ctx=20224），拼好的 system+history+本轮问题一旦超限，
 # 大脑直接报 "request (N tokens) exceeds the available context size (M tokens)"。
 # 这里**不扩 ctx、不删工具/技能/规则、不丢记忆** —— 只做"发之前算 token、超了从最老的历史砍"。
 _CONTEXT_FIT_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "context_fit.log")
@@ -2942,7 +2965,14 @@ def _estimate_tokens(text):
 
 def _max_context_tokens():
     """本轮可用上限：优先 capabilities.max_context_tokens，否则按引擎取
-    （本地=brain.llama.ctx，云端=128000），再减去安全余量。"""
+    （本地=brain.llama.ctx，云端=128000），再减去安全余量。
+
+    **ctx 校准（第 1 步实测）**：llama-server 收到 `-c 20000` 后**实际给的是 20224** ——
+    llama.cpp 会把 n_ctx **向上取整到 256 的倍数**（20000 / 256 = 78.125 → 79 × 256 = 20224，
+    实测 `GET http://127.0.0.1:5801/props` → `n_ctx = 20224`）。所以操控文件里直接写 20224
+    （本身就是 256 的倍数，不会被再取整），载体算出来的上限才和大脑的真容量**对齐**，
+    不会白白浪费那 1224 token 的窗口。
+    """
     margin = int(CAP.get("context_safety_margin", 1000) or 1000)
     try:
         explicit = int(CAP.get("max_context_tokens", 0) or 0)
@@ -2954,9 +2984,9 @@ def _max_context_tokens():
         base = 128000
     else:
         try:
-            base = int((CONTROL.get("brain", {}).get("llama", {}) or {}).get("ctx", 20000) or 20000)
+            base = int((CONTROL.get("brain", {}).get("llama", {}) or {}).get("ctx", 20224) or 20224)
         except Exception:
-            base = 20000
+            base = 20224
     return max(1000, base - margin)
 
 
@@ -3188,7 +3218,7 @@ def agent_run(user_input, lean=False):
             # 语音精简模式: 短提示, 不背工具/技能, 生成快
             messages = [{"role": "system", "content": (SYSTEM_PROMPT[:240] + "\n[语音对话] 请简短、口语化、直接回答，一两句话；不要调用工具、不要长篇大论、不要列表。")}]
         else:
-            sys_text = system_for_intent(intent)
+            sys_text = system_for_intent(intent, user_input=user_input)
             if intent != "chat":
                 # 闲聊轮不需要工具用法与技能文档 —— 按需加载，system 才能压到 1000 token 以内
                 sys_text += path_ctx + tool_guidance + skills
@@ -3212,10 +3242,10 @@ def agent_run(user_input, lean=False):
         _current = (context + "用户：" + _u) if context else _u
         # 发之前先算 token —— 按意图取工具子集，并把工具裁到"装得下"为止
         _subset, _reserve = _plan_tools(intent, messages[0].get("content", ""), _current)
-        LOG.info("意图=%s ｜ system=%d + tools=%d + 本轮=%d token ｜ 本轮工具 %s",
+        LOG.info("意图=%s ｜ system=%d + tools=%d + 本轮=%d token ｜ 本轮装载工具 %s",
                  intent, _estimate_tokens(messages[0].get("content", "")), _reserve,
                  _estimate_tokens(_current),
-                 "全部" if _subset is None else "%d 个" % len(_subset))
+                 "%d 个（完整工具表见 plugins/）" % len(_subset))
         _hist, _fit_note = _fit_context(messages[0].get("content", ""), history, _current,
                                         tools_tokens=_reserve)
         LOG.debug("上下文适配：%s", _fit_note)
