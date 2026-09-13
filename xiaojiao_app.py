@@ -1224,6 +1224,55 @@ def _remember_turn(user_input, answer, tool_trace=None):
         return ""
 
 
+# ================== 第 3 步：长文续写（无限 3：输出无限） ==================
+# 用户要"写 3000 字 / 5 万字"时，单次请求物理上给不完（模型单次上限就在那儿）。
+# 载体多次请求 + 无缝合并，用户看到的是一段连续输出。全部逻辑在 core/continuation.py。
+_CONT_STOP = threading.Event()          # 用户点"叫停"就置位，续写循环每轮查一次
+
+
+def _continuation_cfg():
+    """续写参数（操控文件 capabilities 可覆盖，全部有默认值）。"""
+    return {"enabled": bool(CAP.get("continuation_enabled", True)),
+            "chunk_size": int(CAP.get("continuation_chunk_size", 2000) or 2000),
+            "max_retries": int(CAP.get("continuation_max_retries", 3) or 3),
+            "summary_interval": int(CAP.get("continuation_summary_interval", 5) or 5),
+            "buffer_size": int(CAP.get("continuation_buffer_size", 3) or 3),
+            "parallel_prefetch": bool(CAP.get("continuation_parallel_prefetch", True)),
+            "min_chars": int(CAP.get("continuation_min_chars", 800) or 800)}
+
+
+def _needs_continuation(text):
+    """这一轮要不要走续写（只有用户明确要长文才走；出错就按"不走"处理）。"""
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core import continuation as _c
+        return _c.needs_continuation(text, _continuation_cfg())
+    except Exception as e:      # noqa: silent-ok — 判不出来就走普通回答，不能因此报错
+        LOG.debug("续写判定失败（忽略）(%s:%d): %s", __file__, 1160, e)
+        return False
+
+
+def _generate_long(task, system, on_chunk=None):
+    """按需生成任意长度并**无缝合并**；失败返回 None（回落普通单次回答，绝不把对话搞挂）。"""
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core import continuation as _c
+        _CONT_STOP.clear()
+        res = _c.generate_unlimited(task, system, cfg=_continuation_cfg(), on_chunk=on_chunk,
+                                    should_stop=_CONT_STOP.is_set)
+        LOG.info("长文续写：%d 段 / %d 字 / 去重裁掉 %d / 重试 %d / 停止=%s / 耗时 %.1fs",
+                 len(res["chunks"]), res["chars"], res["dedup_chars"], res["retries"],
+                 res["stopped"], res["elapsed_s"])
+        return res["text"] or None
+    except Exception as e:
+        LOG.warning("长文续写失败，回落单次回答：%s", e)
+        return None
+
+
 # ================== 上下文 ==================
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -3160,9 +3209,12 @@ def _fit_context(system_text, history, current_text, max_ctx=None, min_rounds=2,
 
 
 # ================== 智能体 ==================
-def agent_run(user_input, lean=False):
+def agent_run(user_input, lean=False, on_chunk=None):
     """全部问题统一走这条流程：记忆 → 联网检索 → 大脑(小焦模型/外接LLM) → 记忆自学习。
-    
+
+    `on_chunk(text, n, total_chars)`：只在"用户要长文"时会被回调（第 3 步的 SSE 推流用）。
+    普通问答完全不碰它 —— 短内容不走分段，用户无感。
+
     注：不再代理给 DSH 桥接（那会造成 小焦→桥接→小焦 的死循环）。
     DSH 兼容的正确方式是：DSH harness 连小焦的 /v1 当模型，DSH 的插件在 DSH 里自己跑。
     """
@@ -3381,7 +3433,17 @@ def agent_run(user_input, lean=False):
             messages.append({"role": "user" if h["role"] == "用户" else "assistant",
                              "content": h["content"]})
         messages.append({"role": "user", "content": _current})
-        if CAP.get("run_tools", True):
+        # ---- 第 3 步：用户要长文 → 载体分段续写 + 无缝合并（无限 3：输出无限）----
+        # 放在这里（system/tools/token 都已定好）而不是另起一条路径：
+        # 这样续写用的 system 与普通对话**完全一致**（含【相关记忆】与按意图装载的工具目录），
+        # 而且它用的上限就是 _max_context_tokens() 算出来的那个。
+        _long = None
+        if _continuation_cfg()["enabled"] and _needs_continuation(user_input):
+            _long = _generate_long(user_input, messages[0].get("content", ""),
+                                   on_chunk=on_chunk)
+        if _long is not None:
+            answer = _long
+        elif CAP.get("run_tools", True):
             # 工具子集已由上面的 _plan_tools() 按意图 + 预算定好；画图轮再给足时间预算（多步链路）
             _budget = 240 if intent == "diagram" else 0
             answer, tool_trace = llm_chat_tools(
@@ -4485,6 +4547,109 @@ def api_chat():
         "grounding_note": _grounding_note(g),
         "history": _hist_json(),
     })
+
+
+@app.route("/api/chat/stream", methods=["POST"])
+def api_chat_stream():
+    """流式对话（SSE）—— 第 3 步：输出无限。
+
+    与 /api/chat 的关系：**同一个 agent_run**，只是把"载体生成到的那一段"边生成边推给前端。
+    所以：
+      · 短内容（"你好"）走的就是普通单次回答，只会推一个 chunk —— 用户无感；
+      · 长内容（"写 5 万字"）由 core/continuation.py 分段续写，每段通过就推一段，
+        前端把它**追加到同一个气泡**，用户看到的是一次连续输出，看不到分段痕迹。
+    协议（每条 `data: {json}\n\n`）：
+      {"type":"chunk","text":..,"n":..,"chars":..}  一段正文
+      {"type":"meta", ...}                          工具轨迹/会话/日志 id（收尾）
+      {"type":"done","answer":..}                   结束
+      {"type":"error","error":..}                   出错
+    保留 /api/chat 非流式入口不动（第三方客户端仍可用）。
+    """
+    maybe_reload_control()
+    _limited, _wait = rate_limited()
+    data = request.get_json(force=True, silent=True) or {}
+    user_input = (data.get("message") or "").strip()
+    if not user_input:
+        return jsonify({"ok": False, "error": "空消息"}), 400
+
+    def _sse(obj):
+        return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+
+    def _gen():
+        if _limited:
+            yield _sse({"type": "error",
+                        "error": "请求太频繁：每分钟最多 %d 次，请等 %d 秒再试。"
+                                 % (int(_rate_config()[0]), _wait)})
+            return
+        try:
+            append_msg("用户", user_input)
+            append_msg("小焦", "⏳__pending__")
+        except Exception:      # noqa: silent-ok — 会话落盘失败不该挡住回答
+            pass
+        buf = []
+        try:
+            import queue
+            q = queue.Queue()
+
+            def _on_chunk(text, n, total):
+                buf.append(text)
+                q.put(_sse({"type": "chunk", "text": text, "n": n, "chars": total}))
+
+            holder = {}
+
+            def _work():
+                try:
+                    holder["r"] = agent_run(user_input, on_chunk=_on_chunk)
+                except Exception as e:
+                    holder["err"] = str(e)
+                finally:
+                    q.put(None)
+
+            th = threading.Thread(target=_work, daemon=True)
+            th.start()
+            while True:
+                item = q.get()
+                if item is None:
+                    break
+                yield item
+            if holder.get("err"):
+                yield _sse({"type": "error", "error": holder["err"]})
+                return
+            answer, online, info, needs_confirm, tool_trace = holder["r"]
+            answer = _strip_think(answer or "")
+            if not answer:
+                answer = ("🤖 大脑没有应答，这一问没答上。请确认模型配置正确、端口可达。"
+                          + llm_error_suffix())
+            # 把占位消息换成真实回答 + 记录本次交互（与 /api/chat 一致）
+            try:
+                s, d = get_current_session()
+                for m in s.get("messages", []):
+                    if m.get("role") == "小焦" and "__pending__" in str(m.get("content", "")):
+                        m["content"] = answer
+                _save_sessions(d)
+            except Exception:  # noqa: silent-ok — 落盘失败不影响这次回答
+                pass
+            log_id = _record_interaction(user_input, answer, tool_trace)
+            yield _sse({"type": "meta", "brain_online": online, "tool_trace": tool_trace,
+                        "tools_on": bool(CAP.get("run_tools", True)),
+                        "session_id": get_current_session()[0].get("id"), "log_id": log_id,
+                        "needs_confirm": needs_confirm,
+                        "sources": [{"title": t, "content": c, "url": u} for t, u, c in info]})
+            yield _sse({"type": "done", "answer": answer})
+        except Exception as e:
+            LOG.warning("流式对话异常：%s", e)
+            yield _sse({"type": "error", "error": str(e)})
+
+    return Response(_gen(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                             "Connection": "keep-alive"})
+
+
+@app.route("/api/chat/stop", methods=["POST"])
+def api_chat_stop():
+    """用户叫停长文续写（无限 3："写 20 万字 → 一直写，用户叫停才停"）。"""
+    _CONT_STOP.set()
+    return jsonify({"ok": True, "stopped": True})
 
 
 # ========== 内置·持续学习（自动记录 + 自动打勾） ==========
@@ -5950,16 +6115,47 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
  const th=document.createElement('div');th.className='think';th.innerHTML='<span class="spin"></span><span class="stag">正在理解你的问题…</span>';feed.appendChild(th);feed.scrollTop=feed.scrollHeight;
  const stages=['正在理解你的问题…','🌐 正在联网搜索…','💾 正在回忆记忆…','🧠 大脑正在思考…','✍️ 正在组织回答…'];let si=0;
  const timer=setInterval(()=>{si=(si+1)%stages.length;const s=th.querySelector('.stag');if(s)s.textContent=stages[si];},2200);
- try{const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:t})});
-  const d=await r.json();clearInterval(timer);th.remove();
-  if(d.tool_trace&&d.tool_trace.length){try{localStorage.setItem('xj_trace',JSON.stringify(d.tool_trace.slice(0,10)));}catch(e){}
-   const tt=document.createElement('div');tt.className='tooltrace';
-    tt.innerHTML=d.tool_trace.map(x=>'🔧 调用 <b>'+esc(x.tool)+'</b> → '+esc((x.result||'').slice(0,200))).join('<br>');feed.appendChild(tt);}
-  setToolsOn(d.tools_on);
-  typeAnswer(d.answer,d.sources||[],d.log_id,d.grounding_note||'');
-  if(d.needs_confirm){const m=document.createElement('div');m.className='m bot';
-    m.innerHTML='<button class="icon-btn" onclick="confirmAction()">✅ 确认执行</button>';feed.appendChild(m);}}
- catch(e){clearInterval(timer);th.remove();add('bot','⚠️ 出错了：'+e.message);}
+ // 流式接收：一个气泡、边到边追加 —— 长文也是"一次连续输出"，用户看不到分段痕迹
+ let bubble=null,body=null,buf='',meta=null;
+ const stopBtn=document.createElement('button');stopBtn.className='icon-btn';stopBtn.textContent='⏹ 停止';
+ stopBtn.onclick=()=>{try{fetch('/api/chat/stop',{method:'POST'});}catch(e){} stopBtn.remove();};
+ const ensureBubble=()=>{if(bubble)return;clearInterval(timer);if(th.parentNode)th.remove();
+   bubble=document.createElement('div');bubble.className='m bot';bubble.innerHTML='<div class="b"></div>';
+   body=bubble.querySelector('.b');feed.appendChild(bubble);feed.appendChild(stopBtn);};
+ try{
+  const r=await fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:t})});
+  if(!r.ok||!r.body){throw new Error('HTTP '+r.status);}
+  const rd=r.body.getReader(),dec=new TextDecoder();let acc='';
+  for(;;){const s=await rd.read();if(s.done)break;
+   acc+=dec.decode(s.value,{stream:true});
+   let i;
+   while((i=acc.indexOf('\n\n'))>=0){
+    const rawline=acc.slice(0,i);acc=acc.slice(i+2);
+    const line=rawline.replace(/^data:\s*/,'');
+    if(!line)continue;
+    let d;try{d=JSON.parse(line);}catch(e){continue;}
+    if(d.type==='chunk'){ensureBubble();buf+=d.text;body.textContent=buf;feed.scrollTop=feed.scrollHeight;}
+    else if(d.type==='meta'){meta=d;}
+    else if(d.type==='error'){ensureBubble();buf+=(buf?'\n\n':'')+'⚠️ '+d.error;body.textContent=buf;}
+    else if(d.type==='done'){meta=meta||d;if(d.answer&&!buf){buf=d.answer;}}
+   }
+  }
+  clearInterval(timer);if(th.parentNode)th.remove();stopBtn.remove();
+  if(!buf){add('bot','⚠️ 大脑没有应答。请确认模型配置正确、端口可达。');loadSessions();return;}
+  // 收尾：渲染 Markdown（表格加宽）+ 工具轨迹 + 会话/日志
+  if(body){const full=renderMd(buf);if(full.indexOf('<table')>=0){body.classList.add('wide');bubble.classList.add('widem');}
+    body.innerHTML=full;}
+  if(meta&&meta.tool_trace&&meta.tool_trace.length){
+    try{localStorage.setItem('xj_trace',JSON.stringify(meta.tool_trace.slice(0,10)));}catch(e){}
+    const tt=document.createElement('div');tt.className='tooltrace';
+    tt.innerHTML=meta.tool_trace.map(x=>'🔧 调用 <b>'+esc(x.tool)+'</b> → '+esc((x.result||'').slice(0,200))).join('<br>');
+    feed.appendChild(tt);}
+  if(meta)setToolsOn(meta.tools_on);
+  if(meta&&meta.needs_confirm){const m=document.createElement('div');m.className='m bot';
+    m.innerHTML='<button class="icon-btn" onclick="confirmAction()">✅ 确认执行</button>';feed.appendChild(m);}
+ }
+ catch(e){clearInterval(timer);if(th.parentNode)th.remove();stopBtn.remove();
+   if(buf&&body){body.textContent=buf;}else{add('bot','⚠️ 出错了：'+e.message);}}
  loadSessions();
  feed.scrollTop=feed.scrollHeight;}
 // 打字机式浮现回答
