@@ -90,7 +90,7 @@ python start_xiaojiao.py
 | 改动 | 现象 | 处理 |
 | --- | --- | --- |
 | 思维流假记忆 | 问"我叫什么名字来着？"，画像被存成"名字：什么名字来着"，随后顶掉正确答案 | `core/mind_stream/update.py` 增加疑问句判据，画像只由陈述句更新；`tools/test_mind_stream.py` 66/66 |
-| 小脑长文本失效 | 长文本里改一个字，余弦仍在 0.99 以上 | `core/embedder.py` 空间 v2：截断 512→1024、去因果掩码、尾窗加权池化、分值标定；`tools/test_embedder_long.py` 18/18 |
+| 小脑长文本失效 | 长文本里改一个字，余弦仍在 0.99 以上 | `core/embedder.py` 空间 v3：截断 512→1024、去因果掩码、尾窗加权池化、分块编码、分值标定；`tools/test_embedder_long.py` 18/18 |
 | 行内代码样式 | 回复里的 `` `xxx` `` 渲染成"带边框、样式奇怪"的方块 | 对齐 GitHub 观感：半透明灰底 + 等宽 + `.2em .4em` 内边距 + 6px 圆角 + 无边框；`tools/test_inline_code.py` 13/13 |
 | 数学公式不渲染 | `$$...$$` 与 `$...$` 原样显示 LaTeX 源码 | 引入 KaTeX 与 `mathify()`，三条渲染路径各扫一遍；`tools/test_math_render.py` 9/9 |
 | 复读流式判据 | `test_bug3_repeat.py` 长期 17/19 红 | 定位为**测试计数器口径错误**（跨 36 次重试累加，却拿单次预算去判），改为逐次判定；生产代码未改；20/20 |
@@ -108,7 +108,7 @@ python start_xiaojiao.py
 ### 5.3 兼容性
 
 - 旧的 `xiaojiao_control.json` 直接可用，无需修改配置。
-- **小脑向量空间升级到 v2**，历史记忆的向量需要用 `core/embedder.py` 的 `reembed_store()` 重算一次。
+- **小脑向量空间升级到 v3**，历史记忆的向量需要用 `core/embedder.py` 的 `reembed_store()` 重算一次。
   迁移器会先整文件备份、再原子替换，任意一条算不出来就整批放弃。本次实测迁移 1002 / 1002 条。
 
 ---

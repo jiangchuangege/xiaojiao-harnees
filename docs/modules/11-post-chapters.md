@@ -48,7 +48,7 @@
 | 十六 | 多智能体协作 | 设计未落地 | 角色定义与调度均无代码，运行时没有多角色 | 无。相邻能力见 `core/persona/`、`core/metacognition/` |
 | 十七 | 自我改进 | 设计未落地 | `logs/self_improve/` 目录与写入路径都不存在 | 无。相邻能力见 `core/metacognition/boundary.py`、`core/memory_deep.py` |
 | 十八 | 全局工作空间 | 已落地（订阅侧偏薄） | 中央状态与事件总线都在跑，但订阅者只有两个 | `core/central/__init__.py`、`logs/central/events.jsonl`、`GET /api/central` |
-| 十九 | 小脑定位 | 已落地（边界明确） | 空间 v2 已上线，长文区分度与召回率均有自测数字 | `core/embedder.py`、`core/retriever.py`、`tools/test_embedder_long.py` |
+| 十九 | 小脑定位 | 已落地（边界明确） | 空间 v3 已上线，长文区分度与召回率均有自测数字 | `core/embedder.py`、`core/retriever.py`、`tools/test_embedder_long.py` |
 | 二十 | 意图理解交给模型 | 已落地（规则仍用于工具装载） | 上下文融合与工具选择已交给模型，载体保留外围参数分派 | `xiaojiao_app.py` 的 `merge_context`、`_intent_tool_names`、`tools/test_context_merge.py` |
 | 二十一 | 并发与状态一致性 | 已落地（最终一致） | 后台线程加锁加对账，唤醒条件受配置门控 | `core/autonomy/`、`core/memory_vec.py`、`core/memory_deep.py`、`core/mind_stream/state.py` |
 | 二十二 | 可观测性 | 部分落地（日志层完整、面板未落地） | 日志齐，指标与追踪只覆盖一角 | `logs/`、`GET /api/central`、`GET /metrics` |
@@ -1102,7 +1102,7 @@ Invoke-RestMethod http://127.0.0.1:5000/api/central | ConvertTo-Json -Depth 6
 ## 摘要
 
 小脑是 v1.0 确定的定位：它把文本变成向量，不参与思考，也不直接对用户说话。
-向量空间版本为 2，编码流水线包含截断 1024 字、双向注意力、尾窗加权池化与分值标定四项改动。
+向量空间版本为 3，编码流水线包含截断 1024 字、分块编码、双向注意力、尾窗加权池化与分值标定五项改动。
 本节给出四项改动的实测数字、还原办法与已知边界。
 
 ## 背景与问题
@@ -1134,7 +1134,7 @@ flowchart TB
     RET --> BRAIN["精排交给大脑二次过滤"]
 
     E1 --> PIPE
-    subgraph PIPE["编码流水线 空间 v2"]
+    subgraph PIPE["编码流水线 空间 v3"]
         direction TB
         X1["第一步 截断 1024 字<br/>512 会把长文结尾整段截掉"]
         X2["第二步 双向过 8 层<br/>不传掩码，每个字看到全文"]
@@ -1160,7 +1160,7 @@ flowchart TB
     style FB fill:#f0ad4e,color:#fff
 ```
 
-**图 6 · 小脑的三个职责与空间 v2 编码流水线**
+**图 6 · 小脑的三个职责与空间 v3 编码流水线**
 
 一句话说明：左侧是入口与出口两个职责，中间是五步编码流水线，右侧三框是全部实测得到的已知边界。
 
@@ -1175,7 +1175,7 @@ flowchart TB
 | 记忆索引 | 用户问话变成向量后参与检索 | `core/embedder.py` 的 `embed()` 到 `core/retriever.py` 的 `retrieve()` |
 | 后台自动化 | 定时摘要、快速分类、关键词提取 | `core/memory_deep.py`、`core/autonomy/` |
 
-### 空间 v2 的四项改动
+### 空间 v3 的五项改动
 
 第一项是把最大字符数从 512 提到 1024。原因不是容量不足，而是一段差异被整段截掉：
 实测"前 500 字相同、结尾不同"的样本在截断长度为 512 时，两条文本被截成完全相同的前缀，
@@ -1280,7 +1280,7 @@ print(E.reembed_store(dry_run=True))
 python tools/test_embedder_long.py
 ```
 
-实测输出摘要（本次运行，后端 minigpt，空间 v2）：
+实测输出摘要（本次运行，后端 minigpt，空间 v3）：
 
 | 检查项 | 实测值 |
 |---|---|

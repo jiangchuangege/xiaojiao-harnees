@@ -585,7 +585,7 @@ flowchart TB
 
 ---
 
-## 图 17 · 小脑定位（感官 + 记忆索引器官 · 空间 v2）
+## 图 17 · 小脑定位（感官 + 记忆索引器官 · 空间 v3）
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 360, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
