@@ -112,6 +112,7 @@
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     IN["用户请求进入 agent_run"] --> P1["① 任务理解<br/>_detect_intent"]
     P1 --> P2["② 任务拆解<br/>plan_tool"]
     P2 --> P3["③ 步骤规划<br/>_plan_tools"]
@@ -149,6 +150,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph S1["理解与规划段"]
         direction TB
         A1["① 任务理解"] --> A2["② 任务拆解"] --> A3["③ 步骤规划"]
@@ -178,6 +180,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph CARRIER["载体负责：判定、装配、校验、记账"]
         direction TB
         K1["给完整工具目录与规则"]
@@ -212,6 +215,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     R["工具返回结果"] --> F{"_tool_failed 判定失败？"}
     F -->|否| OK["返回空串<br/>并把结果写入工具缓存"]
     F -->|是| N["streak 计数加一"]
@@ -238,6 +242,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     M1["模块 A<br/>写自己的命名空间"] --> ST["中央状态<br/>namespace 到 dict"]
     M2["模块 B<br/>写自己的命名空间"] --> ST
     ST --> R1["模块 C<br/>只读别人的命名空间"]

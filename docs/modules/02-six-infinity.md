@@ -127,6 +127,7 @@
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     U["用户输入"] --> G{"入口分流<br/>token 是否超过 5000"}
     G -->|超长| I2["② 输入无限<br/>切片 循环 拼装"]
     G -->|正常| I1["① 记忆无限<br/>检索并注入相关记忆"]
@@ -171,6 +172,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph FIX["固定开销"]
         direction TB
         F1["system 按意图生成"]
@@ -237,6 +239,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     N1["第 1 轮<br/>用户说自己叫什么"] --> W["小脑把用户那句话编码成 512 维向量<br/>追加一行到向量库"]
     N1 --> N50["第 2 轮到第 50 轮<br/>另外两百句话<br/>全部落库 不占模型上下文"]
     Q["第 51 轮<br/>用户问自己叫什么"] --> R["检索 原始余弦不低于 0.6<br/>取最像的 5 条 时间衰减只参与排序"]
@@ -323,6 +326,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     IN["用户贴入长材料"] --> GATE{"_needs_input_split<br/>token 是否超过 5000"}
     GATE -->|否| N["普通单次回答 零额外开销"]
     GATE -->|是| ST["split_task 分出要求与内容<br/>split_input 按段落边界切 绝不切在句中"]
@@ -412,6 +416,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     P["用户要求写一篇长文"] --> T["parse_target_chars<br/>解析目标字数"]
     T --> G["generate_unlimited<br/>每次请求不超过 2000 token"]
     G --> PF["单条预取线程维护影子正文<br/>缓冲池保持 3 段"]
@@ -509,6 +514,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     A["plugins 目录里的全部工具<br/>完整结构声明为 13891 token<br/>占上限的百分之七十二"] --> B["规则：一个不删 不暂缓 不下线"]
     B --> C["_detect_intent 判本轮意图"]
     C --> D["_intent_tool_names 给出该意图的工具名<br/>永不返回空表示全部"]
@@ -611,6 +617,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph BG["载体内部：用户完全看不到"]
         direction TB
         X1["切片 N 片"] --> X2["循环 N 次"] --> X3["去重与合并与接缝裁剪"]
@@ -686,6 +693,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     S["system 按意图生成"] --> B["发出之前先算总账"]
     T["tools 按意图装载"] --> B
     R["检索到的记忆 不超过 2000 token"] --> B

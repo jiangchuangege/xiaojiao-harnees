@@ -382,8 +382,8 @@
 代码位置索引：`core/embedder.py`、`core/memory_vec.py`、`core/retriever.py` 的 `retrieve()` / `rerank()`；注入点在 `xiaojiao_app.py` 的 `agent_run` 与 `_retrieve_memory()`。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     N1["第 1 轮<br/>用户：我叫张三"] --> W["写入：小脑向量化后追加一行<br/>logs/xiaojiao_memory_vec.jsonl<br/>索引键 = 用户那句话 key_text"]
     N1 --> N50["第 2 到 50 轮<br/>另外两百句话<br/>全部落库，一条不占模型上下文"]
     Q["第 51 轮<br/>用户：我叫什么名字来着"] --> R["检索：原始余弦不小于 0.6<br/>top-K 5 · 衰减只参与排序"]
@@ -415,8 +415,8 @@ flowchart TB
 代码位置索引：`core/input_splitter.py` 的 `split_task()` / `split_input()` / `process_long_input()` / `merge_outputs()`；分流点在 `xiaojiao_app.py` 的 `_needs_input_split()` 与 `_process_long_input()`。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     D["用户贴一份 10 万字报告<br/>22778 token"] --> C{"agent_run 入口<br/>估算 token 超过 5000"}
     C -->|"否"| N["普通单次回答<br/>零额外开销"]
     C -->|"是"| S["split_task 分出要求与内容<br/>split_input 按段落边界切<br/>绝不切在句中"]
@@ -443,8 +443,8 @@ flowchart TB
 代码位置索引：`core/continuation.py` 的 `generate_unlimited()`、`_prefetch()`、`_merge()`、`overlap_len()` / `drop_repeated_sentences()` / `cut_at_sentence()` / `looks_offtopic()`。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     P["用户：写一篇 3000 字的产品介绍"] --> T["parse_target_chars<br/>目标字数 = 3000"]
     T --> G["多次请求生成<br/>每次不超过 2000 token<br/>单条预取线程守影子正文"]
     G --> J["接缝裁剪 overlap_len<br/>整句去重 drop_repeated_sentences<br/>半句回退 cut_at_sentence"]
@@ -469,8 +469,8 @@ flowchart TB
 代码位置索引：`xiaojiao_app.py` 的 `_detect_intent()` / `_intent_tool_names()` / `_FULL_CORE_TOOLS` / `_plan_tools()` / `_tool_index()`。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     A["plugins/ 与内置合计 77 个工具<br/>完整 schema = 13891 token<br/>等于可用上限的 72%"] --> B["规则：一个不删 · 不暂缓 · 不砍"]
     B --> C["_detect_intent 判本轮意图<br/>画图 · 网址 · 命令 · 查询 · 闲聊"]
     C --> D["_plan_tools 只发这一轮用得上的<br/>chat 3 个 = 381 token<br/>diagram 18 个 = 2850 token"]
@@ -497,8 +497,8 @@ flowchart TB
 代码位置索引：`xiaojiao_app.py` 的 `api_chat_stream()`（`_on_progress` / `_on_chunk` / `_on_delta`）与前端 `progress` 处理分支。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph BG["载体内部，用户完全看不到"]
         direction TB
         X1["切片 N 片"] --> X2["循环 N 次"] --> X3["去重 · 合并 · 接缝裁剪 · 半句回退"]
@@ -528,8 +528,8 @@ flowchart TB
 代码位置索引：`xiaojiao_app.py` 的 `_plan_tools()` / `_fit_context()` / `_estimate_tokens()` / `_max_context_tokens()`；每轮结果写 `logs/context_fit.log`。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     S["system 按意图生成<br/>chat 284 token · diagram 2632 token"] --> B["先算总账<br/>发之前算，不是发之后算"]
     T["tools 按意图装载<br/>chat 3 个 = 381 token"] --> B
     R["检索记忆注入<br/>不超过 2000 token"] --> B
@@ -618,8 +618,8 @@ system（按意图生成）
 代码位置索引：`xiaojiao_app.py` 的 `agent_run()`。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     IN["用户输入"] --> GATE{"入口分流<br/>估算 token 超过 5000"}
     GATE -->|"超长"| I2["② 切片 → 循环 → 拼装"]
     GATE -->|"正常"| I1["① 检索记忆 top-K"]

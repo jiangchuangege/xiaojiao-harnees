@@ -44,6 +44,7 @@ Web 端停用有明确代码依据：`xiaojiao_app.py` 第 7302 行注明「已�
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     M["MiniGPT<br/>字符级因果 Transformer"]
     E["记忆向量编码<br/>core/embedder.py"]
     C["命令行闲聊生成<br/>xiaojiao_harness.py"]
@@ -88,6 +89,7 @@ MiniGPT 的输入与输出都是**字符**，不是词或子词。词表就是�
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     A["训练池一行<br/>用户 X 小焦 Y"] --> B["滑动窗口取 65 个连续字符"]
     B --> C["输入 = 前 64 个字符"]
     B --> D["目标 = 后 64 个字符<br/>等于输入右移一位"]
@@ -140,6 +142,7 @@ print(sum(p.numel() for p in net.parameters()))     # 32730273
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     A["字符索引序列<br/>长度最多 64"] --> B["Embedding 查表<br/>字符映射到 512 维"]
     B --> C["加位置编码<br/>pos_embedding 表长 2048"]
     C --> D["8 层 TransformerEncoderLayer<br/>d_model 512 / nhead 8 / ff 2048<br/>Pre-LN，逐层传入因果掩码"]
@@ -224,6 +227,7 @@ for layer in self.layers:
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     A["训练池<br/>优先 training_data_pool_clean.txt"] --> B["滑窗采样 65 字符<br/>步长 32"]
     B --> C["MiniGPT 前向<br/>带因果掩码"]
     C --> D["交叉熵损失<br/>预测字符对真实字符"]
@@ -301,6 +305,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     Q["用户输入"] --> R{"向量库命中<br/>阈值 0.13"}
     R -- "命中" --> H["复用学过的回答"]
     R -- "未命中" --> R2{"字符二元组重叠检索<br/>闲聊 0.15 / 提问 0.70"}

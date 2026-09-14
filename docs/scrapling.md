@@ -257,8 +257,8 @@ This domain is for use in documentation examples without needing permission…
 代码位置索引：`plugins/scrapling_bridge.py` 的 `ScraplingBridge.execute()`；意图识别在 `xiaojiao_app.py` 的 `_detect_scrape_intent()` 与 `_scrape_direct()`。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     U["用户：抓一下 xxx / 下载这个 PDF / 最近 7 天高危漏洞"] --> INT["规则识别意图<br/>抓取 · 下载 · 漏洞清单"]
     INT --> GATE["安全闸门<br/>SSRF · robots.txt · 同域限速"]
     GATE -->|"命中策略"| BLOCK["返回中文拒绝原因<br/>不发起请求"]
@@ -349,8 +349,8 @@ flowchart TB
 代码位置索引：`plugins/scrapling_bridge.py` 的 `BatchManager.run_batch()` / `_sem_for()` / `_bulk_one()`，配置类 `BatchConfig`。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     U["bulk_get / bulk_fetch / bulk_stealthy_fetch<br/>输入 N 个网址"] --> D["去重 + 安全过滤<br/>SSRF · robots.txt"]
     D --> P["有界线程池<br/>跨域并发 concurrency"]
     P --> SA["同域闸门 A<br/>per_domain_limit"]
@@ -430,8 +430,8 @@ flowchart TB
 代码位置索引：`plugins/scrapling_bridge.py` 的 `SessionManager.__init__()` / `_expired()` / `_enforce_limit()` / `sweep()`。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     A["open_session 成功"] --> R["登记：创建时间 / 最后使用时间"]
     R --> G{"后台巡检每 60 秒"}
     G -->|"存活超过 session_ttl"| K["回收"]
@@ -526,8 +526,8 @@ flowchart TB
 代码位置索引：`xiaojiao_app.py` 的 `_learn_skill()` / `_reflect()` / `_recall_skills()`；存储位置 `self_learn/tool_skills.txt`（可读日志）与 `self_learn/knowledge_vec.json`（向量库，由 `self_learn/vstore.py` 维护）。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     A["用户：抓一下 xxx"] --> B["小焦调用抓取工具"]
     B --> C{"执行成功"}
     C -->|"成功"| D["记：需求到工具到参数到结果"]
@@ -583,8 +583,8 @@ flowchart LR
 代码位置索引：`plugins/scrapling_bridge.py` 的 `MetricsCollector` 与 `ScraplingBridge.execute()`；端点注册在 `xiaojiao_app.py` 的 `metrics_endpoint()` / `scrapling_metrics_json()`。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     T["工具调用 execute"] --> R["MetricsCollector.record<br/>次数 · 成功 · 失败 · 耗时 · 熔断"]
     R --> M["内存计数（加锁，线程安全）"]
     M --> P["/metrics<br/>Prometheus 文本"]

@@ -120,6 +120,7 @@ force = bool(data.get("force", True)) and _loopback
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     IN["请求：URL + 参数"] --> S{"协议白名单<br/>http / https"}
     S -->|"file / ftp / gopher / data 等"| B1["拒绝：中文原因"]
     S -->|"通过"| H{"内网字样<br/>localhost / 127. / ::1 / metadata"}

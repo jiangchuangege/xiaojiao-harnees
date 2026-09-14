@@ -20,27 +20,33 @@
 
 ## 2. 系统总览
 
+**图 1 · 系统总览**
+
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
-    subgraph U["🧑 使用者"]
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+    subgraph GUSER["🧑 使用者"]
+        direction TB
         WEB["网页对话 (127.0.0.1:5000)"]
         API["OpenAI 兼容 /v1<br/>（给 DSH 等外部工具当模型）"]
     end
 
     subgraph CORE["🧡 核心进程"]
+        direction TB
         APP["xiaojiao_app.py<br/>Flask · 会话/记忆/工具调度"]
         HARNESS["xiaojiao_harness.py<br/>小脑 MiniGPT（自研，项目核心）"]
         LOG["xiaojiao_log.py<br/>统一日志 + 脱敏"]
     end
 
     subgraph BRAIN["🧠 大脑层（可插拔）"]
+        direction TB
         SWAP["llama-swap :9292<br/>多大脑秒级切换"]
         LLAMA["llama-server :8080<br/>本地 GGUF"]
         CLOUD["云端 API<br/>OpenAI 兼容（可选）"]
     end
 
     subgraph CAP["🧩 能力层"]
+        direction TB
         TOOLS["插件工具<br/>plugins/*.py|js|json"]
         VIDEO["video_service<br/>ComfyUI :8188 + Wan2.1"]
         POD["podcast_service<br/>写稿 + 配音 + 封面"]
@@ -49,6 +55,7 @@ flowchart TB
     end
 
     subgraph DATA["🗃️ 数据与状态（跟随项目目录，天然可移植）"]
+        direction TB
         CFG["xiaojiao_control.json"]
         MEM["记忆 / 会话 / 知识库"]
         LEARN["self_learn/ 学习沉淀"]
@@ -56,33 +63,49 @@ flowchart TB
         METRICS["logs/ 日志 + 指标"]
     end
 
-    WEB --> APP
-    API --> APP
-    APP --> HARNESS
-    APP --> SWAP
-    SWAP --> LLAMA
-    APP -.-> CLOUD
-    APP --> TOOLS
-    APP --> VIDEO
-    APP --> POD
-    APP --> MUSIC
-    APP -.-> CAT
-    APP --> MEM
-    APP --> LEARN
-    TOOLS --> OUT
-    APP --> CFG
-    APP --> LOG
-    APP --> METRICS
-
-    classDef core fill:#fff7ed,stroke:#fb923c,color:#7c2d12;
-    classDef brain fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    classDef cap fill:#f3e8ff,stroke:#a78bfa,color:#4c1d95;
-    classDef data fill:#ecfdf5,stroke:#34d399,color:#064e3b;
-    class APP,HARNESS,LOG core;
-    class SWAP,LLAMA,CLOUD brain;
-    class TOOLS,VIDEO,POD,MUSIC,CAT cap;
-    class CFG,MEM,LEARN,OUT,METRICS data;
+    WEB -->|"对话"| APP
+    API -->|"/v1 兼容"| APP
+    APP -->|"调用小脑"| HARNESS
+    APP -->|"调度"| SWAP
+    SWAP -->|"搬运权重"| LLAMA
+    APP -.->|"可选外接"| CLOUD
+    APP -->|"装载工具"| TOOLS
+    APP -->|"按需拉起"| VIDEO
+    APP -->|"按需拉起"| POD
+    APP -->|"按需拉起"| MUSIC
+    APP -.->|"可选"| CAT
+    APP -->|"按需检索"| MEM
+    APP -->|"经验沉淀"| LEARN
+    TOOLS -->|"产出落盘"| OUT
+    APP -->|"读配置"| CFG
+    APP -->|"统一日志"| LOG
+    APP -->|"指标采集"| METRICS
+    style GUSER fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style CORE fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style BRAIN fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style CAP fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style DATA fill:#FEF6E7,stroke:#F5A623,color:#7A4B00
+    style WEB fill:#4A90E2,color:#fff
+    style API fill:#4A90E2,color:#fff
+    style APP fill:#4A90E2,color:#fff
+    style HARNESS fill:#7ED321,color:#fff
+    style LOG fill:#7ED321,color:#fff
+    style SWAP fill:#7ED321,color:#fff
+    style LLAMA fill:#7ED321,color:#fff
+    style CLOUD fill:#F5A623,color:#fff
+    style TOOLS fill:#7ED321,color:#fff
+    style VIDEO fill:#7ED321,color:#fff
+    style POD fill:#7ED321,color:#fff
+    style MUSIC fill:#7ED321,color:#fff
+    style CAT fill:#F5A623,color:#fff
+    style CFG fill:#F5A623,color:#fff
+    style MEM fill:#7ED321,color:#fff
+    style LEARN fill:#7ED321,color:#fff
+    style OUT fill:#7ED321,color:#fff
+    style METRICS fill:#7ED321,color:#fff
 ```
+
+> 代码位置：`xiaojiao_app.py`、`xiaojiao_harness.py`、`brain_manager.py`
 
 ---
 
@@ -123,9 +146,11 @@ flowchart TB
 
 ## 5. 一次对话的完整生命周期
 
+**图 2 · 一次对话的完整生命周期**
+
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 sequenceDiagram
+%%{init: {"themeVariables": {"fontSize": "14px", "actorBkg": "#4A90E2", "actorBorder": "#2F6FB5", "actorTextColor": "#ffffff", "actorLineColor": "#4A90E2", "signalColor": "#4A90E2", "signalTextColor": "#1F4E79", "labelBoxBkgColor": "#EAF2FD", "labelBoxBorderColor": "#4A90E2", "labelTextColor": "#1F4E79", "loopTextColor": "#7A4B00", "noteBkgColor": "#FEF6E7", "noteBorderColor": "#F5A623", "noteTextColor": "#7A4B00", "activationBkgColor": "#EAF7E2", "activationBorderColor": "#7ED321", "sequenceNumberColor": "#ffffff"}}}%%
     autonumber
     participant U as 使用者
     participant W as Web 前端
@@ -151,27 +176,68 @@ sequenceDiagram
     S-->>A: （需要直觉判断时）轻量应答
 ```
 
+> 代码位置：`xiaojiao_app.py`、`xiaojiao_tools.py`
+
 **要点**：小脑负责"快而轻"的直觉（秒回、情绪、轻判断），大脑负责"重而准"的推理（规划、写作、代码）；工具执行走**统一契约**，结果统一归一化，错误统一中文。
 
 ---
 
 ## 6. 插件机制（扩展能力的主路径）
 
+**图 3 · 插件机制**
+
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart LR
-    D["plugins/ 目录"] --> L["load_plugins()<br/>按后缀分派"]
-    L --> P1[".py<br/>class + get_tool_descriptions/execute"]
-    L --> P2[".js<br/>Node 子进程（可选）"]
-    L --> P3[".json<br/>tools / api / skin 三类清单"]
-    L --> P4[".md<br/>技能（注入提示词）"]
-    P1 --> R["PLUGINS 注册表<br/>{instance, desc, ...}"]
-    P2 --> R
-    P3 --> R
-    P4 --> SK["PLUGIN_SKILLS"]
-    R --> EX["run_tool() 统一调用<br/>结果字符串化 _tool_result_str()"]
-    R --> MT["/metrics 指标<br/>（插件实现 metrics_prometheus 即被采集）"]
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+    subgraph LOAD["① 装载"]
+        direction TB
+        D["plugins/ 目录"]
+        L["load_plugins()<br/>按后缀分派"]
+    end
+
+    subgraph FORM["② 四种形态"]
+        direction TB
+        P1[".py<br/>class + get_tool_descriptions/execute"]
+        P2[".js<br/>Node 子进程（可选）"]
+        P3[".json<br/>tools / api / skin 三类清单"]
+        P4[".md<br/>技能（注入提示词）"]
+    end
+
+    subgraph REG["③ 注册与调用"]
+        direction TB
+        R["PLUGINS 注册表<br/>{instance, desc, ...}"]
+        SK["PLUGIN_SKILLS"]
+        EX["run_tool() 统一调用<br/>结果字符串化 _tool_result_str()"]
+        MT["/metrics 指标<br/>（插件实现 metrics_prometheus 即被采集）"]
+    end
+
+    D -->|"扫描目录"| L
+    L -->|"按后缀分派"| P1
+    L -->|"按后缀分派"| P2
+    L -->|"按后缀分派"| P3
+    L -->|"按后缀分派"| P4
+    P1 -->|"注册"| R
+    P2 -->|"注册"| R
+    P3 -->|"注册"| R
+    P4 -->|"注入提示词"| SK
+    R -->|"统一调用"| EX
+    R -->|"自动采集"| MT
+    style LOAD fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style FORM fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style REG fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style D fill:#4A90E2,color:#fff
+    style L fill:#4A90E2,color:#fff
+    style P1 fill:#7ED321,color:#fff
+    style P3 fill:#7ED321,color:#fff
+    style P4 fill:#7ED321,color:#fff
+    style P2 fill:#F5A623,color:#fff
+    style R fill:#4A90E2,color:#fff
+    style SK fill:#7ED321,color:#fff
+    style EX fill:#7ED321,color:#fff
+    style MT fill:#7ED321,color:#fff
 ```
+
+> 代码位置：`plugins/`、`xiaojiao_app.py`
 
 **插件契约**（最小实现）：
 
@@ -204,16 +270,47 @@ def get_plugin():
 
 ## 8. 数据与状态
 
+**图 4 · 数据与状态**
+
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart LR
-    CFG["xiaojiao_control.json<br/>（含密钥，已 gitignore）"] --> APP["运行时配置"]
-    APP --> MEM["记忆/会话/知识库<br/>*.json / *.txt"]
-    APP --> LEARN["self_learn/<br/>经验与向量"]
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+    subgraph SRC["① 配置来源"]
+        direction TB
+        CFG["xiaojiao_control.json<br/>（含密钥，已 gitignore）"]
+    end
+
+    subgraph RT["② 运行时组装"]
+        direction TB
+        APP["运行时配置"]
+    end
+
+    subgraph STATE["③ 状态与产出"]
+        direction TB
+        MEM["记忆/会话/知识库<br/>*.json / *.txt"]
+        LEARN["self_learn/<br/>经验与向量"]
+        OUT["产出目录<br/>books/ downloads/ media/ videos/"]
+        LOGS["logs/<br/>日志 + 指标 + 归档日志"]
+    end
+
+    CFG -->|"读取"| APP
+    APP -->|"读写"| MEM
+    APP -->|"经验沉淀"| LEARN
     LEARN -->|"检索命中"| APP
-    APP --> OUT["产出目录<br/>books/ downloads/ media/ videos/"]
-    APP --> LOGS["logs/<br/>日志 + 指标 + 归档日志"]
+    APP -->|"产出落盘"| OUT
+    APP -->|"统一日志"| LOGS
+    style SRC fill:#FEF6E7,stroke:#F5A623,color:#7A4B00
+    style RT fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style STATE fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style CFG fill:#F5A623,color:#fff
+    style APP fill:#4A90E2,color:#fff
+    style MEM fill:#7ED321,color:#fff
+    style LEARN fill:#7ED321,color:#fff
+    style OUT fill:#7ED321,color:#fff
+    style LOGS fill:#7ED321,color:#fff
 ```
+
+> 代码位置：`xiaojiao_control.json`、`core/memory_vec.py`
 
 - **配置优先级**：控制文件 → 环境变量 → 默认值（各子系统一致）
 - **可移植性**：所有状态都在项目目录内，复制整个文件夹即可搬迁
@@ -223,17 +320,57 @@ flowchart LR
 
 ## 9. 质量与安全（怎么保证"稳"）
 
+**图 5 · 质量与安全**
+
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
-    DEV["改动"] --> TESTS["tests/stress/run_all.py<br/>离线 + 联网真实调用"]
-    DEV --> CI[".github/workflows/stress-test.yml<br/>每天 03:00 / 手动 / 变更触发"]
-    CI --> GATE{"通过率 ≥ 95%？"}
-    GATE -->|否| FAIL["❌ CI 失败（不许合）"]
-    GATE -->|是| OK["✅ 允许合并"]
-    TESTS --> AUDIT["静态审计（ast）<br/>静默吞异常 / 裸 except / 硬编码 / 脱敏"]
-    OK --> REL["发布（docs/release-and-rollback.md）"]
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+    subgraph CHG["① 改动"]
+        direction TB
+        DEV["改动"]
+    end
+
+    subgraph GATES["② 两道关"]
+        direction TB
+        TESTS["tests/stress/run_all.py<br/>离线 + 联网真实调用"]
+        CI[".github/workflows/stress-test.yml<br/>每天 03:00 / 手动 / 变更触发"]
+        AUDIT["静态审计（ast）<br/>静默吞异常 / 裸 except / 硬编码 / 脱敏"]
+        GATE{"通过率 ≥ 95%？"}
+    end
+
+    subgraph PASSG["③ 放行"]
+        direction TB
+        OK["✅ 允许合并"]
+        REL["发布（docs/release-and-rollback.md）"]
+    end
+
+    subgraph STOPG["④ 拦下"]
+        direction TB
+        FAIL["❌ CI 失败（不许合）"]
+    end
+
+    DEV -->|"提交"| TESTS
+    DEV -->|"推分支"| CI
+    CI -->|"看通过率"| GATE
+    GATE -->|"否"| FAIL
+    GATE -->|"是"| OK
+    TESTS -->|"顺带审计"| AUDIT
+    OK -->|"允许发布"| REL
+    style CHG fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style GATES fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style PASSG fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style STOPG fill:#FDECEA,stroke:#E74C3C,color:#8A2418
+    style DEV fill:#4A90E2,color:#fff
+    style TESTS fill:#7ED321,color:#fff
+    style CI fill:#7ED321,color:#fff
+    style AUDIT fill:#7ED321,color:#fff
+    style GATE fill:#F5A623,color:#fff
+    style OK fill:#7ED321,color:#fff
+    style REL fill:#4A90E2,color:#fff
+    style FAIL fill:#E74C3C,color:#fff
 ```
+
+> 代码位置：`tests/stress/run_all.py`、`tools/audit_static.py`
 
 | 面向 | 手段 |
 | --- | --- |

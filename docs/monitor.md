@@ -52,6 +52,7 @@
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph XJ["小焦 Web · 5000"]
         A["大脑仓库监控面板"]
     end

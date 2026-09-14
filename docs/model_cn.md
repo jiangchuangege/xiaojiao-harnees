@@ -36,6 +36,7 @@
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     U["浏览器聊天界面<br/>默认 127.0.0.1:5000"] --> CTL["操控文件<br/>xiaojiao_control.json"]
     CTL --> SEL{"brain.engine"}
     SEL -- "llama" --> L["本地大模型<br/>llama-swap 9292 或 llama-server 8080"]

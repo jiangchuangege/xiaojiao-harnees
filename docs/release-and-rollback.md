@@ -36,6 +36,7 @@
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     M["main：稳定线"] -->|"开分支"| R["release/stabilize-YYYYMMDD：整改线"]
     R -->|"一个修复一个中文提交"| R
     R -->|"压力测试通过率达标"| V{"验收"}

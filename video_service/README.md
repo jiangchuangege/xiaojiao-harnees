@@ -153,6 +153,7 @@ GET /api/video/state
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     A["Web 前端 视频按钮"] -->|"POST /api/video"| B["video_api.api_video 建任务"]
     B --> C["后台线程 _worker"]
     C --> D{"video_mode 判定"}
@@ -188,6 +189,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph JOB["任务状态 video_api 任务表里的 state"]
         J1["queued 排队"] --> J2["switching 切换中"]
         J2 --> J3["generating 生成中"]

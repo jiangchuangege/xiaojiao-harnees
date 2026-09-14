@@ -35,8 +35,11 @@
 
 ### 1.2 分工如何切分
 
+**图 1 · 火种与载体的分工**
+
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph MODEL["火种层 —— 模型权重，可替换零件"]
         direction LR
         M1["小参数本地模型"]
@@ -64,6 +67,8 @@ flowchart TB
     style CARRIER fill:#dbe9ff
     style OUT fill:#2d6cdf,color:#fff
 ```
+
+> 代码位置：`core/carrier/capability.py`、`core/carrier/brain_registry.py`
 
 图注：火种可更换，载体不变；用户侧看到的是同一个助手，而不是「某个模型的包装」。
 
@@ -109,16 +114,53 @@ flowchart TB
 「无限」指用户感知层面的不设上限，而不是指单次请求可以突破物理限制。六个无限分布在
 一条请求链路的三个位置，全部由载体实现，没有一条依靠扩大上下文窗口。
 
+**图 2 · 六个无限在链路中的位置**
+
 ```mermaid
 flowchart LR
-    U["用户输入"] --> S["② 输入无限<br/>载体切片后循环处理"]
-    MEM["① 记忆无限<br/>外部向量库按需检索"] --> ASM["⑥ 单次永不超<br/>按上限精确装配"]
-    TOOL["④ 工具无限<br/>工具全部保留 · 按意图装载"] --> ASM
-    S --> ASM
-    ASM --> MDL["模型单次推理"]
-    MDL --> CT["③ 输出无限<br/>多次请求无缝合并"]
-    CT --> V["⑤ 感知无限<br/>界面只出现处理中与正文"]
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+    subgraph IN["① 进模型的输入端"]
+        direction TB
+        U["用户输入"]
+        S["② 输入无限<br/>载体切片后循环处理"]
+        MEM["① 记忆无限<br/>外部向量库按需检索"]
+        TOOL["④ 工具无限<br/>工具全部保留 · 按意图装载"]
+        U -->|"原始输入"| S
+    end
+
+    subgraph ASM_G["② 装配与推理"]
+        direction TB
+        ASM["⑥ 单次永不超<br/>按上限精确装配"]
+        MDL["模型单次推理"]
+        ASM -->|"精确装配后送模型"| MDL
+    end
+
+    subgraph OUT_G["③ 出模型的输出端"]
+        direction TB
+        CT["③ 输出无限<br/>多次请求无缝合并"]
+        V["⑤ 感知无限<br/>界面只出现处理中与正文"]
+        CT -->|"界面只显示正文"| V
+    end
+
+    S -->|"逐片处理"| ASM
+    MEM -->|"按需注入"| ASM
+    TOOL -->|"按意图装载"| ASM
+    MDL -->|"超长则续写"| CT
+    style IN fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style ASM_G fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style OUT_G fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style U fill:#4A90E2,color:#fff
+    style MDL fill:#4A90E2,color:#fff
+    style S fill:#7ED321,color:#fff
+    style MEM fill:#7ED321,color:#fff
+    style CT fill:#7ED321,color:#fff
+    style TOOL fill:#F5A623,color:#fff
+    style ASM fill:#F5A623,color:#fff
+    style V fill:#F5A623,color:#fff
 ```
+
+> 一句话说明：六个无限分布在一条请求链路的进口、装配、出口三处，全部由载体实现。
+> 代码位置：`core/memory_vec.py`、`core/input_splitter.py`、`core/continuation.py`、`core/carrier/capability.py`
 
 | 编号 | 名称 | 机制 | 状态 |
 | --- | --- | --- | --- |

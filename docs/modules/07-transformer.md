@@ -139,8 +139,8 @@
 代码位置索引：`core/carrier/brain_registry.py`、`core/carrier/capability.py`、`core/carrier/__init__.py`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph BRAINS["BrainRegistry · 火种库（我能换成谁）"]
         direction LR
         B1["本地 4B 模型"]
@@ -215,8 +215,8 @@ flowchart TB
 代码位置索引：`core/carrier/brain_registry.py` 的 `switch`、`_set_active`、`apply_to_app`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     C["调用 switch 名称"] --> CHK{"火种存在且处于启用状态"}
     CHK -->|"否"| FAIL["返回 False<br/>写一条失败的切换流水"]
     CHK -->|"是"| POINT["把当前火种指针指向新名字<br/>这是全部副作用"]
@@ -244,8 +244,8 @@ flowchart LR
 代码位置索引：`core/carrier/brain_registry.py` 的 `fallback`、`auto_fallback`、`mark_unhealthy`、`health_check`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     TRIG["触发条件：请求途中鉴权失败或超时<br/>或人工标记不健康"] --> MARK["mark_unhealthy<br/>不再花时间重新探测一次"]
     MARK --> PICK["fallback：在启用且健康且不在排除名单里的火种中<br/>按优先级与名字排序取第一颗"]
     PICK --> NONE{"存在候选"}
@@ -293,8 +293,8 @@ flowchart TB
 代码位置索引：`core/carrier/capability.py` 的 `scan`、`_app_tools`、`_dir_scan`、`watch`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     CALL["scan：清点当前能力"] --> WALK["遍历插件目录<br/>后缀 py json md js mjs"]
     WALK --> FP["计算文件指纹：路径 与 时间 与 大小"]
     FP --> APPDIR{"是否默认插件目录且宿主可用"}

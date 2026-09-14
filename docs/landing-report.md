@@ -57,6 +57,7 @@
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph ENTRY["入口"]
         direction LR
         I1["一键启动 start_xiaojiao.py"]
@@ -380,6 +381,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     P0["P0 已完成<br/>四项改进 · 展示修复 · 安全修复"] --> P1["P1 建议<br/>UI 体验：折叠 · 移动端 · 表格滚动"]
     P1 --> P2["P2 建议<br/>重依赖模块测试通道"]
     P2 --> P3["P3 建议<br/>无头压测与依赖扫描进 CI"]

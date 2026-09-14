@@ -78,9 +78,10 @@
 | 离线可用 | 是（本地能力全可用） | 否 | 架构事实 | 是 |
 | 单次成本 | 无按次计费 | 按 token 计费 | 架构事实 | 是 |
 | 可替换模型 | 换模型不改配置、不丢数据 | 换服务方通常需要改造 | `core/carrier/brain_registry.py` | 是 |
-| 单次推理上限 | **受模型规模限制，4B 就是 4B**（这一行不吹：一次前向的能力就是模型本身的水平） | 取决于模型规模 | `docs/design-philosophy.md` 第六节 | 不可比 |
-| 整体任务表现 | **不被单次上限约束**：载体负责拆步（输入切片、长文分段）、循环（逐段生成）、拼接（跨段去重合并）—— 单次有多弱，就用多少次补回来 | 只有单次推理可用，一次前向对应一个答案 | `core/input_splitter.py`、`core/continuation.py` | 是 |
-| 整体任务表现 · 校验这一环 | 已接入：答前自评 + 复读检测（检出即截断重来）。**未落地**：「同题跑 N 次 + 投票择一」的完整流水线 | 无中间校验，一次输出即成品 | `core/metacognition/`、`core/health/degeneration.py`；未落地部分见 `docs/design-philosophy.md` 第十四节 | 部分 |
+| 能力上限由谁决定 | **由载体决定，不由单次前向决定**：记忆可扩容、插件可增加、循环可叠加，上限随载体长，不随模型停 | 由这一次前向的模型规模决定 | `core/carrier/capability.py`、`core/memory_vec.py`、`docs/design-philosophy.md` 第二节 | 是 |
+| 六个无限（记忆 / 输入 / 输出 / 工具 / 感知 / 单次不超） | 六项全部实现在模型之外，**用户感知到的能力不随单次上下文与单次输出到顶** | 受单次上下文长度、单次输出上限、单次调用约束 | `core/memory_vec.py`、`core/input_splitter.py`、`core/continuation.py`、`core/carrier/capability.py`、`core/world/` | 是 |
+| 一次任务的完成方式 | 拆步（输入切片、长文分段）+ 循环（逐段生成）+ 拼接（跨段去重合并）：任务多大就拆多少步 | 一次前向对应一个答案 | `core/input_splitter.py`、`core/continuation.py` | 是 |
+| 校验这一环 | 已接入：答前自评 + 复读检测（检出即截断重来）。**未落地**：「同题跑 N 次 + 投票择一」的完整流水线 | 无中间校验，一次输出即成品 | `core/metacognition/`、`core/health/degeneration.py`；未落地部分见 `docs/design-philosophy.md` 第十四节 | 部分 |
 | 回答质量 | 不可比 | 不可比 | 无对照实验 | 否 |
 
 ## 30 秒体验
@@ -181,16 +182,54 @@ flowchart TB
 `python install_all.py`（或双击 `一键安装.bat`）完成环境体检与安装指引。检测项分必需与可选两组，
 报告分开列出：缺可选项只少一个功能，不阻拦启动。
 
+**图 2 · 安装器分级判定流程**
+
 ```mermaid
 flowchart TB
-    START(["双击 一键安装.bat 或 python install_all.py"]) --> SCAN["全盘扫描：关键词与盘符探测"]
-    SCAN --> REQ{"必需项齐全"}
-    REQ -->|"否"| BLOCK["列出缺什么与怎么补，不继续安装"]
-    REQ -->|"是"| OK["环境就绪"]
-    MUST["必需：解释器与依赖包、小脑三件套"] --> OK
-    OPT["可选：推理引擎、切换器、视频引擎、桌面客户端、抓取栈"] -.->|"不影响启动"| OK
-    OK --> RUN["python start_xiaojiao.py"]
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+    subgraph CHECK["① 环境体检"]
+        direction TB
+        START(["双击 一键安装.bat 或 python install_all.py"])
+        SCAN["全盘扫描：关键词与盘符探测"]
+        REQ{"必需项齐全"}
+        START -->|"执行安装器"| SCAN
+        SCAN -->|"逐项探测"| REQ
+    end
+    subgraph GRADE["② 检测项分级"]
+        direction TB
+        MUST["必需：解释器与依赖包、小脑三件套"]
+        OPT["可选：推理引擎、切换器、视频引擎、桌面客户端、抓取栈"]
+    end
+    subgraph PASS["③ 就绪启动"]
+        direction TB
+        OK["环境就绪"]
+        RUN["python start_xiaojiao.py"]
+        OK -->|"启动服务"| RUN
+    end
+    subgraph FAIL["④ 缺项处置"]
+        direction TB
+        BLOCK["列出缺什么与怎么补，不继续安装"]
+    end
+    REQ -->|"否"| BLOCK
+    REQ -->|"是"| OK
+    MUST -->|"必需项齐全"| OK
+    OPT -.->|"不影响启动"| OK
+    style CHECK fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style GRADE fill:#FEF6E7,stroke:#F5A623,color:#7A4B00
+    style PASS fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style FAIL fill:#FDECEA,stroke:#E74C3C,color:#8A2418
+    style START fill:#4A90E2,color:#fff
+    style SCAN fill:#4A90E2,color:#fff
+    style REQ fill:#F5A623,color:#fff
+    style MUST fill:#F5A623,color:#fff
+    style OPT fill:#F5A623,color:#fff
+    style OK fill:#7ED321,color:#fff
+    style RUN fill:#4A90E2,color:#fff
+    style BLOCK fill:#E74C3C,color:#fff
 ```
+
+> 一句话说明：必需项缺失就拦下并给出补齐方式，可选项缺失只降级、不阻断启动。
+> 代码位置：`install_all.py`、`start_xiaojiao.py`
 
 必需项只有两类：解释器与依赖包（逐个导入验证），以及小脑三件套。可选项缺失时的降级行为：
 
@@ -255,14 +294,40 @@ python start_xiaojiao.py
 
 小焦把不同用途的模型注册成独立大脑，同一时刻只有一颗占用显存，切换是权重级搬运，不重启进程。
 
+**图 3 · 多大脑注册与显存调度**
+
 ```mermaid
 flowchart LR
-    A["意图识别与大脑选择"] --> B["显存调度：休眠 · 唤醒 · 让位"]
-    B --> C["聊天大脑<br/>热切换器托管，卸载与加载按秒计"]
-    B --> D["视频大脑<br/>生成引擎常驻或低显存模式"]
-    B --> E["播客大脑<br/>写稿、配音、封面"]
-    B -.-> F["图像与推理大脑，可继续扩展"]
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+    subgraph PICK["① 意图与调度"]
+        direction TB
+        A["意图识别与大脑选择"]
+        B["显存调度：休眠 · 唤醒 · 让位"]
+        A -->|"判定用途"| B
+    end
+    subgraph POOL["② 大脑仓库"]
+        direction TB
+        C["聊天大脑<br/>热切换器托管，卸载与加载按秒计"]
+        D["视频大脑<br/>生成引擎常驻或低显存模式"]
+        E["播客大脑<br/>写稿、配音、封面"]
+        F["图像与推理大脑，可继续扩展"]
+    end
+    B -->|"热切换"| C
+    B -->|"按需拉起"| D
+    B -->|"按需拉起"| E
+    B -.->|"可继续扩展"| F
+    style PICK fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style POOL fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style A fill:#4A90E2,color:#fff
+    style B fill:#4A90E2,color:#fff
+    style C fill:#7ED321,color:#fff
+    style D fill:#7ED321,color:#fff
+    style E fill:#7ED321,color:#fff
+    style F fill:#F5A623,color:#fff
 ```
+
+> 一句话说明：同一时刻只有一颗大脑占显存，其余在内存等待，切换是权重级搬运而非重启进程。
+> 代码位置：`brain_manager.py`、`llama-swap.yaml`
 
 要点：
 
@@ -314,15 +379,47 @@ flowchart LR
 小焦自造的这颗模型用本地大模型当老师生成对话与问答，蒸馏成一个字符级自回归 Transformer，
 再由载体负责检索与校验。它解决的是本地小模型单次生成能力有限的问题。
 
+**图 4 · 小脑训练数据管线**
+
 ```mermaid
 flowchart LR
-    A["LCCC 中文多轮对话语料"] --> B["转换与清洗<br/>生成训练池"]
-    C["本地大模型按主题生成多轮对话"] --> D["training_data_pool.txt"]
-    E["知识库转问答对"] --> D
-    D --> F["训练"]
-    F --> G["mini_gpt_model.pth"]
-    B --> D
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+    subgraph SRC["① 语料来源"]
+        direction TB
+        A["LCCC 中文多轮对话语料"]
+        C["本地大模型按主题生成多轮对话"]
+        E["知识库转问答对"]
+    end
+    subgraph BUILD["② 清洗与汇集"]
+        direction TB
+        B["转换与清洗<br/>生成训练池"]
+        D["training_data_pool.txt"]
+    end
+    subgraph TRAIN["③ 训练与产出"]
+        direction TB
+        F["训练"]
+        G["mini_gpt_model.pth"]
+    end
+    A -->|"解析多轮对话"| B
+    C -->|"按主题生成"| D
+    E -->|"切分问答对"| D
+    B -->|"追加"| D
+    D -->|"滑动窗口采样"| F
+    F -->|"每步保存权重"| G
+    style SRC fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style BUILD fill:#FEF6E7,stroke:#F5A623,color:#7A4B00
+    style TRAIN fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style A fill:#4A90E2,color:#fff
+    style C fill:#7ED321,color:#fff
+    style E fill:#7ED321,color:#fff
+    style B fill:#7ED321,color:#fff
+    style D fill:#F5A623,color:#fff
+    style F fill:#4A90E2,color:#fff
+    style G fill:#7ED321,color:#fff
 ```
+
+> 一句话说明：三条语料来源汇进同一个训练池，再蒸馏成字符级自回归小脑权重。
+> 代码位置：`convert.py`、`massive_distill.py`、`train_model.py`
 
 模型规格全部来自 `model_config.json` 与 `xiaojiao_harness.py` 的定义；实例化后统计参数量为 32,730,273。
 
@@ -474,17 +571,55 @@ npm install -g @tt-a1i/archify-dsh
 
 ### 工作流程
 
+**图 5 · 抓取插件工作流程**
+
 ```mermaid
 flowchart TB
-    A["指令：抓取某网址或下载某文件"] --> B["抓取意图识别：抓取与下载动词加网址"]
-    B --> C["安全闸门：内网拦截 · robots 判定 · 同域限速"]
-    C --> D["执行抓取：普通请求 · 渲染 · 隐身 · 批量 · 登录态"]
-    D --> E["取回正文、文件或截图"]
-    E --> F["直接展示并附解读"]
-    E --> G["按需存本地"]
-    F --> H["经验沉淀：成功记用法，失败记反思"]
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+    subgraph INTENT["① 抓取意图识别"]
+        direction TB
+        A["指令：抓取某网址或下载某文件"]
+        B["抓取意图识别：抓取与下载动词加网址"]
+        A -->|"自然语言指令"| B
+    end
+    subgraph GATE["② 安全闸门"]
+        direction TB
+        C["安全闸门：内网拦截 · robots 判定 · 同域限速"]
+    end
+    subgraph EXEC["③ 执行抓取"]
+        direction TB
+        D["执行抓取：普通请求 · 渲染 · 隐身 · 批量 · 登录态"]
+        E["取回正文、文件或截图"]
+        D -->|"按通道执行"| E
+    end
+    subgraph OUT["④ 产出与经验沉淀"]
+        direction TB
+        F["直接展示并附解读"]
+        G["按需存本地"]
+        H["经验沉淀：成功记用法，失败记反思"]
+        F -->|"写入经验"| H
+    end
+    B -->|"构造工具调用"| C
+    C -->|"放行"| D
+    E -->|"正文加解读"| F
+    E -->|"需要留档"| G
     H -.->|"同类需求直接复用"| B
+    style INTENT fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style GATE fill:#FEF6E7,stroke:#F5A623,color:#7A4B00
+    style EXEC fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style OUT fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style A fill:#4A90E2,color:#fff
+    style B fill:#4A90E2,color:#fff
+    style C fill:#F5A623,color:#fff
+    style D fill:#4A90E2,color:#fff
+    style E fill:#7ED321,color:#fff
+    style F fill:#7ED321,color:#fff
+    style G fill:#7ED321,color:#fff
+    style H fill:#7ED321,color:#fff
 ```
+
+> 一句话说明：指令先过安全闸门，抓取结果原样展示并附解读，经验回流供同类需求复用。
+> 代码位置：`docs/scrapling.md`、`plugins/`
 
 插件内部由五个组件分工：安全闸门负责内网拦截、robots 判定、限速与日志脱敏；熔断器在连续失败后暂停并自动恢复；
 批量管理器负责去重、退避与代理轮换；选择器管理器负责自适应找回；通道层提供进程内直连与 MCP 两种方式。
@@ -566,27 +701,48 @@ python -m pip install "scrapling[fetchers]" markdownify mcp
 小焦的说话风格也能反馈过去。猫娘负责桌面形象与陪伴，小焦负责本地大脑、工具与记忆，两边互相学习；
 桌面形象层为可选组件，不部署也不影响小焦使用。
 
+**图 6 · N.E.K.O. 猫娘协作与学习通道**
+
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph NEKO["N.E.K.O.：本地部署的开源项目"]
+        direction TB
         APP["桌面客户端<br/>界面与形象"]
         MS["后端服务 48911"]
         MEM["记忆服务 48912"]
-        APP --> MS
-        APP --> MEM
+        APP -->|"调用后端"| MS
+        APP -->|"调用记忆"| MEM
     end
     subgraph LEARN["学习通道"]
+        direction TB
         LF["读取记忆与人格数据<br/>默认每 5 分钟一次"]
     end
     subgraph XJ["小焦：本地大脑与工具"]
+        direction TB
         KNOW["记忆库"]
         BRAIN["大脑、工具、人格"]
         GEN["视频、播客、音乐"]
+        KNOW -->|"供检索"| BRAIN
+        BRAIN -->|"驱动能力"| GEN
     end
-    MS --> LF
-    MEM --> LF
-    LF --> KNOW --> BRAIN --> GEN
+    MS -->|"后端数据"| LF
+    MEM -->|"记忆与人格"| LF
+    LF -->|"写入"| KNOW
+    style NEKO fill:#FEF6E7,stroke:#F5A623,color:#7A4B00
+    style LEARN fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style XJ fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style APP fill:#F5A623,color:#fff
+    style MS fill:#F5A623,color:#fff
+    style MEM fill:#F5A623,color:#fff
+    style LF fill:#4A90E2,color:#fff
+    style KNOW fill:#7ED321,color:#fff
+    style BRAIN fill:#7ED321,color:#fff
+    style GEN fill:#7ED321,color:#fff
 ```
+
+> 一句话说明：猫娘负责桌面形象与陪伴，小焦负责本地大脑与工具，两边经学习通道互读记忆与人格数据。
+> 代码位置：`learn_from_neko.py`、`start_xiaojiao.py`、`docs/neko.md`
 
 要点：
 
@@ -622,29 +778,100 @@ flowchart LR
 
 ## 文件与模型互调一览
 
+**图 7 · 文件与模型互调一览**
+
 ```mermaid
 flowchart LR
-    U["用户"] --> W["小焦网页 :5000"]
-    DSH["DeepSeek Harness"] -->|"/v1"| W
-    W --> A["agent_run"]
-    A --> M["记忆召回"]
-    A --> S["联网检索"]
-    A --> BR["大脑：本地模型、外接接口、自研小脑"]
-    BR --> TOOLS["工具与插件<br/>命令、读写、打开<br/>Python、Node.js、接口、技能"]
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+    subgraph ENTRY["① 入口"]
+        direction TB
+        U["用户"]
+        DSH["DeepSeek Harness"]
+        DSHPLUG["DSH 功能型插件"]
+        ST["start_xiaojiao.py"]
+    end
+    subgraph WEB["② 网页服务"]
+        direction TB
+        W["小焦网页 :5000"]
+    end
+    subgraph CORE["③ 载体编排"]
+        direction TB
+        A["agent_run"]
+        M["记忆召回"]
+        S["联网检索"]
+        BR["大脑：本地模型、外接接口、自研小脑"]
+        A -->|"先取上下文"| M
+        A -->|"按需检索"| S
+        A -->|"选一颗大脑"| BR
+    end
+    subgraph CAP["④ 工具与生成能力"]
+        direction TB
+        TOOLS["工具与插件<br/>命令、读写、打开<br/>Python、Node.js、接口、技能"]
+        SD["抓取插件：安全闸门与双通道"]
+        SOUT["正文与解读、本地文件、截图、漏洞表"]
+        VID["卸载大脑后启动生成引擎"]
+        OUTV["videos 目录下的视频"]
+        TOOLS <-->|"抓取、下载、截图"| SD
+        SD -->|"产出"| SOUT
+        VID -->|"生成"| OUTV
+    end
+    subgraph DATA["⑤ 数据与沉淀"]
+        direction TB
+        LOG["对话历史与反馈"]
+        KNOW["小脑知识库"]
+        TRAIN["重训入口"]
+        COST["成本看板"]
+        LOG -->|"自动记录"| KNOW
+        KNOW -->|"攒够就重训"| TRAIN
+    end
+    subgraph NEKOG["⑥ 桌面伙伴（可选）"]
+        direction TB
+        NEKO["N.E.K.O. 桌面客户端"]
+    end
+    U -->|"对话"| W
+    DSH -->|"/v1"| W
+    ST -->|"拉起服务"| W
+    ST -->|"拉起大脑"| BR
+    ST -->|"询问后拉起"| NEKO
+    W -->|"交给载体"| A
+    W -->|"生成视频"| VID
+    W -->|"自动记录"| LOG
+    W -->|"统计开销"| COST
+    BR -->|"下发调用"| TOOLS
     TOOLS -->|"执行结果"| A
-    W -->|"生成视频"| VID["卸载大脑后启动生成引擎"] --> OUTV["videos 目录下的视频"]
-    W -->|"自动记录"| LOG["对话历史与反馈"] --> KNOW["小脑知识库"] --> TRAIN["重训入口"]
-    ST["start_xiaojiao.py"] --> W
-    ST --> BR
-    ST --> NEKO["N.E.K.O. 桌面客户端"]
-    NEKO -->|"每 5 分钟"| KNOW
-    DSHPLUG["DSH 功能型插件"] -->|"插件万能桥"| TOOLS
-    TOOLS <-->|"抓取、下载、截图"| SD["抓取插件：安全闸门与双通道"]
-    SD --> SOUT["正文与解读、本地文件、截图、漏洞表"]
+    DSHPLUG -->|"插件万能桥"| TOOLS
     SD -.->|"抓完有解读"| A
     SOUT -->|"成功记用法，失败记反思"| KNOW
-    W --> COST["成本看板"]
+    NEKO -->|"每 5 分钟"| KNOW
+    style ENTRY fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style WEB fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style CORE fill:#EAF2FD,stroke:#4A90E2,color:#1F4E79
+    style CAP fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style DATA fill:#EAF7E2,stroke:#7ED321,color:#3E6B12
+    style NEKOG fill:#FEF6E7,stroke:#F5A623,color:#7A4B00
+    style U fill:#4A90E2,color:#fff
+    style DSH fill:#4A90E2,color:#fff
+    style DSHPLUG fill:#4A90E2,color:#fff
+    style ST fill:#4A90E2,color:#fff
+    style W fill:#4A90E2,color:#fff
+    style A fill:#4A90E2,color:#fff
+    style M fill:#7ED321,color:#fff
+    style S fill:#7ED321,color:#fff
+    style BR fill:#7ED321,color:#fff
+    style TOOLS fill:#4A90E2,color:#fff
+    style SD fill:#F5A623,color:#fff
+    style SOUT fill:#7ED321,color:#fff
+    style VID fill:#7ED321,color:#fff
+    style OUTV fill:#7ED321,color:#fff
+    style LOG fill:#7ED321,color:#fff
+    style KNOW fill:#7ED321,color:#fff
+    style TRAIN fill:#7ED321,color:#fff
+    style COST fill:#7ED321,color:#fff
+    style NEKO fill:#F5A623,color:#fff
 ```
+
+> 一句话说明：用户或 DSH 从入口进来，经 `agent_run` 编排记忆、联网、大脑与工具，产出与经验分别落到目录与知识库。
+> 代码位置：`xiaojiao_app.py`、`brain_manager.py`、`xiaojiao_tools.py`
 
 一条消息在载体内部的走向：先注入人格与真实路径（当前目录、桌面路径与技能插件内容），
 再从记忆库取相关历史知识、取会话上下文的最近若干轮、按需联网检索并注入关键信息；
@@ -859,12 +1086,6 @@ xiaojiao-harness/
 
 ---
 
-## License
-
-基于 [MIT License](LICENSE) 开源，可自由使用、修改与分发。
-
----
-
 ## 致谢
 
 小焦的多大脑切换、视频与播客生成、抓取与桌面形象层都建立在下列开源项目之上。
@@ -894,6 +1115,12 @@ xiaojiao-harness/
 | [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)、[`CHANGELOG.md`](CHANGELOG.md) | 社区行为准则与逐版本变更记录 |
 | [`docs/faq.md`](docs/faq.md) | 常见问题 |
 | [`docs/modules/`](docs/modules/) | 每个模块的独立文档 |
+
+---
+
+## License
+
+基于 [MIT License](LICENSE) 开源，可自由使用、修改与分发。
 
 <div align="center">
 

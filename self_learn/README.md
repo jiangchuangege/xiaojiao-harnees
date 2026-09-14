@@ -92,6 +92,7 @@
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     A["用户提问"] --> B["大脑推理并调用工具"]
     B --> C["记录层 logs/chat_history.jsonl"]
     B --> D["工具经验 self_learn/tool_skills.txt"]

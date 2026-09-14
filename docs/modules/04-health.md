@@ -115,6 +115,7 @@
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     MO["模型这一轮的输出"] --> L1["第一层 监测 monitor.py<br/>18 类症状 分五组<br/>每个判据独立捕获异常"]
     L1 --> L2["第二层 诊断 diagnose.py<br/>四级严重度 加 四类病因"]
     L2 --> L3["第三层 治疗 heal.py<br/>四级治疗 预防层 会话隔离"]
@@ -154,6 +155,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     ROOT["症状登记表 SYMPTOMS<br/>code 对应 分组 中文名 默认严重度 判据说明"]
     ROOT --> G1["语言组 4 类<br/>复读 乱码 断句 语速突变"]
     ROOT --> G2["逻辑组 4 类<br/>自相矛盾 答非所问 逻辑跳步 事实反转"]
@@ -218,6 +220,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     T["待检测文本"] --> P1{"短语连续重复<br/>默认阈值 3 次"}
     T --> P2{"短块扎堆重复<br/>窗口 300 字 密度不低于 0.30"}
     T --> P3{"字符洪泛<br/>同一符号或同一字符连续出现"}
@@ -264,6 +267,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     TR["本轮的工具轨迹"] --> CH{"结果文本里含载体的固定标记"}
     CH -->|含| SKIP["视而不见<br/>不计入行为类症状<br/>不计入重复与循环判断"]
     CH -->|不含| NORM["按正常结果参与判据"]
@@ -294,6 +298,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     IN["症状列表 加 连续轮数"] --> R1{"含安全类症状<br/>或乱码拒绝连续不少于 3 轮<br/>或显存告警与超时同时出现"}
     R1 -->|是| E["EMERGENCY 急诊<br/>停机 保留现场 强通知"]
     R1 -->|否| R2{"存在资源告警<br/>且某症状连续不少于 3 轮"}
@@ -349,6 +354,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     D["诊断等级"] --> T1["一级 轻度<br/>截断复读 规整文本<br/>校验不过则重做一次 最多一次<br/>界面无提示"]
     D --> T2["二级 中度<br/>清当前会话上下文 长期记忆保留<br/>重置模型状态 用简化后的问法重问<br/>回答里带一句已重新组织"]
     D --> T3["三级 重度<br/>保留现场快照 切备用火种<br/>回滚会话 暂停任务待恢复<br/>半自动 不自动重试"]
@@ -407,6 +413,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     SY["症状 处置 结果"] --> LOG["records.log<br/>logs/health/records.jsonl<br/>一行一条 只追加"]
     LOG --> AN["analyze<br/>次数 分布 治疗成功率 趋势"]
     AN --> TIP["suggest_prevention<br/>每条建议必须带真实数字"]

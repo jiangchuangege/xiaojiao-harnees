@@ -168,8 +168,8 @@
 代码位置索引：`core/autonomy/`、`core/world/explorer.py`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     ROOT["自主性<br/>用户不说也在做事"]
 
     subgraph PARTS["三个后台部件（core/autonomy/）"]
@@ -234,8 +234,8 @@ flowchart TB
 代码位置索引：`core/autonomy/scheduler.py`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph LOOP["调度循环 autonomy-scheduler（每 0.1 秒 tick 一次）"]
         direction TB
         T1["cron 任务：now 超过 _next 就触发"]
@@ -281,8 +281,8 @@ flowchart TB
 代码位置索引：`core/autonomy/learner.py`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     START["学习周期<br/>默认 1800 秒一次"] --> HIST{"history_getter 可用"}
 
     HIST -->|"可用"| TOPIC["字符 2 至 4 元组统计<br/>长词优先 + 互斥抑制 + 停用词过滤"]
@@ -322,8 +322,8 @@ flowchart TB
 代码位置索引：`core/autonomy/watcher.py`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     POLL["盯梢循环<br/>默认 60 秒轮询一次"] --> DUE{"距上次抓取超过 interval"}
     DUE -->|"否"| POLL
     DUE -->|"是"| FETCH{"抓取成功"}

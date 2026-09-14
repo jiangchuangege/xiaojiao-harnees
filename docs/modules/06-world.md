@@ -144,8 +144,8 @@
 代码位置索引：`core/world/perception.py`、`core/world/model.py`、`core/world/judge.py`、`core/world/verifier.py`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     WORLD["世界层<br/>互联网是被理解的对象，不是一次性输入"]
 
     WORLD --> P["感知<br/>perception.py<br/>抓取 快照 比对"]
@@ -188,8 +188,8 @@ flowchart TB
 代码位置索引：`core/world/explorer.py`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     S1["① 推理 infer_topics<br/>从对话历史与世界模型推出值得看的话题"] --> S2["② RAG _rag<br/>主动检索候选，不等用户提问"]
     S2 --> S3["③ 匹对 _match<br/>与用户画像和已有记忆比对"]
     S3 --> S4["④ 校验 _verify<br/>多源交叉 加 时间检验 加 可信度评分"]
@@ -243,8 +243,8 @@ flowchart TB
 代码位置索引：`core/world/judge.py`、`core/world/model.py`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     IN["一条候选：标题 网址 摘要"] --> T["类型与可信度<br/>查世界模型的固定类型表"]
     IN --> Q["质量判定<br/>推广用语 堆砌比 正文链接比 转载标记"]
     IN --> R["相关度判定<br/>与用户画像关键词的重合度"]
@@ -304,8 +304,8 @@ flowchart TB
 代码位置索引：`core/world/firewall.py`、`core/world/quarantine.py`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     SCR["screen：五道闸门逐步执行"] --> D{"综合结论"}
     D -->|"评分达到 accept_min"| ACC["accept<br/>摘掉污染段落后写主记忆"]
     D -->|"命中硬污染或存在阻断项"| QUA["quarantine<br/>干净部分不进主记忆"]
@@ -369,8 +369,8 @@ flowchart TB
 代码位置索引：`core/security/no_delete.py`、`xiaojiao_app.py` 的 `_delete_redline`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     CMD["待执行的命令或文件操作"] --> SEG["① 按分隔符切段<br/>分号 与 竖线 换行 括号"]
     SEG --> QUOTE["② 摘掉引号里的数据<br/>引号里是数据不是动作"]
     QUOTE --> READONLY["③ 只读动词的参数不算动作<br/>grep echo type 的参数值是名字"]
@@ -435,8 +435,8 @@ flowchart TB
 代码位置索引：`core/world/explorer.py` 的 `_loop`、`should_explore_now`、`self_check`、`full_explore`、`organize`
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     LOOP["探索后台循环<br/>xj-world-explorer，默认每 60 秒一次"] --> G1{"explore_enabled 为真"}
     G1 -->|"否"| SKIP1["本轮不做任何事"]
     G1 -->|"是"| G2{"用户空闲超过 300 秒"}

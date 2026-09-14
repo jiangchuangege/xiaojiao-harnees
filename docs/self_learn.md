@@ -50,6 +50,7 @@
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph USE["1 日常使用"]
         U["用户提问"] --> B["大脑推理"]
         B --> T["调用工具"]

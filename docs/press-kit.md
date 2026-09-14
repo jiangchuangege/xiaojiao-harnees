@@ -148,6 +148,7 @@
 
 ```mermaid
 flowchart TB
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     subgraph MODEL["火种层 —— 模型权重，可替换零件"]
         direction LR
         M1["小参数本地模型"]
@@ -180,6 +181,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
     U["用户输入"] --> A["载体：任务理解与拆解"]
     A --> B["载体：装配上下文"]
     B --> B1["记忆检索"]
