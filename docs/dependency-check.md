@@ -44,7 +44,8 @@
 
    ```json
    {"model": "模型名或 test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
-   ```
+   
+```
 
    超时 20 秒，`200` → `(True, "POST /chat/completions 200 OK")`。
 4. 其它情况 → `(False, "HTTP <状态码> (models=<状态码>, chat=<状态码>)")`；连接异常 → `(False, "连接失败: …")`。
