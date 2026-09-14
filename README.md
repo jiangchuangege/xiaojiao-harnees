@@ -97,23 +97,25 @@ python start_xiaojiao.py
 ## 核心设计
 
 ```mermaid
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 400, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
 flowchart TB
     ROOT["用户眼里的「一个助手」"]
     subgraph MODEL["模型层 —— 火种，可替换零件"]
+        direction LR
         M1["4B 本地模型"]
         M2["70B"]
         M3["360B / 云端"]
     end
     subgraph CORE["载体层 —— 智力本体"]
-        C1["任务理解 / 拆解 / 规划 / 判断 / 纠错 / 编排"]
-        C2["记忆 · 工具 · 世界 · 人格 · 健康 · 自主 · 元认知"]
+        direction TB
+        C1["任务理解 · 拆解 · 规划<br/>判断 · 纠错 · 编排"]
+        C2["记忆 · 工具 · 世界 · 人格<br/>健康 · 自主 · 元认知"]
     end
-    ROOT --> MODEL
     ROOT --> CORE
     M1 -.->|"热插拔：换火种不换小焦"| CORE
     M2 -.->|"同一套器官"| CORE
     M3 -.->|"同一套器官"| CORE
-    CORE --> OUT["同一个助手：同一份记忆、同一套工具、同一个性格"]
+    CORE --> OUT["同一个助手<br/>同一份记忆 · 同一套工具 · 同一个性格"]
     style ROOT fill:#2d6cdf,color:#fff
     style CORE fill:#5cb85c,color:#fff
     style MODEL fill:#f0ad4e,color:#fff
