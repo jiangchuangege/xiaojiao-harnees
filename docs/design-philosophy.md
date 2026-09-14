@@ -785,3 +785,5 @@ A 直接答；B 答并标"不太确定"；C 走工具 / 查记忆 / 叫大模型
 > 本文件的图册版见 [`architecture-diagrams.md`](architecture-diagrams.md)。
 > 第十四至二十二节的实现状态以本文件为准；文档与代码不一致时，**以代码为准，并把文档改回来**。
 
+
+> 嵌入编码的可选扩展方向见 [`docs/extensions/embedding-improvements.md`](extensions/embedding-improvements.md)。
