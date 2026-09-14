@@ -94,8 +94,12 @@ SPACE_VERSION = 3              # 向量空间版本：换池化口径就要 +1�
 _MAX_CHARS = 1024              # 小脑 pos_embedding 有 2048 个位置；512 会把"500 字+结尾差异"整段截掉
 _TAIL_WIN = 32                 # 尾窗：末尾多少个字单独算一份均值
 _TAIL_W = 0.35                 # 尾窗在最终向量里的权重（0 = 退回纯均值池化）
-_CHUNK = 96                    # 长文本分块：每块多少字（短文本 = 1 块，行为与不分块完全一致）
-_TAIL_CHUNK_W = 20.0           # 末块额外权重：长文的结尾不该被前面的块稀释（实测扫出来的值）
+# 分块编码：默认开启（有意设计，不是临时写死）
+# 原因：短文本不触发分块（零影响）；长文本尾部检索更准。
+# 首尾偏向不影响最终结果——小脑只负责召回，语义判断由 4B 大脑精排兜底。
+_CHUNK_ENABLED = True
+_CHUNK_SIZE = 96
+_TAIL_CHUNK_W = 20.0
 _CHUNK_MAX = 64                # 最多分多少块（防超长文本把入库拖慢；超出部分截断）
 _CALIB_ALPHA = 0.15            # 公共方向权重 α：把分值区间抬回 retriever.THRESHOLD 认得的量纲
 _BACKEND = {"name": "", "model": None, "c2i": None, "tried": False, "reason": ""}
@@ -238,7 +242,12 @@ def _embed_minigpt(text, model, c2i):
     if not ids:
         return None
     dev = getattr(model.embedding.weight, "device", "cpu")
-    parts = [ids[i:i + _CHUNK] for i in range(0, len(ids), _CHUNK)][:_CHUNK_MAX]
+    # 开关：关掉（或短文本）就整段一块 → 等价于"整段均值池化"，与分块上线前的行为一致。
+    # 注意 n==1 时末块加权那段判据（n > 1）不会命中，所以单块 == 纯均值，不需要另写一条分支。
+    if _CHUNK_ENABLED and len(ids) > _CHUNK_SIZE:
+        parts = [ids[i:i + _CHUNK_SIZE] for i in range(0, len(ids), _CHUNK_SIZE)][:_CHUNK_MAX]
+    else:
+        parts = [ids]
     with torch.no_grad():
         vecs, wts = [], []
         n = len(parts)
