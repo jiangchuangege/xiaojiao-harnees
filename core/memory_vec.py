@@ -35,7 +35,8 @@ _FORBIDDEN = os.path.abspath(os.path.join(_ROOT, "self_learn", "knowledge_vec.js
 
 _DIM = embedder.DIM
 _LOCK = threading.RLock()
-_INDEX = {"loaded": False, "count": 0, "rows": [], "meta": [], "mat": None, "bad": 0}
+_INDEX = {"loaded": False, "count": 0, "rows": [], "meta": [], "mat": None, "bad": 0,
+           "parts": [], "pmat": None, "phas": None}
 
 
 # ------------------------------------------------------------------ 编码 / 解码
@@ -82,12 +83,28 @@ def _rebuild_matrix():
         _INDEX["mat"] = None
         return
     _INDEX["mat"] = np.asarray(_INDEX["rows"], dtype="float32")
+    # 多向量（首/中/尾）快路径：三条平行矩阵 + 一个"哪些行有多向量"的掩码。
+    # 为什么要有掩码：没多向量的行在矩阵里是补零的，点积恒为 0；
+    # 不掩码就会把这些行的分数**抬到 0**（原本可能是负分或低分），凭空制造命中。
+    parts = _INDEX.get("parts") or []
+    if len(parts) != len(_INDEX["rows"]):
+        parts = [None] * len(_INDEX["rows"])
+    has = np.zeros(len(parts), dtype=bool)
+    pm = {}
+    for name in ("head", "mid", "tail"):
+        m = np.zeros((len(parts), _DIM), dtype="float32")
+        for i, pp in enumerate(parts):
+            if pp and pp.get(name):
+                m[i] = pp[name]
+                has[i] = True
+        pm[name] = m
+    _INDEX["pmat"], _INDEX["phas"] = pm, has
 
 
 def reload():
     """从磁盘重建索引。返回装载条数。"""
     with _LOCK:
-        rows, metas, bad = [], [], 0
+        rows, metas, parts, bad = [], [], [], 0
         p = path()
         if os.path.exists(p):
             with open(p, "r", encoding="utf-8", errors="replace") as f:
@@ -155,6 +172,13 @@ def add_memory(text, kind="dialogue", entities=None, ts=None, meta=None, key_tex
         #   没有 key 就只能拿 text 重算，两条向量就会微妙地不一样（检索结果不稳定）。
         # 存下来=让"重建索引"这件事变成**可精确重放**的，代价只是每行多几十字节。
         rec["key"] = text[:400]
+    # 多向量：首/中/尾各存一个（短文本只有一个 full，不写这个字段，行为与旧版一致）
+    try:
+        _parts = embedder.embed_parts((key_text or text).strip() or text)
+        if _parts and "full" not in _parts:
+            rec["vectors"] = {k: _pack(v) for k, v in _parts.items()}
+    except Exception:      # noqa: silent-ok — 多向量算不出来不写，退回单向量（旧行为）
+        pass
     if meta:
         rec["meta"] = meta
     with _LOCK:
@@ -243,6 +267,12 @@ def search_memory(query, top_k=5, threshold=0.0, dedup_text=True):
             mat = _INDEX["mat"]
             qv = np.asarray(q, dtype="float32")
             sims = mat @ qv                              # 一次矩阵乘扫全库
+            # 多向量：整条的分与"首/中/尾"各段的分取最大 → 用哪一段查都能命中。
+            pm = _INDEX.get("pmat")
+            if pm:
+                for nm in ("head", "mid", "tail"):
+                    ps = pm[nm] @ qv
+                    sims = np.where(_INDEX["phas"], np.maximum(sims, ps), sims)
             if top_k and top_k < len(sims):
                 idx = np.argpartition(-sims, top_k)[:top_k * 3]
             else:
@@ -301,3 +331,79 @@ def forget_all():
         if os.path.exists(p):
             os.remove(p)
         _INDEX.update({"loaded": True, "count": 0, "rows": [], "meta": [], "mat": None, "bad": 0})
+
+
+def migrate_multivec(backup_dir=None, dry_run=False):
+    """把库里每条记忆重算一次：`v`（整条向量）+ `vectors`（首/中/尾）。
+
+    ① 为什么必须备份：这是**覆盖写**整个记忆库。写到一半崩了就是全库报废。
+    ② 备份策略：整文件复制到 `logs/backup_before_multivec/<时间戳>/`，**只增不删**；
+      已存在同名目录就换一个时间戳，绝不覆盖旧备份。
+    ③ 只补不删：原有字段（id/text/kind/entities/ts/key）一律原样保留，只动 v 与 vectors。
+    """
+    import shutil
+    import time as _t
+    p = path()
+    if not os.path.exists(p):
+        return {"ok": False, "why": "库文件不存在", "total": 0, "done": 0}
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    bdir = backup_dir or os.path.join(root, "logs", "backup_before_multivec",
+                                      _t.strftime("%Y%m%d_%H%M%S"))
+    rows = _all_rows_raw()
+    total = len(rows)
+    done = longn = 0
+    out = []
+    for r in rows:
+        if not isinstance(r, dict):
+            out.append(r)
+            continue
+        key = str(r.get("key") or r.get("text") or "").strip()
+        if not key:
+            out.append(r)
+            continue
+        v = embedder.embed(key)
+        if not v:
+            out.append(r)
+            continue
+        r = dict(r)
+        r["v"] = _pack(v)
+        parts = embedder.embed_parts(key)
+        if parts and "full" not in parts:
+            r["vectors"] = {k: _pack(x) for k, x in parts.items()}
+            longn += 1
+        else:
+            r.pop("vectors", None)
+        out.append(r)
+        done += 1
+    res = {"ok": True, "path": p, "total": total, "done": done, "long": longn,
+           "dry_run": bool(dry_run)}
+    if dry_run:
+        return res
+    os.makedirs(bdir, exist_ok=True)
+    shutil.copy2(p, os.path.join(bdir, os.path.basename(p)))
+    res["backup"] = bdir
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for r in out:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    os.replace(tmp, p)
+    reload()
+    return res
+
+
+def _all_rows_raw():
+    """读原始行（解析不了的按原文保留）。"""
+    p = path()
+    out = []
+    if not os.path.exists(p):
+        return out
+    with open(p, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except Exception:      # noqa: silent-ok — 坏行原样留着
+                out.append(line)
+    return out

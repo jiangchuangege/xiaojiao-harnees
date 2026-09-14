@@ -65,6 +65,14 @@ RERANK_MAX = 5                # 最多让大脑看几条（再多它也会挑花
 #       （实测「我喜欢蓝色」0.90 vs「我讨厌蓝色」0.88，分差只有 0.02），必须让大脑裁一下。
 #   也就是说：这个闸门按"精排能不能改变结果"来开门，而不是按"跑测试方不方便"。
 RERANK_GAP = 0.10             # top1 与 top2 的分差低于它，才认定"排名含糊"、需要精排
+# 【为什么召回要单独给一道更低的底线 —— 实测抓出来的真 bug】
+#   原来召回直接用 THRESHOLD = 0.6。于是：一条**确实相关但排名靠后**的长记忆，
+#   分只有 0.548，**在精排之前就被滤掉了** —— 大脑连看都没看到它，精排显示「候选不足，跳过」。
+#   实测：问「我上个月参加了什么会」，长记忆排第 5（0.548）被 0.6 拦掉，
+#   最终注入的是毫不相干的短记忆（0.613）。
+#   召回与判定是**两件事**：召回该宽（宁可多捞几条给大脑看），判定才该严。
+#   所以召回用这条更低的底线，收口交给大脑精排；判官没真正筛选时退回原阈值（见下）。
+RERANK_RECALL_THRESHOLD = 0.35  # 宽松召回底线（只用于给大脑看的候选集）
 _RERANK_PROMPT = (
     "下面是一句用户提问和若干条历史记忆。请挑出**能用来回答这个问题**的记忆。\n"
     "判断标准（很重要，请逐条看）：\n"
@@ -144,8 +152,10 @@ def retrieve(query, top_k=None, threshold=None, max_tokens=None,
     max_tokens = int(MAX_TOKENS if max_tokens is None else max_tokens)
     now = time.time() if now is None else float(now)
 
+    # 召回用宽松底线（见 RERANK_RECALL_THRESHOLD 的说明）：先把候选捞全，再让大脑收口。
+    _recall_th = min(float(threshold), float(RERANK_RECALL_THRESHOLD)) if RERANK else threshold
     raw = memory_vec.search_memory(query, top_k=max(top_k * 3, top_k),
-                                   threshold=threshold, dedup_text=True)
+                                   threshold=_recall_th, dedup_text=True)
     vector_ms = (time.time() - t0) * 1000.0      # 纯向量检索这一段（判据：< 100ms）
     if kind:
         raw = [h for h in raw if h.get("kind") == kind]
@@ -170,6 +180,11 @@ def retrieve(query, top_k=None, threshold=None, max_tokens=None,
     _t_rr = time.time()
     hits, rerank_note = rerank(query, hits)
     rerank_ms = (time.time() - _t_rr) * 1000.0
+    # 判官**真的筛过**才算数（说明文本以「保留」开头）；跳过 / 不可用 / 保守放行时，
+    # 把宽松召回带进来的低分候选按原阈值滤掉 —— 否则一关精排，无关记忆全被注入。
+    if not str(rerank_note).startswith("保留"):
+        _strict = [h for h in hits if float(h.get("score") or 0) >= float(threshold)]
+        hits = _strict or hits[:1]
     try:
         if before_n >= RERANK_MIN_HITS:
             import logging

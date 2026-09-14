@@ -471,3 +471,70 @@ def reembed_store(dry_run=False, limit=None):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
     os.replace(tmp, p)
     return out
+
+# --------------------------------------------------- 多向量：首 / 中 / 尾 分开编码
+_MV_MIN = 200          # 短于这个长度的文本只用单向量（短文本没有"首中尾"可分）
+
+
+def embed_parts(text):
+    """把文本按**首 / 中 / 尾**三段分别编码，返回 {"head":…, "mid":…, "tail":…}。
+
+    ① 为什么需要它（实测逼出来的）：单向量里"首尾都要被检索到"是**物理上做不到的** ——
+      尾部要占约 80% 才够把"结尾差异"压到 0.99 以下，那开头就只剩 4%，拿开头检索必失。
+      实测：末块加权 β=20 时，用开头查长记忆 rank=5（查不到）；改成 U 型（首尾各 25% 上下）后，
+      开头查**仍然 rank=5**，而结尾差异又掉回 0.9987（不达标）。两个要求加起来超过 100%。
+      解法只有一个：**一条记忆存多个向量，各管一段**。
+    ② 去掉会怎样：长记忆只能"偏向一头"——要么结尾查得到、开头查不到，要么反过来。
+    ③ 短文本（< _MV_MIN 字）没有"首中尾"可分，返回 {"full": v}，与单向量行为一致。
+    """
+    t = str(text or "")
+    if not t.strip():
+        return {}
+    if len(t) < _MV_MIN:
+        v = embed(t)
+        return {"full": v} if v else {}
+    n = len(t)
+    a, b = n // 3, (2 * n) // 3
+    out = {}
+    for name, seg in (("head", t[:a]), ("mid", t[a:b]), ("tail", t[b:])):
+        v = _embed_plain(seg)
+        if v:
+            out[name] = v
+    return out
+
+
+def _embed_plain(text):
+    """整段编码 —— **不做分块、不做末块加权、不做尾窗**，只走「双向注意力 + 纯均值池化 + α 标定」。
+
+    【为什么段编码必须用这个口径 —— 实测逼出来的】
+      一开始我让三段各走 `embed()`，结果"用开头查"**依然查不到**。
+      根因：`embed()` 里有 `_TAIL_CHUNK_W = 20` 的末块加权，而这个偏置是**为整条文本**设计的；
+      套到 head 段上，head 段的向量就变成由**它自己的结尾**主导 ——
+      "我上个月参加了什么会"明明在段首，却被段尾稀释掉了。
+      段本身已经是按位置切好的，段内再加位置偏置等于把偏置叠加两次。
+      所以：位置偏置只在"整条"这一层用；段这一层用纯均值，让段内每个字等权。
+    """
+    if _resolve_backend() != "minigpt":
+        return _embed_hash(str(text or ""))
+    try:
+        import torch
+        model, c2i = _BACKEND["model"], _BACKEND["c2i"]
+        ids = [c2i.get(ch, 0) for ch in str(text or "")][:_MAX_CHARS]
+        if not ids:
+            return None
+        dev = getattr(model.embedding.weight, "device", "cpu")
+        with torch.no_grad():
+            t = torch.tensor([ids], dtype=torch.long, device=dev)
+            pos = torch.arange(t.size(1), device=dev).unsqueeze(0)
+            h = model.embedding(t) + model.pos_embedding(pos)
+            for layer in model.layers:
+                h = layer(h, src_mask=None)
+            v = h.squeeze(0).mean(dim=0)
+            v = v / (v.norm() + 1e-9)
+            mu = _calib_mu(model, c2i)
+            if mu is not None and _CALIB_ALPHA > 0:
+                v = v + float(_CALIB_ALPHA) * mu
+                v = v / (v.norm() + 1e-9)
+        return [float(x) for x in v.detach().cpu().tolist()]
+    except Exception:      # noqa: silent-ok — 单段失败就退回通用 embed
+        return embed(str(text or ""))
