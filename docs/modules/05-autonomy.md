@@ -378,11 +378,11 @@ flowchart TB
 | `tasks.jsonl` | 每一次任务执行的记录：触发方式、是否成功、字符数、耗时、错误 |
 | `learning.jsonl` | 每一轮学习周期的记录 |
 | `changes.jsonl` | 盯梢发现的变化 |
-| `watch_errors.jsonl` | 盯梢抓取失败 |
-| `notifications.jsonl` | 默认通知落盘（网页端读取显示） |
-| `watchers_state.json` | 每个盯梢对象的 `at`、`status`、`len`，是判断「它还在不在盯」的凭据 |
-| `explorer_state.json` | 世界层当日预算计数（属于世界层，见模块 06） |
-| `autonomy.log` | 跳过与降级的说明，例如哪条任务因何被跳过 |
+| `logs/autonomy/watch_errors.jsonl` | 盯梢抓取失败 |
+| `logs/autonomy/notifications.jsonl` | 默认通知落盘（网页端读取显示） |
+| `logs/autonomy/watchers_state.json` | 每个盯梢对象的 `at`、`status`、`len`，是判断「它还在不在盯」的凭据 |
+| `logs/world/explorer_state.json` | 世界层当日预算计数（属于世界层，见模块 06） |
+| `logs/autonomy/autonomy.log` | 跳过与降级的说明，例如哪条任务因何被跳过 |
 
 ---
 

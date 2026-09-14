@@ -112,7 +112,7 @@
 |---|---|---|
 | G1 | 持续观察，并能判断「变了」与「没变」 | `tools/test_world.py` 第 6 节：首次为 `first_seen`，改动为 `changed` 且带上新增行，不变则不写日志 |
 | G2 | 世界模型落盘，可解释、可审计 | 第 2 至 4 节：写入后读文件断言，类型与可信度来自固定表 |
-| G3 | 坏文件不导致停摆 | 第 10 节：故意写坏 `model.json`，断言不崩溃、能自愈、原文另存为 `.bad` |
+| G3 | 坏文件不导致停摆 | 第 10 节：故意写坏 `logs/world/model.json`，断言不崩溃、能自愈、原文另存为 `.bad` |
 | G4 | 判断结果带可读依据 | `tools/test_world_firewall.py` 的 [D] 组：断言依据不少于 2 条 |
 | G5 | 可疑内容不删除，只留观 | [B] 组与 [E] 组：隔离区文件只多不少 |
 | G6 | 删除动作在载体层被拦下 | `tools/test_no_delete.py` 101 项、`tools/test_redline_integration.py` 40 项 |
@@ -400,8 +400,10 @@ flowchart TB
 | `background` | 后台执行命令 |
 | `write_file` | 写文件 |
 | `edit_file` | 编辑文件 |
-| `move_file` | 移动，带覆盖语义 |
-| `rename_file` | 重命名，带覆盖语义 |
+
+说明：上表只列当前**真实注册**的入口。移动与重命名没有独立工具，
+需要时由 `run_command` 执行对应命令 —— 那同样会经过本模块的删除拦截。
+（早期文档里写过 `move_file` / `rename_file` 两个工具名，代码中并不存在，已更正。）
 
 三条工程约束：
 
@@ -475,12 +477,12 @@ flowchart TB
 
 | 文件 | 职责 | 是否写文件 |
 |---|---|---|
-| `core/world/perception.py` | 抓取、快照、比对、持续观察、热点提炼 | 写 `snapshots.jsonl`、`changes.jsonl` |
-| `core/world/model.py` | 站点表、关系图、话题表、用户画像、判断字段 | 写 `model.json` |
+| `core/world/perception.py` | 抓取、快照、比对、持续观察、热点提炼 | 写 `logs/world/snapshots.jsonl`、`logs/world/changes.jsonl` |
+| `core/world/model.py` | 站点表、关系图、话题表、用户画像、判断字段 | 写 `logs/world/model.json` |
 | `core/world/judge.py` | 站点判断，规则先行、模型补充，输出可读依据 | 不写文件 |
 | `core/world/explorer.py` | 五步闭环、节律、预算、探索台账 | 写 `exploration.jsonl`、`absorption.jsonl`、`index.jsonl` 等 |
-| `core/world/verifier.py` | 判断复核、修正与降权 | 写 `verification.jsonl` |
-| `core/world/firewall.py` | 十类污染、五道闸门、消毒、免疫记忆、冲突处理 | 写 `absorption.jsonl`、`blacklist.json`、`conflicts.jsonl` 等 |
+| `core/world/verifier.py` | 判断复核、修正与降权 | 写 `logs/world/verification.jsonl` |
+| `core/world/firewall.py` | 十类污染、五道闸门、消毒、免疫记忆、冲突处理 | 写 `logs/world/absorption.jsonl`、`logs/world/blacklist.json`、`logs/world/conflicts.jsonl` 等 |
 | `core/world/quarantine.py` | 隔离区：原文留底、状态标记、复审排期 | 写 `quarantine/index.jsonl`、`q_*.json` |
 | `core/security/no_delete.py` | 删除红线守卫 | 不写文件，只判断 |
 

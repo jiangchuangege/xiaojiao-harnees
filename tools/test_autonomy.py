@@ -508,9 +508,19 @@ def test_lifecycle():
     # 宿主接入入口：默认（enabled=False）**一个线程都不起**，这是"用户没点头就不烧额度"的保证
     import core.autonomy as auto_pkg
     off = auto_pkg.start_all({"autonomy": {"enabled": False}})
+    # 【为什么判据从"整个 dict 相等"改成"三个布尔都是 False"】
+    #   原来写的是 `off == {"enabled": False, "scheduler": ..., "learner": ..., "watcher": ...}`
+    #   —— 那是在断言 **dict 的形状**，而不是这条断言的标题所说的"不起任何后台线程"。
+    #   后来 `start_all` 为修一个显示缺陷补了 `tasks / watchers / reason` 三个报告字段
+    #   （宿主启动日志原本因字段名对不上，"定时任务 N 个"恒显示 0），
+    #   这个"形状相等"当场变红 ——**线程确实一个都没起，是断言判错了对象**。
+    #   现在判它真正要保证的事：三个后台器官全没起来。
     check("enabled=False 时 start_all 不起任何后台线程",
-          off == {"enabled": False, "scheduler": False, "learner": False, "watcher": False},
+          off.get("enabled") is False and off.get("scheduler") is False
+          and off.get("learner") is False and off.get("watcher") is False,
           "实际 %r" % off)
+    check("enabled=False 时如实说明原因（不让用户猜）",
+          bool(off.get("reason")), "reason=%r" % off.get("reason"))
     auto_pkg.touch()      # 只上报交互，不该抛（单例调度器会被建出来但没有线程）
     check("enabled=False 时 touch() 不抛", True)
     check("stop_all 对没起过的东西返回 True", auto_pkg.stop_all() ==

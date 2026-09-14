@@ -16,7 +16,7 @@
 
 <div align="center">
 
-# 🧡 小焦 · XiaoJiao
+# 小焦 · XiaoJiao
 
 <br>
 
@@ -148,1306 +148,751 @@ flowchart TB
 
 ---
 
-## ✨ 它能干嘛
+## 功能总览
 
-| 分类 | 功能 | 一句话 |
+小焦是一套本地运行的个人 AI 助手：一个 Flask 进程（`xiaojiao_app.py`）对外提供网页界面与 OpenAI 兼容接口，
+内部由载体层负责记忆、拆解、编排、校验与工具调度，模型层只负责单次生成。
+当前注册工具名 77 个（`core/carrier/capability.py` 的扫描结果），HTTP 路由 70 条，`plugins/` 目录 19 个文件。
+
+| 能力 | 说明 | 入口 |
 | --- | --- | --- |
-| 🧠 | **自研蒸馏小模型** | 大模型蒸馏出属于你自己的小脑（项目核心） |
-| 💬 | **聊天** | 像正常人，不会答着答着就背课文 |
-| 🌐 | **联网搜索** | 把关键信息揉进回答，不甩一堆网址 |
-| 💾 | **记忆自学习** | 你教过它的它会记住，下次能想起来 |
-| 🛠️ | **工具调用** | 让你建文件/写网页/跑命令，它真去执行 |
-| 🤖 | **多步执行** | 自己推理"建目录→写文件→打开"，分步干活 |
-| 🔒 | **危险命令确认** | 碰到 `rm/del/format` 之类，先问你要不要 |
-| 🧩 | **四类插件生态** | Python / Node.js / API / 技能，通吃多生态插件 |
-| 🔌 | **DSH 社区插件兼容** | 小焦**独立**兼容 DSH 功能型插件（工具清单直接转成小焦插件，无需装 DSH）；界面型插件 DSH 用、小焦当模型 |
-| 🧾 | **插件驱动设置模块** | 装了什么插件，设置里就自动出现对应模块（像 DSH） |
-| 🔌 | **DeepSeek Harness 接入** | 提供 /v1，可作为 DSH 的模型接入 |
-| 🖥️ | **DSH 式网页布局** | 顶栏/侧栏/底栏/设置导航，和 DSH 一致 |
-| 💬 | **多会话** | 每个新对话一个会话，左边切换 |
-| 🎛️ | **模型管理** | 顶部下拉切模型，设置里增删模型 |
-| 🔗 | **OpenAI 兼容** | `/v1` 接口，dsh / 任意客户端能接 |
-| 🎬 | **真·文生视频** | 本地 ComfyUI+Wan2.1 真生成（8G按需切换、进度条、刷新不丢） |
-| ⚡ | **多大脑·秒级切换** | llama-swap + keep_warm + 低显存(权重RAM↔显存)，聊天/视频/未来大脑秒切、ComfyUI 进程常驻 |
-| 🎭 | **Agent 预设** | 一键切换人格+大脑+工具开关（presets/，设置里卡片管理，Web 编辑/增删/保存即应用） |
-| 🧠 | **大脑仓库监控面板** | 实时看所有大脑状态/显存/内存，直接切换·调优·添加大脑（`/monitor`，免写码） |
-| 🐱 | **对接 N.E.K.O. 猫娘** | 小焦把**开源 N.E.K.O. 猫娘**融进一键启动(48911/48912)，后台学猫娘与主人的对话，猫娘懂小焦、小焦懂猫娘（`docs/neko.md`） |
-| 👁️ | **视觉模型接入** | `/api/vision` 拍照识图（Qwen2.5-VL 就绪，设 `XIAOJIAO_VISION_URL` 即可开眼） |
-| 💰 | **今日成本看板** | `/cost` 页面实时统计调用次数/本地Token/云端Token/花费/节省，每日清零（`cost_daily.json`） |
-| 🛠️ | **装小焦体检** | N.E.K.O. 插件点「🛠️ 装小焦」→ 秒级环境体检 ✅/❌ 逐条显示已装/缺什么 |
-| 🔌 | **插件万能桥** | `_make_tools_plugin` 自动把 OpenAI/Claude/DSH tool manifest 转成小焦工具（`plugins/*.json`） |
-| 🎙️ | **播客大脑** | `/podcast` 给它一个主题 → 自己写稿+配音+出封面，生成一段真·中文播客（LLM+Chatterbox+SD1.5） |
-| 🕷️ | **网页抓取（内置 Scrapling）** | 抓网页/动态页/接口/批量/登录态/下载任意文件：**原生 13 个工具 1:1 全暴露** + 4 个小焦增强 = 18 个工具（`plugins/scrapling_bridge.py`）|
-| 🛡️ | **漏洞情报（NVD）** | 说「抓最近 7 天的高危漏洞」→ 自动带时间窗查 NVD，**插件层直接出 Markdown 表格**（编号/等级/评分/受影响软件/时间/摘要），不让模型自己拼接口、自己抽字段 |
-| 📚 | **网页抓取 / 文件下载** | 网页、动态页、接口、批量、登录态都能抓；`download` 一句话把 **PDF/EPUB/TXT/ZIP/图片** 等任意文件下到本地（网页连载可抓正文直接存成文件 `books/`）|
-| 📖 | **抓完自动解读** | 抓到内容后大脑按「是什么 / 关键要点 / 怎么用」逐条讲，看不懂的网页也能快速上手 |
-| 🧠 | **用户使用时学习** | 每次你让它干活（抓取/下载…）→ 经验沉淀进小脑 + 向量库 → 下次同类需求检索命中直接复用（越用越会）|
+| 多大脑秒级切换 | 聊天、视频、播客、图像大脑按需热切换，权重在内存与显存之间搬运 | 顶部下拉、`/monitor` |
+| 对话、检索与记忆 | 每个对话一个会话；把检索到的关键信息并入回答；本地向量库长期保存并可精排 | 网页会话栏 |
+| 工具调用与多步执行 | 模型给出调用，载体逐个执行并回显轨迹；危险命令先挂起等待确认 | 下指令、网页确认按钮 |
+| 四类插件 | Python、Node.js、API、技能文档四种形态，放入目录即生效 | `docs/PLUGINS.md` |
+| DSH 社区插件兼容 | 把 DeepSeek Harness、OpenAI、Claude 风格工具清单转成小焦插件 | `docs/dsh-integration.md` |
+| Agent 预设 | 一键切换人格、大脑、工具开关与采样参数 | 顶部预设下拉 |
+| 大脑管理与监控 | 查看状态、显存、内存与任务，直接切换调优，或填写路径加本地模型 | `/monitor`、设置页 |
+| 文生视频 | 本地 ComfyUI 与 Wan2.1 真实生成，带逐步进度 | 网页生成视频入口 |
+| 播客与音乐生成 | 给一个主题自动写稿、配音、拼接、出封面；或按文字描述生成音乐片段 | `/podcast`、工具 `generate_music` |
+| 架构图生成 | 由 Archify 插件完成完整工作流，产出可交互 HTML | 工具组 15 个 |
+| 网页抓取与文件下载 | 网页、动态页、接口、批量、登录态、任意文件，含漏洞情报表格 | 工具组 18 个 |
+| 视觉与语音 | 截图交视觉模型描述；本地语音合成与识别，支持预热 | `/api/vision`、`/api/tts` |
+| 成本看板与持续学习 | 当日调用与花费统计；成功记为用法、失败记为反思并在下次复用 | `/cost`、`self_learn/` |
 
 ---
 
-## 🚀 怎么跑（三行）
+## 安装与启动
+
+### 一键安装器
+
+`python install_all.py`（或双击 `一键安装.bat`）完成环境体检与安装指引。检测项分必需与可选两组，
+报告分开列出：缺可选项只少一个功能，不阻拦启动。
+
+```mermaid
+flowchart TB
+    START(["双击 一键安装.bat 或 python install_all.py"]) --> SCAN["全盘扫描：关键词与盘符探测"]
+    SCAN --> REQ{"必需项齐全"}
+    REQ -->|"否"| BLOCK["列出缺什么与怎么补，不继续安装"]
+    REQ -->|"是"| OK["环境就绪"]
+    MUST["必需：解释器与依赖包、小脑三件套"] --> OK
+    OPT["可选：推理引擎、切换器、视频引擎、桌面客户端、抓取栈"] -.->|"不影响启动"| OK
+    OK --> RUN["python start_xiaojiao.py"]
+```
+
+必需项只有两类：解释器与依赖包（逐个导入验证），以及小脑三件套。可选项缺失时的降级行为：
+
+| 可选项 | 缺失后的行为 |
+| --- | --- |
+| 本地推理引擎 | 文字大脑不可用，仍可用小脑或外接接口 |
+| 模型热切换器 | 没有秒级切换，同一时间只挂载一颗模型 |
+| 视频引擎 | 视频生成不可用，其余功能正常 |
+| N.E.K.O. 桌面客户端 | 没有桌面形象层，启动前询问，答否即跳过 |
+| Scrapling 抓取栈 | 网页抓取与文件下载不可用 |
+
+安装器不写死任何路径：小脑按全盘检索 `*.pth`（体积优先）并配对 `vocab*.pkl`，其余组件按关键词与盘符探测。
+模型可用性按协议连通判定，即真发一次请求（本地看端口，云端看模型列表或对话接口），而不是只看配置里填没填。
+
+### 启动
 
 ```powershell
-cd C:\xiaojiao\xiaojiao harness
 pip install -r requirements.txt
 python start_xiaojiao.py
 ```
 
-自动起聊天大脑(llama-swap:9292) + 网页(5000) + **N.E.K.O. 猫娘(48911/48912 + 后台学习)**，然后打开 `http://127.0.0.1:5000`。
+启动脚本依次拉起模型热切换器、聊天大脑与网页服务，并在询问后决定是否拉起 N.E.K.O. 桌面客户端，
+最后输出本机访问地址。环境变量 `XIAOJIAO_NEKO_AUTO=1` 可跳过询问；`--port 8081` 可换端口。
+换大脑改 `xiaojiao_control.json` 的 `brain.engine`（自动、本地、外接接口、小脑四种）；
+小脑路径用环境变量 `XIAOJIAO_BRAIN_MODEL`、`XIAOJIAO_BRAIN_VOCAB`、`XIAOJIAO_BRAIN_CONFIG` 或配置指定。
 
-> 手把手上手看 [docs/quickstart.md](docs/quickstart.md)。
+### 安装后自检
+
+| 检查项 | 期望结果 |
+| --- | --- |
+| 打开网页 | `http://127.0.0.1:5000` 显示对话界面 |
+| 问身份 | 回答自己是小焦 |
+| 联网提问 | 回答包含检索到的最新信息 |
+| 让建文件 | 文件真实创建并打开 |
+| 顶部切模型 | 下拉可选，切换后不报错 |
+| 探活接口 | `GET /health` 返回成功标记与版本号 |
+
+安装细节与迁移见 [`docs/install.md`](docs/install.md)，五分钟上手见 [`docs/quickstart.md`](docs/quickstart.md)，
+依赖判定规则见 [`docs/dependency-check.md`](docs/dependency-check.md)。
 
 ---
 
-## 🖥️ 用法
+## 界面与入口
 
-### 四种入口
-
-| 想干嘛 | 连哪里 | 说明 |
+| 入口 | 地址 | 说明 |
 | --- | --- | --- |
-| 🖥️ **小焦网页** | `http://127.0.0.1:5000` | 聊天 + 联网 + 记忆 + 工具 + 会话 |
-| 🐱 **N.E.K.O. 猫娘** | Steam 桌面客户端 `N.E.K.O.exe`（不是 web 页面；48911/48912 是它的后端端口） | 桌面 Live2D 猫娘伙伴，自动学你与猫娘的对话（一键启动拉起） |
-| 🔗 **接 dsh / 客户端** | `http://127.0.0.1:5000/v1` | OpenAI 兼容，自动带上小焦人格 + 工具 |
-| 👁️ **视觉识图** | `POST /api/vision` | 截图 → 视觉模型描述（配 XIAOJIAO_VISION_URL） |
-| 💰 **成本看板** | `http://127.0.0.1:5000/cost` | 今日调用/本地Token/云端Token/花费/节省 |
-| ❤️ **探活 / 版本** | `GET http://127.0.0.1:5000/health` | 免鉴权，返回 `{"ok": true, "version": "1.0"}`；给启动脚本 / 监控 / 外部探活用 |
+| 小焦网页 | `http://127.0.0.1:5000` | 对话、联网、记忆、工具、会话管理 |
+| OpenAI 兼容接口 | `http://127.0.0.1:5000/v1` | 自动注入人格、工具与记忆 |
+| 大脑监控面板 | `/monitor` | 大脑状态、显存、内存、切换与调优 |
+| N.E.K.O. 桌面客户端 | `N.E.K.O.exe` | 桌面形象层，后端端口 48911 与 48912 |
+| 成长、成本与播客 | `/growth`、`/cost`、`/podcast` | 学习沉淀、当日开销、播客生成 |
+| 指标与探活 | `GET /metrics`、`GET /health` | 指标计数与免鉴权探活 |
+| 工具接口 | `xiaojiao_tools.py` 的 `POST /api/run` | 供外部脚本直接调用工具 |
 
-### 常用操作
-
-- **切模型**：顶部下拉；或 ⚙️设置 → 模型管理 → 添加。
-- **开/关工具**：右上角「🛠️ 工具」（🟢开 / 🔴关）。
-- **建会话**：左边「＋ 新对话」；点历史会话切换，右上角「⟨」收起侧边栏。
-- **换端口**：`python start_xiaojiao.py --port 8081`，或改 `xiaojiao_control.json` 的 `web_port`。
-- **🐱 N.E.K.O. 猫娘（可选，会先问你）**：`python start_xiaojiao.py` 启动时会问「是否启动 N.E.K.O. 猫娘桌面伙伴？[Y/n]」——选 `n` **不影响小焦启动**（两者不绑死）。要免询问直接启动，设环境变量 `XIAOJIAO_NEKO_AUTO=1`。启动后拉起 Steam 桌面客户端（`N.E.K.O.exe`）+ 后端 `main_server(48911)` + `memory_server(48912)`（后端端口，不是网页入口）+ 后台学习通道。
-- **🧠 小脑（项目核心，必需）**：小焦的自研蒸馏模型。模型路径**不写死**：优先环境变量 `XIAOJIAO_BRAIN_MODEL` → 配置 `brain.xiaojiao.model_path` → 项目目录探测 → **全盘自动探测**（按关键词找 `*.pth`，模型与词表可跨目录配对、体积大的优先）。想换任意自训模型当小脑，改配置或用环境变量指过去即可。
-- **装小焦体检**：N.E.K.O. 插件「装小焦」→ 秒出环境清单 ✅/❌。
-- **成本看板**：打开 `http://127.0.0.1:5000/cost` 看今日花费。
-- **视觉识图**：设环境变量 `XIAOJIAO_VISION_URL=http://127.0.0.1:8082/v1` 后，拍照识图。
+网页布局与 DSH 一致：顶栏放模型与工具开关，侧栏放会话与工作区，底栏放状态，设置页按插件动态生成模块。
+常用操作包括顶部下拉切模型、右上角开关工具、左侧新建与切换会话；切到只读级别后，写文件与执行命令会被载体层拦截。
+界面与接口清单见 [`docs/landing-report.md`](docs/landing-report.md)，接口说明见 [`docs/api.md`](docs/api.md)。
 
 ---
 
-## 🏗️ 原理
+## 模型与大脑
 
-一句话：**用户消息 → 小焦（注入人设 + 取记忆 + 取会话）→ 交给大脑推理 → 大脑决定调工具/联网 → 执行并回显 → 记忆沉淀 + 会话存 → 回答**。
+小焦把不同用途的模型注册成独立大脑，同一时刻只有一颗占用显存，切换是权重级搬运，不重启进程。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart LR
-    subgraph UI["🖥️ 界面层"]
-        direction LR
-        W["小焦 Web<br/>(5000)"]
-        C["/v1 接口<br/>供 dsh"]
-    end
-
-    subgraph CORE["🧡 小焦壳 · 人设 + 记忆 + 编排"]
-        direction TB
-        R["注入人设 + 真实路径"]
-        M["取记忆<br/>xiaojiao_knowledge_memory"]
-        S["取会话<br/>最近 N 条"]
-        P["插件注册表<br/>随插件动态出现"]
-    end
-
-    subgraph BRAIN["🧠 大脑（brain_manager 秒切）"]
-        direction TB
-        B1["聊天大脑 llama-swap<br/>(9292)"]
-        B2["外接 API / 云端"]
-        BM["RUN · WARM · OFF"]
-    end
-
-    subgraph TOOLS["🛠️ 工具 / 插件生态"]
-        direction TB
-        T1["内置：命令/读写/打开"]
-        T2["Python / Node / API / 技能"]
-        T6["联网检索"]
-        T7["文生视频<br/>ComfyUI + Wan2.1"]
-    end
-
-    NEKO["🐱 N.E.K.O. 猫娘<br/>(48911)"]
-
-    W & C --> R
-    R & M & S & P --> BRAIN
-    BRAIN --> TOOLS
-    TOOLS -->|执行结果| AGENT_RES
-    AGENT_RES["💬 回答"]
-    NEKO -->|facts / persona| LEARN
-    LEARN["learn_from_neko<br/>学猫娘对话"] --> M
-
-    classDef ui fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    classDef core fill:#fff7ed,stroke:#fb923c,color:#7c2d12;
-    classDef brain fill:#f3e8ff,stroke:#a78bfa,color:#4c1d95;
-    classDef tools fill:#ecfdf5,stroke:#34d399,color:#064e3b;
-    classDef neko fill:#fce7f3,stroke:#f472b6,color:#831843;
-    class W,C ui;
-    class R,M,S,P core;
-    class B1,B2,BM brain;
-    class T1,T2,T6,T7 tools;
-    class NEKO,LEARN neko;
+    A["意图识别与大脑选择"] --> B["显存调度：休眠 · 唤醒 · 让位"]
+    B --> C["聊天大脑<br/>热切换器托管，卸载与加载按秒计"]
+    B --> D["视频大脑<br/>生成引擎常驻或低显存模式"]
+    B --> E["播客大脑<br/>写稿、配音、封面"]
+    B -.-> F["图像与推理大脑，可继续扩展"]
 ```
 
-### 一条消息在内部怎么走
+要点：
 
-1. **注入人设 + 真实路径**（当前目录/桌面 + 技能插件内容）→ 这就是"小焦人格"生效的原因。
+1. 聊天大脑由热切换器托管，进程常驻，切换等于卸载与加载模型文件。
+2. 视频大脑默认智能温存：生成完成后生成引擎与权重留在内存，聊天大脑上显卡时不终止它；
+   切换到第三颗大脑或闲置超过 15 分钟（`video_service/video_api.py` 的 `_schedule_warm_idle`）才自动释放。
+3. 低显存模式下权重放在内存按需加载，代价是首次推理变慢。
+4. 调度入口是 `brain_manager.py`，新增一颗大脑只需在注册表里加一项。
+5. 单卡放不下两颗都热，因此同一时刻一颗占显存、一颗占内存，搬运粒度是权重而非进程。
 
-2. **取记忆**：从 `xiaojiao_knowledge_memory.json` 找相关历史知识。
+细节见 [`docs/brain-switch.md`](docs/brain-switch.md) 与 [`docs/tools.md`](docs/tools.md)。
 
-3. **取会话**：拿最近 N 条对话当上下文。
+### 大脑仓库监控面板
 
-4. **联网（可选）**：Bing/Sogou 抓关键信息注入。
+网页版大脑总览与操作台，每 2 秒刷新，数据来自大脑注册表、显卡查询、内存查询与各服务自己的状态接口。
 
-5. **大脑推理**：`brain.engine` 决定用本地 llama / 外接 API。模型用 function-calling 想"要不要调工具、调哪个、参数是啥"。
+- 展示：每个大脑的名称、类型、端口、状态、显存、内存、当前任务、是否挂内存。
+- 概览：显存与内存使用率、大脑总数、在线数、温存数。
+- 操作：切换、唤醒、释放、重启、清理温存、清空显存。
+- 调优：逐脑开关常驻、调整卸载优先级、开关挂内存，改动写入配置文件。
+- 添加：填写本地模型文件路径、名称、类型与端口即完成注册。
+- 观测：最近 60 秒的显存与内存趋势，以及操作日志。
 
-6. **执行工具**：模型决定"建目录→写文件→打开"，框架逐个执行（内置/插件），显示工具轨迹；危险命令先挂起、等你点「✅ 确认执行」。
+见 [`docs/monitor.md`](docs/monitor.md)。
 
-7. **记忆沉淀 + 会话存**。
+### 一键加本地模型与可用区间
 
-8. **返回**：模型基于工具结果给一句简短总结。
+设置页提供本地模型入口：填写名称、模型文件路径与上下文长度即自动写入配置并出现在头部下拉中，
+不需要手写代码。编码型大脑的配置见 [`docs/coding-brain.md`](docs/coding-brain.md)。
 
-> 更细的实现见 [docs/architecture.md](docs/architecture.md)。
+`/v1` 兼容 OpenAI，`brain.engine` 可插拔，模型不写死。只要模型支持多轮对话与工具调用就能当小焦的大脑。
+
+| 档次 | 形态 | 规模区间与限制 |
+| --- | --- | --- |
+| 最小可用 | 本地 GGUF 配合本地推理引擎 | 数 B 量级，显存需求低，工具调用稳定性一般 |
+| 推荐 | 本地 GGUF 或任意 OpenAI 兼容端点 | 7B 至 32B 区间，工具调用与多步执行更稳 |
+| 较大 | 云端超大模型，经外接接口接入 | 能力上限最高，不占本地显存，按 token 计费 |
+| 最轻 | 自研小脑 MiniGPT | 完全离线，作为兜底与轻量判断 |
+
+硬件需求随模型规模变化，从数 GB 到数十 GB 显存区间不等，小焦本身不绑定具体硬件规格；
+换模型只改配置，人格、工具、记忆与会话都不变。见 [`docs/model_cn.md`](docs/model_cn.md)。
+小脑是载体里必需的 AI 组件，负责轻量判断、检索与快速兜底，同样可替换。
 
 ---
 
-## 🧩 插件生态 & DeepSeek Harness 社区插件兼容
+## 自研蒸馏小模型 MiniGPT
 
-小焦的**插件生态**支持四种类型，**装了什么插件，设置里就自动出现对应模块**（像 DSH 那样动态）：
-
-| 类型 | 文件 | 是什么 |
-| --- | --- | --- |
-| 🐍 Python | `plugins/*.py` | 任意 Python 工具 |
-| 🟨 Node.js | `plugins/*.js` | JS 插件（小焦起 node 子进程运行，**Python/JS 双生态兼容**） |
-| 🌐 API | `plugins/*.json` | 把任意 HTTP 接口声明成工具 |
-| 📄 技能 | `plugins/*.skill.md` | 加进人设的知识/指令 |
-
-### DeepSeek Harness 社区插件兼容（原理 + 图）
-
-小焦对 DeepSeek Harness 社区插件是**两条完全独立**的兼容路径，**互不依赖**：
-
-- **功能型插件（工具/接口/技能）→ 小焦独立兼容**：小焦内置"插件万能桥"（`_make_tools_plugin`），能直接识别 **DSH / OpenAI / Claude** 风格的 tools 清单，把它们的工具功能转成小焦自己的 `py/js/json/skill` 插件，**在 5000 端口就能用，不需要 DSH harness 接入、不需要额外安装**。例如 [dsh-netdoctor 网络诊断](https://github.com/TYEclipse/dsh-netdoctor)这类工具型插件，功能移植进来小焦即可调用。
-- **界面型插件（皮肤/UI）→ 走 DSH harness**：这类在 DSH 里原生跑，小焦当模型（`/v1`）供它调用；小焦自己的网页也能复用其素材做主题皮肤。
+小焦自造的这颗模型用本地大模型当老师生成对话与问答，蒸馏成一个字符级自回归 Transformer，
+再由载体负责检索与校验。它解决的是本地小模型单次生成能力有限的问题。
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart LR
-    subgraph DSHC["🧩 DSH 社区插件"]
-        direction TB
-        D1["功能型<br/>工具·技能"]
-        D2["界面型<br/>皮肤·UI"]
-    end
-
-    subgraph XJ["🐱 小焦 5000"]
-        direction TB
-        X1["插件万能桥"]
-        X2["_make_tools_plugin"]
-        X3["→ py/js/json/skill"]
-        X1 --> X2 --> X3
-    end
-
-    subgraph DSHW["🖥️ DSH harness"]
-        direction TB
-        DS1["跑界面插件"]
-        DS2["小焦当模型 /v1"]
-        DS1 --> DS2
-    end
-
-    D1 -->|"移植 · 无需 DSH"| X1
-    D2 -->|"界面型原生"| DS1
-
-    classDef dshc fill:#f1f5f9,stroke:#94a3b8,color:#1e293b;
-    classDef xj fill:#fff7ed,stroke:#fb923c,color:#7c2d12;
-    classDef dsh fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    class D1,D2 dshc;
-    class X1,X2,X3 xj;
-    class DS1,DS2 dsh;
+    A["LCCC 中文多轮对话语料"] --> B["转换与清洗<br/>生成训练池"]
+    C["本地大模型按主题生成多轮对话"] --> D["training_data_pool.txt"]
+    E["知识库转问答对"] --> D
+    D --> F["训练"]
+    F --> G["mini_gpt_model.pth"]
+    B --> D
 ```
 
-**一句话**：**功能型 DSH 插件由小焦自己就兼容**（`_make_tools_plugin` 直接识别 DSH/OpenAI/Claude 工具清单，转成小焦插件即可用，**不用装 DSH**）；只有**界面型/皮肤**需要在 DSH 里跑、小焦当模型。
+模型规格全部来自 `model_config.json` 与 `xiaojiao_harness.py` 的定义；实例化后统计参数量为 32,730,273。
+
+| 部件 | 数值 |
+| --- | --- |
+| `vocab_size` | 6305，字符级词表 |
+| `embed_size` | 512 |
+| `num_heads` | 8 |
+| `hidden_size` | 2048 |
+| `num_layers` | 8 |
+| `seq_len` | 64 |
+| 位置嵌入表 | 2048 |
+| 参数量 | 32,730,273 |
+
+结构与训练要点：
+
+1. 输入字符序列经嵌入查表得到 512 维向量，叠加位置编码后进入八层因果 Transformer，
+   每层施加因果掩码，输出头映射到 6305 维并取概率。
+2. `convert.py` 读 LCCC 语料，把每轮对话拆成"用户 与 小焦"的行；清洗脚本用正则过滤不合规行；
+   `massive_distill.py` 按主题调本地大模型生成多轮对话并追加进训练池，问答对由知识库切分得到。
+3. `train_model.py` 扫描训练池收集全部出现字符得到词表；训练用滑动窗口采样避免吃满内存，
+   优化器为 AdamW，损失为交叉熵，混合精度加梯度累积，出现 NaN 自动跳过，支持断点续训。
+4. 每步保存权重，并把真实架构写进 `model_config.json`，加载时不再猜测。
+5. 推理先做语义检索，命中度高时直接复用历史问答，否则用温度、top-k 与重复惩罚自由生成；
+   把 `brain.engine` 设为小脑即可用它当大脑。
+
+细节见 [`docs/xiaojiao_model.md`](docs/xiaojiao_model.md)，数据管线见 [`docs/pipeline.md`](docs/pipeline.md)。
 
 ---
 
+## 插件生态与 DeepSeek Harness 兼容
 
-## 🎨 启用 Archify 画图功能
+装了什么插件，设置页就出现对应模块。插件放在 `plugins/`，重启后加载，无需修改载体代码。
 
-小焦内置了 **Archify 画图插件**（`plugins/archify.py`，15 个工具）：说一句
-「**画一张小焦架构图**」，它会走完整工作流（读技能 → 取指南 → 读 schema → 读示例 → 校验 →
-交付 → 视觉核对），产出可交互的 HTML 架构图/流程图/时序图/数据流图/状态图。
+| 类型 | 文件形态 | 用途 |
+| --- | --- | --- |
+| Python | `plugins/*.py` | 任意 Python 工具 |
+| Node.js | `plugins/*.js` | JavaScript 插件，由 Node 子进程执行 |
+| API | `plugins/*.json` | 把 HTTP 接口声明成工具 |
+| 技能 | `plugins/*.skill.md` | 追加进人设的知识与指令 |
 
-### 1) 安装 Archify
+最小插件示例：
+
+```python
+# plugins/my_time.py：一个最小 Python 插件
+import datetime
+
+
+class MyTimePlugin:
+    def get_tool_descriptions(self):
+        return [{"name": "get_time", "description": "返回当前时间",
+                 "parameters": {"type": "object", "properties": {}}}]
+
+    def execute(self, name, params):
+        return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") if name == "get_time" else None
+```
+
+放入目录并重启后该工具即可被调用，载体扫描到的新工具立即计入能力清单，不需要改动载体代码。
+Python 之外还支持 Node.js 插件、把接口声明成 JSON 工具、以及用技能文档向人设追加知识。
+
+### 与 DSH 社区插件的两条兼容路径
+
+1. 功能型插件由小焦独立兼容：内置的插件万能桥识别 DSH、OpenAI、Claude 风格的工具清单，
+   把其中的工具能力转成小焦自己的插件，在 5000 端口即可调用，不需要安装 DSH。
+2. 界面型插件走 DSH：这类插件在 DSH 中原生运行，小焦以 `/v1` 充当它的模型；
+   小焦自己的网页也可以复用其素材做主题皮肤。
+
+两条路径互不依赖。功能型插件既可以在 DSH 里跑，也可以直接移植进小焦。
+
+### 用 DeepSeek Harness 接入小焦
+
+1. 启动小焦：`python start_xiaojiao.py`。
+2. 在 DSH 的模型设置里添加提供方：Base URL 填 `http://127.0.0.1:5000/v1`，API Key 留空，
+   模型名可任意填写，它只是标识，实际使用哪颗大脑由小焦配置决定。
+3. 在 DSH 中选中该模型，即可以小焦为大脑运行 DSH 的社区插件与工具。
+
+接入后小焦会自动注入人格、工具与记忆。写插件指南见 [`docs/PLUGINS.md`](docs/PLUGINS.md)，可加能力清单见
+[`docs/extend.md`](docs/extend.md)，接入细节见 [`docs/dsh-integration.md`](docs/dsh-integration.md)。
+
+---
+
+## 生成能力：视频、播客、音乐、架构图
+
+### 文生视频
+
+网页中的生成视频入口把一句场景描述交给本地扩散模型，产出真实视频文件，保存在 `videos/`。
+
+1. 提交描述后载体精炼提示词，然后切换视频大脑：聊天大脑卸载，生成引擎启动。
+2. 使用 Wan2.1 的 1.3B FP8 权重，480p 输出，单条耗时按硬件处于数分钟区间。
+3. 进度来自生成引擎的进度接口，网页显示第 N 步与百分比，刷新或切换页面后仍可看到当前进度；
+   生成完成后按需恢复聊天大脑，视频大脑是否常驻由常驻开关与 15 分钟闲置策略共同决定。
+
+配置包括生成引擎目录与模型名，可用环境变量 `XIAOJIAO_COMFY_DIR`、`XIAOJIAO_VIDEO_ROOT` 覆盖。
+见 [`docs/video.md`](docs/video.md)。
+
+### 播客
+
+给一个主题，生成一段中文双人播客：聊天大脑写稿，本地语音模型逐句配音，按对话顺序拼接为单个音频，
+再生成封面图。可设置主题、两位主持人名称、轮数（2 至 8 轮）、风格与是否生成封面；
+产物为音频与封面图，中间文件自动清理。接口为 `POST /api/podcast` 与 `GET /api/podcast/status/<jid>`。
+见 [`docs/podcast.md`](docs/podcast.md)。
+
+### 音乐
+
+调用 `generate_music` 工具，按文字描述生成音乐片段，默认 5 秒，上限 20 秒，产物落盘后在对话中内嵌播放。
+生成前临时释放大脑以腾出显存，完成后恢复。见 [`docs/music.md`](docs/music.md)。
+
+### 架构图
+
+内置 Archify 画图插件共 15 个工具，覆盖读技能、取指南、读 schema、读示例、校验、交付到视觉核对的完整工作流，
+产出可交互的 HTML 架构图、流程图、时序图、数据流图与状态图。
 
 ```powershell
 npm install -g @tt-a1i/archify-dsh
 ```
 
-### 2) 小焦会自动找到它
-
-插件启动时会按顺序自动检测常见安装位置，**一般不用手填**：
-
-1. `~/.dsh/profiles/web/node_modules/@tt-a1i/archify-dsh/skills/archify`
-2. `~/.dsh/profiles/default/node_modules/@tt-a1i/archify-dsh/skills/archify`
-3. `~/AppData/Roaming/npm/node_modules/@tt-a1i/archify-dsh/skills/archify`（Windows npm 全局）
-4. `./vendor/archify`（自备/离线包）
-5. 环境变量 `ARCHIFY_ROOT`
-
-> 判定标准：该目录下存在 `bin/archify.mjs`。命中的位置会写进日志
-> （`logs/xiaojiao.log`：`Archify 安装位置：…（来源：自动检测）`）。
-
-### 3) 自动检测失败时才手填
-
-在 `xiaojiao_control.json` 里加一段（`xiaojiao_control.json.example` 里已有这个字段）：
-
-```json
-"scrapling": {
-  "archify_root": "C:\\Users\\你的用户名\\.dsh\\profiles\\web\\node_modules\\@tt-a1i\\archify-dsh\\skills\\archify"
-}
-```
-
-优先级：**配置 `scrapling.archify_root` → 环境变量 `ARCHIFY_ROOT` → 自动检测**。
-填错了也没关系：插件会打印可读提示（要装什么、该填哪），其余功能照常工作，不会静默失效。
-
-### 4) 重启小焦即可用
-
-重启后对小焦说「**画一张小焦架构图**」（或让它先跑 `archify_doctor` 体检环境）。
-产物在 `logs/diagrams/*.html`，可以直接用浏览器打开，支持主题切换/缩放/搜索。
-
-> 提示：画图是**多步工作流**，同一工具连续失败 2 次会停下并把报错原文给你（不再空转）；
-> 单个画图任务还有 240 秒时间预算，超时会如实汇报进度。
-
-## 🧩 玩法（给它加能力）
-
-
-小焦最值钱的一点：**能力能随便加**。往 `plugins/` 丢一个 `.py`，它就多一个工具。
-
-```python
-# plugins/my_time.py
-import datetime
-
-class MyTimePlugin:
-    def get_tool_descriptions(self):
-        return [{"name": "get_time", "description": "看下现在几点",
-                 "parameters": {"type": "object", "properties": {}}}]
-    def execute(self, name, params):
-        if name == "get_time":
-            return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return None
-```
-
-放进去 → 重启 → 小焦就能用 `get_time`。
-
-**能加什么**（照抄改一下）：计算器、翻译、查 IP、二维码、汇率、备忘录、定时提醒、读系统信息、生成图片、网页摘要…… 想加多少加多少。
-
-> 光看不练不过瘾？直接去 **[docs/extend.md](docs/extend.md)（玩法大全 · 加工具加插件）**。
+插件按顺序自动检测常见安装位置，命中位置写入日志：DSH 各 profile 下的插件技能目录、Windows 全局 npm 目录、
+项目内的 `vendor/archify`，最后读环境变量 `ARCHIFY_ROOT`；判定标准是该目录下存在 `bin/archify.mjs`。
+自动检测失败时，在 `xiaojiao_control.json` 中填写 `scrapling.archify_root`，优先级为配置项、环境变量、自动检测。
+产物在 `logs/diagrams/` 下，可直接用浏览器打开。画图轮有 240 秒时间预算（`xiaojiao_app.py` 的轮次预算），
+同一工具连续失败 3 次会被熔断，并把最后一次报错原样返回。
 
 ---
 
-## 📁 项目结构
+## 抓取与下载：内置 Scrapling
 
-**核心三件套**（最常用）：`xiaojiao_app.py`（Web+Agent+人格+工具+记忆+会话+`/v1`）、`start_xiaojiao.py`（一键启动）、`xiaojiao_control.json`（操控文件：人设/大脑/工具/参数/端口）。
+内置抓取栈覆盖普通网页、浏览器渲染的动态页、接口 JSON、批量列表、需要登录态的页面，以及任意文件的下载，
+抓取结果会被解读并按需存成本地文件。
 
-**蒸馏训练线**：`convert.py` → `clean_data.py` / `prepare_clean_pool.py` → `massive_distill.py` / `distill_and_train.py` / `auto_distill_loop.py` → `train_model.py` → `xiaojiao_harness.py`（MiniGPT + 推理）。
+### 工具清单
+
+原生工具与 Scrapling 官方命名一致，共 13 个。
+
+| 工具 | 用途 |
+| --- | --- |
+| `make_request`、`get` | 抓取普通网页，纯 HTTP，最快；`get` 为中文场景别名 |
+| `bulk_get` | 批量抓取，含去重、限速、退避与失败隔离 |
+| `fetch`、`bulk_fetch` | 浏览器渲染抓取动态页，支持单条与批量 |
+| `stealthy_fetch`、`bulk_stealthy_fetch` | 隐身抓取，单条与批量 |
+| `open_session`、`open_request_session`、`close_session`、`list_sessions` | 会话管理：浏览器会话、HTTP 会话、关闭与列出 |
+| `session_fetch`、`session_make_request` | 用已开会话抓取或发请求，保持登录态与 cookie |
+| `screenshot` | 页面截图，支持整页，产物在 `media/screenshot/` |
+
+增强工具与聚合入口合计 5 项，插件对外共 18 个工具：`scrape_with_selector` 按 CSS 选择器抓取并支持选择器相似度找回；
+`download` 下载任意文件（文档、压缩包、图片、音视频，产物在 `downloads/`）；
+`collect_vulnerabilities` 按时间窗查询漏洞库并直接输出 Markdown 表格；`save_to` 让抓取的正文直接存成文件到 `books/`；
+`browser_session` 是聚合入口，用一个工具通过动作参数走完打开、抓取、截图与关闭。
+
+### 工作流程
+
+```mermaid
+flowchart TB
+    A["指令：抓取某网址或下载某文件"] --> B["抓取意图识别：抓取与下载动词加网址"]
+    B --> C["安全闸门：内网拦截 · robots 判定 · 同域限速"]
+    C --> D["执行抓取：普通请求 · 渲染 · 隐身 · 批量 · 登录态"]
+    D --> E["取回正文、文件或截图"]
+    E --> F["直接展示并附解读"]
+    E --> G["按需存本地"]
+    F --> H["经验沉淀：成功记用法，失败记反思"]
+    H -.->|"同类需求直接复用"| B
+```
+
+插件内部由五个组件分工：安全闸门负责内网拦截、robots 判定、限速与日志脱敏；熔断器在连续失败后暂停并自动恢复；
+批量管理器负责去重、退避与代理轮换；选择器管理器负责自适应找回；通道层提供进程内直连与 MCP 两种方式。
+
+### 常用说法与产出位置
+
+说"抓一下某网址"走 `get`，正文加解读直接展示；说"抓取两个网址"走 `bulk_get`，自动去重与限速；
+要渲染动态页走 `fetch`，要绕验证走 `stealthy_fetch`；说"抓这一章存成某文件"走 `get` 配合 `save_to`，
+正文落到 `books/`；说"把这个文档或压缩包下载下来"走 `download`，文件落到 `downloads/`；
+说"开个会话，登录后抓"或"给网页截整页图"走 `browser_session` 与 `screenshot`，截图落到 `media/screenshot/`；
+说"抓最近 7 天的高危漏洞"走 `collect_vulnerabilities`，直接给出 Markdown 表格。
+
+抓取结果直接展示原文，再附一段按"是什么、要点、怎么用"组织的解读，避免正文被摘要压缩掉。
+
+### 稳定性设计
+
+1. 抓取意图直通：识别抓取与下载动词加网址后直接构造工具调用，避免小模型自行选错工具。
+2. 异步桥接：同步的网页线程与异步抓取库之间用专用事件循环线程加线程池衔接，超时用带时限的取结果强制取消；
+   通道层提供进程内直连（默认，错误信息完整）与 MCP 两种方式。
+3. 安全闸门：内网与保留地址在域名解析后再校验一次，同域请求限速每秒 1 次，UA 不伪装爬虫，日志中的密钥与 cookie 一律打码。
+4. robots 判定按 RFC 9309：只有确实读到禁止规则才拦截，拿不到规则时放行；
+   需要例外时可在单次请求中声明忽略，或把 `scrapling.allow_robots_skip` 设为 `true`。
+5. 批量策略：先去重，再逐条限速，遇限流按指数退避，支持代理轮换，单个地址失败不影响其它地址。
+6. 熔断自愈与内容标准化：同一工具连续失败三次后暂停并给出中文提示，随后自动恢复，安全拦截不计入熔断；
+   返回结构统一，HTML 转 Markdown，标题标记归一化，超长 JSON 截断，错误一律为可读中文。
+
+实测数据来自 `tests/stress/` 套件：内网与危险写法 21 种全部拦截，同域两次请求间隔 1.00 秒而跨域互不阻塞，
+设 6 秒超时对 10 秒慢站 7.2 秒返回中文超时提示，连续失败三次触发熔断并在 32 秒后自动恢复，
+连续 20 次调用后 Python 堆净增 0.10MB，批量抓取 4 个不同域名实测 1.12 URL/s，
+开启并发后 3 个域名耗时从 6.20 秒降到 0.92 秒。
+
+### 配置与依赖
+
+`xiaojiao_control.json` 的 `scrapling` 段可配置通道模式、MCP 地址、浏览器路径、代理池、同域限速、
+单次超时、重试次数与熔断阈值及恢复时间；同名环境变量可覆盖，包括 `XIAOJIAO_SCRAPLING_MODE`、
+`XIAOJIAO_SCRAPLING_TIMEOUT`、`XIAOJIAO_SCRAPLING_RATE`、`XIAOJIAO_SCRAPLING_CHROME` 等。
+运行指标可通过 `/api/scrapling/metrics` 查看。依赖安装：
+
+```powershell
+python -m pip install "scrapling[fetchers]" markdownify mcp
+```
+
+`scrapling[fetchers]` 是抓取内核，`markdownify` 负责正文转 Markdown，`mcp` 仅在 MCP 通道下需要；
+浏览器渲染需要 Chromium，可自备 Chrome 并填写路径。
+
+本功能用于抓取公开可访问的网页与文件，使用者需自行遵守目标站点条款与当地法律，
+不得用于绕过付费墙、破解版权内容或任何违法用途，由此产生的后果由使用者承担。
+原理、测试清单与排错见 [`docs/scrapling.md`](docs/scrapling.md)。
+
+---
+
+## 记忆与持续学习
+
+记忆分三层：会话上下文取最近若干轮；长期记忆以 JSON 保存；向量检索库提供跨会话召回，
+召回结果再由载体做一次精排，判断哪条真正相关。
+
+实测（`tools/test_memory_recall.py`，20 条记忆跨 180 天、5 个问题）：
+
+| 指标 | 实测 | 门槛 |
+| --- | --- | --- |
+| 命中率 | 5 / 5，即 100% | 不低于 80% |
+| 答案使用率 | 5 / 5，即 100% | 不低于 70% |
+| 向量检索延迟 | 单次均在数毫秒量级 | 低于 100ms |
+| 含精排的总延迟 | 本次运行平均 198.4ms，最大 569.4ms | 低于 800ms |
+
+精排只在判官可用时触发，本次运行 5 个问题中触发 3 个；判官不可用时一律放行，不会因为精排故障而丢弃用户记忆。
+持续学习的链路是：交互写入对话历史，反馈记录点赞、低分与更正；成功的经验记为功能用法，失败生成反思；
+两者写入小脑知识库与向量库，下次同类需求检索命中后直接复用，抓取类任务的经验同样进入这条链路。
+落盘位置为 `logs/chat_history.jsonl`、`logs/feedback.jsonl`、`self_learn/little_brain_knowledge.txt`
+与 `knowledge_vec.json`；数据积累足够后可用 `train_model.py` 让小模型本身也吸收，
+训练前备份、训练后验证，异常可回退。见 [`docs/self_learn.md`](docs/self_learn.md)。
+
+---
+
+## N.E.K.O. 猫娘桌面伙伴
+
+桌面形象层使用独立的开源项目 N.E.K.O.。它不是小焦自带的组件，需要本地部署；小焦做的是集成：
+启动时按询问把本地的 N.E.K.O. 服务拉起，并在后台学习猫娘与主人的对话，让猫娘这边的记忆被小焦读到，
+小焦的说话风格也能反馈过去。猫娘负责桌面形象与陪伴，小焦负责本地大脑、工具与记忆，两边互相学习；
+桌面形象层为可选组件，不部署也不影响小焦使用。
+
+```mermaid
+flowchart LR
+    subgraph NEKO["N.E.K.O.：本地部署的开源项目"]
+        APP["桌面客户端<br/>界面与形象"]
+        MS["后端服务 48911"]
+        MEM["记忆服务 48912"]
+        APP --> MS
+        APP --> MEM
+    end
+    subgraph LEARN["学习通道"]
+        LF["读取记忆与人格数据<br/>默认每 5 分钟一次"]
+    end
+    subgraph XJ["小焦：本地大脑与工具"]
+        KNOW["记忆库"]
+        BRAIN["大脑、工具、人格"]
+        GEN["视频、播客、音乐"]
+    end
+    MS --> LF
+    MEM --> LF
+    LF --> KNOW --> BRAIN --> GEN
+```
+
+要点：
+
+1. 一键拉起：启动脚本拉起桌面客户端，并连带后端服务 48911 与 48912，同时启动后台学习通道；
+   主入口是桌面客户端，两个端口是后端服务端口，不是网页入口。
+2. 学习内容：`learn_from_neko.py` 读取猫娘的记忆与人格数据，写成小焦记忆库中的条目，
+   默认每 5 分钟执行一次，也可手动触发。
+3. 启动询问：脚本用 `[Y/n]` 询问是否同时启动，答否或处于非交互环境则不拉起，小焦照常运行；
+   设置 `XIAOJIAO_NEKO_AUTO=1` 可跳过询问。两边互不依赖。
+4. 桌面插件：N.E.K.O. 侧的插件目录提供环境体检与安装指引，逐条显示已装项与缺失项。
+
+见 [`docs/neko.md`](docs/neko.md)。
+
+---
+
+## Agent 预设
+
+预设把一个会话需要的人格、大脑选择、工具开关与采样参数打包成一个 JSON 文件，放在 `presets/` 下，
+在网页顶部选择后立即生效，不需要重启。
+
+| 字段 | 含义 |
+| --- | --- |
+| `name` | 下拉中显示的名称 |
+| `role` | 人格设定，决定以什么身份回答 |
+| `brain` | 使用哪颗大脑与上下文长度 |
+| `capabilities` | 工具开关，涵盖联网、记忆、工具执行与上下文轮数 |
+| `behavior` | 温度与单次输出上限 |
+
+仓库内置 6 个预设文件，示例覆盖默认、编程助手与闲聊三类。设置页提供编辑、复制、新建与删除，
+保存即应用；相关接口为 `/api/presets` 系列。见 [`docs/presets.md`](docs/presets.md)。
+
+---
+
+## 文件与模型互调一览
+
+```mermaid
+flowchart LR
+    U["用户"] --> W["小焦网页 :5000"]
+    DSH["DeepSeek Harness"] -->|"/v1"| W
+    W --> A["agent_run"]
+    A --> M["记忆召回"]
+    A --> S["联网检索"]
+    A --> BR["大脑：本地模型、外接接口、自研小脑"]
+    BR --> TOOLS["工具与插件<br/>命令、读写、打开<br/>Python、Node.js、接口、技能"]
+    TOOLS -->|"执行结果"| A
+    W -->|"生成视频"| VID["卸载大脑后启动生成引擎"] --> OUTV["videos 目录下的视频"]
+    W -->|"自动记录"| LOG["对话历史与反馈"] --> KNOW["小脑知识库"] --> TRAIN["重训入口"]
+    ST["start_xiaojiao.py"] --> W
+    ST --> BR
+    ST --> NEKO["N.E.K.O. 桌面客户端"]
+    NEKO -->|"每 5 分钟"| KNOW
+    DSHPLUG["DSH 功能型插件"] -->|"插件万能桥"| TOOLS
+    TOOLS <-->|"抓取、下载、截图"| SD["抓取插件：安全闸门与双通道"]
+    SD --> SOUT["正文与解读、本地文件、截图、漏洞表"]
+    SD -.->|"抓完有解读"| A
+    SOUT -->|"成功记用法，失败记反思"| KNOW
+    W --> COST["成本看板"]
+```
+
+一条消息在载体内部的走向：先注入人格与真实路径（当前目录、桌面路径与技能插件内容），
+再从记忆库取相关历史知识、取会话上下文的最近若干轮、按需联网检索并注入关键信息；
+交给大脑推理后由模型决定是否调用工具、调用哪个、参数是什么，载体逐个执行并展示工具轨迹，
+命中危险命令模式时挂起等待确认；最后记忆沉淀、会话保存，返回模型基于工具结果给出的总结。
+
+调用关系概括：用户或 DSH 进入网页或 `/v1`，交给 `agent_run`，由它召回记忆、按需联网、选择大脑，
+再由模型给出工具调用并逐个执行；生成视频时切换到视频大脑；抓取与下载走内置抓取栈，
+结果原样展示并附解读，经验进入持续学习链路。
+
+实现细节见 [`docs/architecture.md`](docs/architecture.md) 与 [`ARCHITECTURE.md`](ARCHITECTURE.md)，
+图册见 [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md)。
+
+---
+
+## 安全说明
+
+1. 危险命令拦截：命中删除、格式化、关机、注册表删除、强制结束进程等模式，或向系统目录写文件时，先挂起等待确认。
+2. 禁止删除用户文件：拒删由载体层硬拦截，与权限开关无关；停用插件只从加载列表移除，不移除文件。
+3. 只读访问级别：切换到只读后，写文件与执行命令被拦截，模型仍可读取与检索。
+4. 本地离线：模型、记忆、会话与知识库都在本机；联网检索是显式功能，可关闭。
+5. 抓取与插件安全：内网与保留地址拦截、robots 判定、同域限速、日志脱敏，结果只落本地；
+   插件的执行能力与本地代码同等，只安装可信来源的插件。
+
+`xiaojiao_control.json` 是本地明文文件，把密钥写进去一旦误传即等同公开。读取顺序为环境变量
+`XIAOJIAO_API_KEY` 优先，其次控制文件中的对应字段。
+
+```powershell
+$env:XIAOJIAO_API_KEY="sk-your-key"          # 仅当前窗口有效
+setx XIAOJIAO_API_KEY "sk-your-key"          # 永久生效，需要重开窗口
+```
+
+控制文件中字段留空时环境变量生效，或显式写成 `env:XIAOJIAO_API_KEY` 表示读取该环境变量。
+自查是否残留明文密钥（输出打码，有命中时退出码为 1）：
+
+```powershell
+python tools/check_secrets.py
+python tools/check_secrets.py --fix-hint
+```
+
+若密钥曾在明文文件中出现过，建议在服务商后台作废并重新生成：文件即使被忽略，
+只要曾被提交，版本历史中仍然保留明文。审计结论见 [`docs/security-audit.md`](docs/security-audit.md)。
+
+---
+
+## 依赖与运行开销
+
+运行本体需要 Python 3.10 以上，依赖以 Web 框架、网络库与深度学习框架为主，完整清单见 `requirements.txt`。
+主导资源占用的是底座模型本身：规模从数 B 到数十 B 的模型对应数 GB 到数十 GB 的显存或内存区间，载体本身开销较小。
+生成类能力在需要时临时占用显存，用完后释放或按常驻策略保留；全程本地运行，模型、记忆与会话都在本机。
+轻量配置可在无独立显卡的环境下以最小模型运行，此时生成类能力不可用。依赖判定见 [`docs/install.md`](docs/install.md)。
+
+---
+
+## 测试与质量
+
+测试套件在 `tests/stress/`，全部为真实调用：真发网络请求、真开会话、真触发熔断、真查漏洞接口、真打对话接口。
+
+| 套件 | 用例数 | 通过 | 失败 | 通过率 |
+| --- | --- | --- | --- | --- |
+| 离线单元 | 92 | 92 | 0 | 100% |
+| 应用逻辑 | 104 | 104 | 0 | 100% |
+| 安全 | 18 | 18 | 0 | 100% |
+| 联网 | 35 | 34 | 0 | 100%，1 项按当天数据侧跳过 |
+| 合计 | 249 | 248 | 0 | 100% |
+
+全量耗时 88.1 秒。另有实机验收 36 项、界面样式 25 项、预设生效 13 项，全部通过。
+
+```powershell
+python tests/stress/run_all.py --offline        # 离线三套件，约 6 秒
+python tests/stress/run_all.py                  # 含联网，约 90 秒
+python tests/stress/live_check.py               # 实机验收，需要服务在运行
+python tests/stress/stability_30m.py --minutes 30 --interval 10   # 无头压测
+```
+
+文档与图同样由脚本把关：`python tools/test_docs_audit.py` 核对文档要义（当前 42 项全部通过），
+`python tools/check_mermaid.py --all` 自检仓库全部 Mermaid 图（当前 134 个图、0 个问题），
+`python tools/check_docs.py` 校验文档与代码一致性（当前 68 个文档、1600 余项断言、0 错误），
+`python tools/check_principles.py` 执行 12 条项目约定审计。覆盖矩阵、未覆盖项与压测门槛见
+[`docs/testing-report.md`](docs/testing-report.md) 与 [`tests/stress/README.md`](tests/stress/README.md)。
+
+---
+
+<a id="️-已知限制如实说不藏"></a>
+
+## 已知限制
+
+能力边界分两类：一类是工程尚未完成，一类是当前技术路线的固有上限，分开说明比笼统表态更有用。
+
+### 小脑向量化
+
+小脑是字符级模型，词表 6305、八层、512 维。它的向量在主题级别可用，在精细语义上不足。
+下表数据来自 `tools/test_embedder_long.py`，可复现。
+
+| 指标 | 阈值 | 实测 | 结论 |
+| --- | --- | --- | --- |
+| 3 字差 1 字 | 低于 0.95 | 0.8663 | 达标 |
+| 10 字差 1 字 | 低于 0.98 | 0.9554 | 达标 |
+| 50 字差 1 字 | 低于 0.99 | 0.9885 | 达标 |
+| 500 字差 1 字 | 低于 0.99 | 0.9995 | 不可达 |
+| 近义对 | 高于 0.8 | 0.814 | 达标 |
+| 反义对 | 低于 0.5 | 0.904 | 不可达 |
+| 无关对 | 低于 0.3 | 0.570 | 不可达 |
+
+不可达项的成因是数学边界而非实现缺陷：池化把多个位置压成一个向量，长文本改动 1 个字最多让结果偏离 2/√N，
+N 为 500 时余弦相似度约 0.996 已是理论上限；字面高度重叠的相反表述在字符级模型看来是同一串字符，不是相反的意思；
+无关对阈值 0.6 之下同样受限于字符级表示。要突破只能改变表示方式，例如分块存多条，或换成语义级编码器。
+载体的补偿方式是分工：小脑负责召回，宁可多召回几条；大脑负责精排，从候选中剔除反义与无关记忆。
+精排实现见 `core/retriever.py` 的 `rerank` 相关逻辑；判官不可用时一律放行，不会因为精排不可用而丢记忆。
+
+### 其他边界
+
+- 复读检测的流式路径未在生产环境出现过现场：`tools/test_bug3_repeat.py` 用 20 个用例覆盖了它，
+  但真实对话中还没有触发过模型持续复读的现场。这是"测过"与"见过"的区别，如实标注。
+- 联网用例依赖当天数据：漏洞聚合用例在当天接口未返回相应数据时跳过，全量 248/249 中的那 1 项跳过即为此；
+  无密钥时该类接口限流较严，集成环境偶发限流时同样按跳过处理，既不计通过也不计失败。
+- 数学公式渲染依赖外部资源，完全离线时降级为显示公式源码，不报错也不白屏。
+- 重依赖链路未进入持续集成：视频、播客、音乐三条链路依赖显卡与外部模型，安装器端到端
+  （真实下载与解压）也未自动化，风险是更换机器时才会发现问题。
+- 小脑训练与蒸馏管线未纳入回归测试；小脑推理与记忆检索目前只有手工验证，无自动化单测。
+- 浏览器端渲染只做元素级与表格级断言，没有像素级对照；压测脚本具备 30 分钟无头运行能力，但尚未执行过完整 24 小时长跑。
+
+---
+
+## 项目结构
+
+核心三件套：`xiaojiao_app.py`（网页服务、载体逻辑、人格、工具、记忆、会话与 `/v1`）、
+`start_xiaojiao.py`（一键启动）、`xiaojiao_control.json`（操控文件，含人格、大脑、工具、参数与端口）。
+
+蒸馏训练线：`convert.py` 到 `clean_data.py` 与 `prepare_clean_pool.py`，
+再到 `massive_distill.py`、`distill_and_train.py`、`auto_distill_loop.py`，
+然后 `train_model.py`，最后由 `xiaojiao_harness.py` 承载推理。
 
 ```
 xiaojiao-harness/
-├── xiaojiao_app.py               # ★ Web + 人格 + 工具 + 记忆 + 会话 + /v1
-├── start_xiaojiao.py             # ★ 一键启动（llama-swap + 大模型 + Web + N.E.K.O. 猫娘）
-├── brain_manager.py              # ★ 多大脑·秒级切换调度中心(RUN/WARM/OFF)
-├── learn_from_neko.py            # ★ 学 N.E.K.O. 猫娘与主人的对话 → 小焦记忆库
-├── xiaojiao_tools.py             # ★ 工具接口(5003)
-├── xiaojiao_harness.py           #   自建小模型 (MiniGPT) + 推理
-├── train_model.py                #   训练自建小模型
-├── massive_distill.py            #   大模型 → 多轮对话蒸馏
-├── distill_and_train.py          #   知识库 → 问答对蒸馏
-├── auto_distill_loop.py          #   无间蒸馏循环
-├── convert.py                    #   LCCC → 训练池
-├── clean_data.py                 #   语料清洗
-├── prepare_clean_pool.py         #   训练池清洗
-├── ai_generate.py                #   手动投喂
-├── validator.py                  #   数据校验
-├── web_monitor.py                #   蒸馏监控面板
-├── plugins/                      #   插件（memory/search/weather/scrapling_bridge/…）
-├── downloads/                    #   download 工具下载的文件（PDF/EPUB/TXT/ZIP/图片…任意文件）
-├── books/                        #   抓取正文存这里（save_to 参数）
-├── docs/                         #   一堆说明
-├── xiaojiao_control.json         # ★ 操控文件：人设/大脑/工具/参数/端口
-├── xiaojiao_config.json.example
-├── requirements.txt
-├── .gitignore
-├── LICENSE
-└── README.md
+├── xiaojiao_app.py           # 网页服务、载体逻辑、人格、工具、记忆、会话、/v1
+├── start_xiaojiao.py         # 一键启动
+├── brain_manager.py          # 多大脑调度中心
+├── xiaojiao_tools.py         # 工具接口服务
+├── xiaojiao_harness.py       # 自研小模型定义与推理
+├── learn_from_neko.py        # 读取 N.E.K.O. 的记忆与人格数据
+├── train_model.py            # 小模型训练
+├── massive_distill.py        # 大模型到多轮对话的蒸馏
+├── web_monitor.py            # 蒸馏监控面板
+├── app_monitor.py            # 大脑监控接口
+├── xiaojiao_log.py           # 统一日志与脱敏
+├── core/                     # 载体各层实现
+├── plugins/                  # 插件，共 19 个文件
+├── presets/                  # 人格预设
+├── self_learn/               # 学习沉淀与向量库
+├── video_service/            # 视频生成服务
+├── podcast_service/          # 播客生成服务
+├── music_service/            # 音乐生成服务
+├── docs/                     # 文档，共 57 个 Markdown 文件
+├── tests/stress/             # 真实调用测试套件
+├── tools/                    # 质量检查与诊断脚本
+├── xiaojiao_control.json     # 操控文件
+└── requirements.txt
 ```
+
+模块清单见 [`docs/modules/`](docs/modules/)，整体概览见 [`docs/project-overview.md`](docs/project-overview.md)。
 
 ---
 
-## 📚 文档
+## 版本记录
 
-| 文档 | 干啥的 |
-| --- | --- |
-| [**架构说明**](ARCHITECTURE.md) | **模块职责 / 请求生命周期 / 插件机制 / 扩展点 / 已知限制**（含 5 张原理图）|
-| [**贡献指南**](CONTRIBUTING.md) | 分支与提交规范、硬性约束、怎么加插件 |
-| [快速上手](docs/quickstart.md) | 五分钟跑起来 |
-| [安装](docs/install.md) | 从零装 |
-| [工具说明](docs/tools.md) | 内置工具 + 危险命令 |
-| [自研蒸馏小模型](docs/xiaojiao_model.md) | 小模型原理/架构/训练/画图 |
-| [玩法大全 · 加工具加插件](docs/extend.md) | 各种能加的能力 |
-| [插件](docs/PLUGINS.md) | 写插件指南 |
-| [抓取插件详解](docs/scrapling.md) | 18 工具 / 原理 / 配置 / 指标 / 排错 |
-| [**安全审计报告**](docs/security-audit.md) | SSRF/robots/限速/穿越/脱敏/命令端点 的审计结论与修复记录 |
-| [**测试与稳定性报告**](docs/testing-report.md) | 覆盖矩阵、通过率、**未覆盖项清单**、30 分钟无头压测方法 |
-| [**完整落地报告**](docs/landing-report.md) | 架构实况、**功能全清单**、**Web UI 设计审查**、测试与安全数据、后续路线 |
-| [发版与回滚](docs/release-and-rollback.md) | 怎么发版、怎么回滚、网络被墙怎么办 |
-| [压力测试](tests/stress/README.md) | 怎么跑、覆盖什么、CI 门槛 |
-| [接口](docs/api.md) | OpenAI 兼容接口 |
-| [常见问题](docs/faq.md) | 排坑 |
-| [模型](docs/model_cn.md) | 模型与壳 |
-| [架构](docs/architecture.md) | 实现细节 |
-| [持续学习 · 自学习](docs/self_learn.md) | 小脑跟着大脑学（自动记录/打勾/学习）|
-| [训练管线](docs/pipeline.md) | 怎么训练小模型 |
-| [播客大脑](docs/podcast.md) | 给主题→写稿+配音+封面，生成播客 |
-| [N.E.K.O. 猫娘集成](docs/neko.md) | 桌面 Live2D 猫娘伙伴，学猫娘与主人的对话 |
-| [多脑秒切](docs/brain-switch.md) | 聊天/视频/播客/图像 大脑按需切换 |
-| [内置 Scrapling 抓取](docs/scrapling.md) | **小焦内置 Scrapling**：原生 13 工具 1:1 + 4 增强 = 18 个工具（网页/接口/批量/登录态/下载任意文件/NVD 漏洞表）/原理/配置/安全边界/架构图 |
-| [依赖检测逻辑](docs/dependency-check.md) | 模型/依赖为何按"协议连通"检测 |
-| [更新记录](CHANGELOG.md) | 每个版本改了什么 |
-| [行为准则](CODE_OF_CONDUCT.md) | 社区友好共识 |
-
----
-
-## 🧰 能当什么用
-
-| 场景 | 怎么用 |
-| --- | --- |
-| 🤖 **私人 AI 助理** | 帮你查资料、记事情、提醒、总结，都在本地 |
-| 💻 **编程助手** | 让它写代码、改文件、跑命令、建项目结构 |
-| ✍️ **写作 / 翻译** | 写文案、润色、中英互译，调个插件就能干 |
-| 📚 **RAG 知识库** | 给它喂资料，结合记忆，问啥答啥 |
-| ⚙️ **自动化脚本** | 用 `xiaojiao_tools.py` 的 `/api/run`，后台直接调工具干活 |
-| 🧩 **接进工作流** | `/v1` 是 OpenAI 兼容的，套进任何 Agent 框架 / 机器人 |
-
----
-
-## 🧠 自研蒸馏小模型（项目的核心）
-
-小焦真正自己造的，是这套**知识蒸馏出属于你的小模型**的管线。思路很直接：用一个"聪明的老师"（本地大模型）生成对话和知识，然后**蒸馏**成一个**你自己的小模型**（`MiniGPT`，字符级 + 因果 Transformer）。这就叫"**把大模型的脑子，提炼成你自己的小脑**"。
-
-### 蒸馏管线（大模型 → 小模型）
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart LR
-    subgraph src["📚 数据源"]
-        direction LR
-        A["LCCC 语料"] --> B["convert / clean_data<br/>→ 训练池"]
-    end
-
-    subgraph teach["🎓 老师 = 本地大模型（蒸馏）"]
-        direction LR
-        C["本地大模型"] --> D["按主题生成多轮对话"]
-        C --> E["知识库 → QA"]
-        D --> F["training_data_pool.txt"]
-        E --> F
-    end
-
-    subgraph stu["🧠 学生 = 自研小模型"]
-        direction LR
-        F --> G["train_model.py 训练"]
-        G --> H["mini_gpt_model.pth"]
-    end
-
-    classDef src fill:#f1f5f9,stroke:#94a3b8,color:#1e293b;
-    classDef teach fill:#fef9c3,stroke:#eab308,color:#713f12;
-    classDef stu fill:#f3e8ff,stroke:#a78bfa,color:#4c1d95;
-    class A,B src;
-    class C,D,E,F teach;
-    class G,H stu;
-```
-
-### 小模型长什么样（MiniGPT）
-
-字符级的自回归 Transformer，数值从 `model_config.json` 读，训练时存下真值、避免猜错：
-
-| 部件 | 数值 |
-| --- | --- |
-| `vocab_size` | **6305**（字符词表） |
-| `embed_size` | **512** |
-| `num_heads` | **8** |
-| `hidden_size` | **2048** |
-| `num_layers` | **8** |
-| `seq_len` | **64** |
-| 参数量 | ≈ **几千万**（消费级 GPU 能训） |
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart TD
-    subgraph INP["📥 输入"]
-        A["输入字符序列"] --> B["Embedding 查表 → 512 维"]
-        B --> C["+ 位置编码"]
-    end
-    subgraph TRF["🧠 因果 Transformer（8 层）"]
-        direction TB
-        D["8× TransformerEncoderLayer<br/>d_model=512 · nhead=8 · ff=2048<br/>每层加因果掩码"]
-    end
-    subgraph OUT["📤 输出"]
-        direction TB
-        E["输出头 Linear → 6305"]
-        F["softmax → 下一个字符概率"]
-        G["取最高者拼回去，循环生成"]
-    end
-    C --> D --> E
-    E --> F --> G
-
-    classDef inp fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    classDef trf fill:#f3e8ff,stroke:#a78bfa,color:#4c1d95;
-    classDef out fill:#ecfdf5,stroke:#34d399,color:#064e3b;
-    class A,B,C inp;
-    class D trf;
-    class E,F,G out;
-```
-
-- **因果掩码**：每个位置只能看前面的字，不能偷看后面——这是早期"输出乱码"的根因，修好后才正常。
-- **用 EncoderLayer + mask**，不是 DecoderLayer，避免 cross-attention 没遮罩导致的"上帝视角"。
-- **推理带语义检索兜底**：先在训练语料里找最像的历史问答，命中度高就直出（更靠谱），否则才让模型自由生成。
-
-### 原理：为什么"蒸馏"能成？
-
-知识蒸馏的核心，是让**学生**去模仿**老师**的**软输出**（概率分布），而不只是盯着"标准答案"（hard label）。大模型回答时其实是一堆"每个词的概率"，这份**软知识**比"就选对的词"信息量大多了。让学生去拟合这份分布，老师肚子里"不确定但接近"的东西就传过去了。
-
-放到小焦这里：大模型生成了海量对话和 QA，这些就是**老师软知识的载体**。学生（小模型）学的任务是"**给定上文，预测下一个字**"——它一遍遍拟合老师生成的那些数据分布，就把"怎么像人说话/怎么答这类问题"学了个大概。**参数少、学得有限，但足够"像人聊天"**。这就是"大模型蒸馏 → 自研小脑"成立的原因。
-
-### 训练目标（学什么）
-
-训练目标就是**交叉熵**：让模型对"下一个字"的预测概率，尽可能贴近语料里的真实下一个字。因为它是一个字一个字往前接的（**自回归**），所以只要每个位置都预测得准，整句话就顺了。
-
-### 推理（怎么用）
-
-- **字符自回归**：一个个吐字，接成一句话。
-- **采样策略**：`temperature=0.8`（别太死板）+ `top_k=50`（只在前 50 个候选中挑）+ `重复惩罚 1.2`（别老重复）。
-- **检索兜底**：先到训练语料里找**最像的历史问答**，相似度高就直出（更靠谱、能对上话）；低了才退回模型自由生成。
-
-### 它是怎么被做出来的（从代码看）
-
-把这段流程走一遍，你就知道"做出来"是什么意思：
-
-1. **喂料（主料是 LCCC）** — `convert.py` 读 **LCCC**（中文多轮对话语料，`LCCC-base_train/test/valid.json`），把每一轮"用户 @小焦"拆成一对，去掉中文之间的空格，逐行写成 `用户 <话> 小焦 <话>` 的训练池文本。**LCCC 就是它最基础的"粮食"**。
-
-2. **清洗** — `clean_data.py` / `prepare_clean_pool.py` 用正则（`^用户 .+ 小焦 .+`）过滤不合规行、剔掉垃圾词，得到干净的 `training_data_pool_clean.txt`。
-
-3. **蒸馏再来一勺** — `massive_distill.py` 调本地大模型，按 `日常聊天/Python/角色扮演…` 等 **40+ 主题**生成 3–5 轮对话，追加进训练池；`distill_and_train.py` 把知识库切成问答对。这是"老师喂给学生的菜"。
-
-4. **建词表** — `train_model.py` 的 `build_vocab` 扫描训练池，收集**所有出现的字符**（字符级），得到 `vocab_size=6305` 的词表 `vocab.pkl`。
-
-5. **搭模型** — `MiniGPT`：字符级因果 Transformer，`embed=512, heads=8, hidden=2048, layers=8, seq=64`，**用 `TransformerEncoderLayer` + 因果掩码**（Pre-LN / batch_first），约**几千万参数**。
-
-6. **训练** — `train_model.py`：`LazyTextDataset` 按 `seq_len//2` 步长滑动窗口采样（不吃满内存）；`AdamW`（8-bit 优先）、`CrossEntropyLoss`、`amp` 混合精度 + `梯度累积`；出现 `Loss=NaN` 自动跳过；支持从 `.pth` **断点续训**。
-
-7. **存好** — 每步存 `mini_gpt_model.pth`，并把**真实架构写进 `model_config.json`**（加载不再猜），`vocab.pkl`、`progress.txt` 一并落盘。
-
-8. **推理** — `xiaojiao_harness.py`：先**语义检索**（在训练池里找最像的历史问答，命中高直出），否则用 `temperature + top_k + 重复惩罚` 让模型自由生成。
-
-> 一句话：**LCCC 当主食，大模型蒸馏当加餐，字符级小 Transformer 负责把它们"吃成"自己的说话方式。**
-
-**怎么接入**：把 `xiaojiao_control.json` 的 `brain.engine` 设为 `xiaojiao`，就用这颗自研小脑当大脑；设 `auto`/`llama` 则优先用更大的底座模型（**接入来辅助它**，让答案更好）。
-
-> **这颗蒸馏出来的小模型就是主角**，大模型是接入来帮它的。原理/架构/训练讲得更细、图更多请看 [docs/xiaojiao_model.md](docs/xiaojiao_model.md)；整条数据管线看 [docs/pipeline.md](docs/pipeline.md)。
-
----
-
-## 🛡️ 安全说明
-
-- **危险命令会拦**：碰到 `rm / del / format / shutdown / reg delete / taskkill /f`，或往系统目录写文件，小焦会先挂起、等你点「✅ 确认执行」才执行。
-- **本地离线**：模型、记忆、会话都在你机器上，不上传。
-- **插件要自己信得过**：插件的 `execute` 能做的事 = 你代码能做的事，别装来路不明的插件。
-- **密钥用环境变量**：云端 API Key 优先从环境变量 `XIAOJIAO_API_KEY` 读，控制文件里可以留空（见下）。
-
-### 🔑 密钥用环境变量（推荐）
-
-`xiaojiao_control.json` 是**本地明文**文件。密钥写在里面，一旦被误发、误传、误提交就等于公开了。
-小焦读密钥的顺序是 **环境变量 `XIAOJIAO_API_KEY`  >  控制文件 `brain.api.api_key`**，
-所以推荐把密钥放进环境变量，控制文件里留空：
-
-```powershell
-# Windows：只在当前窗口有效（先试一下）
-$env:XIAOJIAO_API_KEY="sk-你的密钥"
-
-# Windows：永久生效（以后新开的窗口都有）
-setx XIAOJIAO_API_KEY "sk-你的密钥"
-```
-
-```
-# Linux / macOS
-export XIAOJIAO_API_KEY=sk-你的密钥
-```
-
-控制文件里两种写法都支持：
-
-```json
-"api_key": "",                       // 留空最省事 —— 环境变量已经优先生效
-"api_key": "env:XIAOJIAO_API_KEY"    // 或者显式写「去读这个环境变量」
-```
-
-自查还有没有明文密钥残留（输出会打码；退出码 1 = 有命中）：
-
-```powershell
-python tools/check_secrets.py              # 扫控制文件/配置文件及其副本
-python tools/check_secrets.py --fix-hint   # 顺带打印迁移步骤
-```
-
-> ⚠️ 密钥已经在明文文件里躺过，就建议去服务商后台**作废并重新生成**一把。
-> 即使文件被 `.gitignore` 忽略，只要它曾被提交过，Git 历史里就仍然留着明文。
-
----
-
-## 📈 版本记录
+仓库对外保留 v1.0 这一个版本，旧的发布与标签已清理。
 
 | 版本 | 内容 |
 | --- | --- |
-| **v1.0（当前，唯一版本）** | **首个正式版**：🕷️ 内置 Scrapling 抓取 18 工具（原生 13 个 1:1 + `get`/`scrape_with_selector`/`download`/`collect_vulnerabilities`）+ 🛡️ NVD 漏洞情报（强制时间窗、直接出表格）· 🧠 小脑必需化（路径不写死、全盘自动探测）· 🛠️ 安装器检测分级 · 🐱 猫娘询问式启动 · 📊 指标与观测（`/metrics` + JSON + 落盘）· 🪵 统一日志与全链路脱敏 · 🧹 会话自动回收（TTL / 空闲 / LRU）· ⚡ 批量并发可配置 · 🧪 压力测试 + 五道质量闸门进 CI · 🎨 代码高亮 / 表格排版 / 深色模式底色修复 · 🔎 检索词清洗与搜索质量（不再搜出词典词条）|
+| v1.0 | 内置抓取栈 18 工具与漏洞情报聚合；小脑必需化并支持全盘探测；安装器检测分级；桌面客户端改为询问式启动；指标与观测；统一日志与全链路脱敏；会话自动回收；批量并发可配置；压力测试与五道质量闸门进入持续集成；代码高亮、表格排版与深色模式修复；检索词清洗与搜索质量修复 |
 
-> 仓库对外只保留 **v1.0** 这一个版本（旧的 Release / tag 已清理）；完整变更记录见 [CHANGELOG.md](CHANGELOG.md)。
-
----
-
-## 🎯 更多玩法（进阶）
-
-- **多底座轮换**：在设置里加好几个模型，顶部下拉一键换，人格不变。
-- **多工具串着用**：写两个插件，让小焦自己决定"先查天气，再按天气提醒你添衣"。
-- **接外部服务**：把你公司/个人网站的接口做成插件，小焦就能用。
-- **当命令行**：`xiaojiao_tools.py`(5003) 的 `/api/run`，脚本里 `requests.post` 就能让它跑命令、写文件。
-- **给记忆喂料**：往 `xiaojiao_knowledge_memory.json` 塞资料，结合联网，它更懂你。
-- **换人格**：改 `xiaojiao_control.json` 的 `role`，想让它是"助手/老师/翻译/猫咪"都行。
+完整变更记录见 [`CHANGELOG.md`](CHANGELOG.md)，发版与回滚见 [`docs/release-and-rollback.md`](docs/release-and-rollback.md)。
 
 ---
 
-## ⚙️ 依赖与运行开销
+## 设计理念
 
-小焦跑起来的家底不多：Python 3.10+，装 `flask`、`requests`、`torch` 几个库。真正吃资源的是那个**底座大模型**（几个 GB 的显存/内存）。壳本身很轻。它**全程本地、离线**，模型、记忆、会话都在你机器上，不往上传。
-
----
-
-## ⚠️ 已知限制（如实说，不藏）
-
-小焦的能力边界有些是**工程没做到**，有些是**当前技术路线的固有上限**。分清楚这两类，比笼统说一句"还在完善"有用。
-
-### 小脑向量化（记忆检索的地基）
-
-小脑是**字级**模型（词表 6305、8 层、512 维）。它的向量在**主题级**够用，在**精细语义**上不行。实测数据（`tools/test_embedder_long.py`，可复现）：
-
-| 指标 | 目标 | 实测 | 结论 |
-| --- | --- | --- | --- |
-| 3 字差 1 字 | < 0.95 | **0.8663** | 达标 |
-| 10 字差 1 字 | < 0.98 | **0.9554** | 达标 |
-| 50 字差 1 字 | < 0.99 | **0.9885** | 达标 |
-| 500 字差 1 字 | < 0.99 | **0.9995** | **不可达**（见下） |
-| 近义对 | > 0.8 | **0.814** | 达标 |
-| 反义对 | < 0.5 | **0.904** | **不可达**（见下） |
-| 无关对 | < 0.3 | **0.570** | **不可达**（低于阈值 0.6） |
-
-- **500 字差 1 字为什么做不到 < 0.99**：池化把 N 个位置压成一个向量，改 1 个字最多让结果偏离 `2/√N` —— N=500 时 cos ≈ 0.996 已是**理论上限**。这是固定维度池化的数学边界，不是实现问题。要突破只能改表示方式（分块存多条）。
-- **反义为什么分不开**："我非常喜欢这个方案"和"我非常讨厌这个方案"共享 10/11 个字，字级模型看到的是"同一串字"，不是"相反的意思"。要过 < 0.5 只能换语义级编码器。
-- **载体怎么补**：小脑负责**召回**（宁可多召回几条），大脑负责**精排**。检索出 top-K 之后由大脑判断哪条真相关，把反义/无关的剔掉（实现见 `core/retriever.py` 的 `rerank`，实测能正确滤掉「问喜欢什么颜色 / 记忆说讨厌蓝色」这类反向记忆）。判官不可用时**一律放行**，绝不因为精排挂了就丢用户的记忆。
-
-### 其它
-
-- **复读检测的流式路径在生产环境没被触发过**：`tools/test_bug3_repeat.py` 20/20 覆盖了它，但真实对话里还没出现过模型持续复读的现场。这是"测过"和"见过"的区别，如实标注。
-- **联网用例依赖当天数据**：NVD 漏洞聚合那一条会按当天返回的 CPE 数据跳过（全量 248/249 里的那 1 个跳过就是它）。
-- **数学公式靠 CDN**：KaTeX 从 jsdelivr 加载。完全离线时降级为显示 LaTeX 源码（不报错、不白屏）。
+小焦把智力看作系统属性而不是模型属性：拆解、组装、调度、校验、记忆与工具编排由载体完成，
+模型只负责当前这一小块的生成。由此得到三条工程结论：换模型不需要改配置也不丢数据；
+能力可以靠加插件继续扩展而不靠重训模型；每一层都有日志与测试可查。
+其余判断与依据，包括世界是互联网、自主性边界、模型健康系统、精度叠加、速度优化、多智能体协作、
+自我改进、全局工作空间、小脑定位、意图理解交给模型、并发与状态一致性、可观测性等章节，
+见 [`docs/design-philosophy.md`](docs/design-philosophy.md)；六个无限见 [`docs/six-infinity.md`](docs/six-infinity.md)；
+项目缘起见 [`docs/about.md`](docs/about.md)。
 
 ---
 
-## 🎭 想让它换一种性格？
+## 路线图
 
-小焦的"性格"就在 `xiaojiao_control.json` 的 `role` 里。那句"你是小焦……"就是它的人设。你想让它当**老师**、**翻译**、**猫咪**、**私人助理**，就把这句改成你要的样子——它马上换性格，其他（工具、记忆、联网）都不变。改完重启，或直接在网页 ⚙️设置里改。
+- 把底座模型放到更容易获取的分发位置；完善插件模板，补充更多内置能力。
+- 改进会话与记忆的可视化，接入更多底座模型与生成类大脑。
+- 给小脑推理与记忆检索补最小单测，这两处改动最频繁、回归代价最高。
+- 给安装器增加预演模式后纳入持续集成，并补跑一次 30 分钟无头压测。
+- 为漏洞接口配置免费密钥，摆脱较严的限流。
 
----
-
-## 🧪 装完怎么确认它好了？
-
-跑起来后，从简单到复杂各试一下，就知道它有没有在状态：
-
-| 试什么 | 期望 |
-| --- | --- |
-| 网页能开 | `http://127.0.0.1:5000` 显示聊天界面 |
-| 问"你是谁" | 它说自己是小焦 |
-| 让它联网 | 回答里混进搜到的最新信息 |
-| 让它建个文件 | 真在桌面上建了，还打开 |
-| 顶部切模型 | 下拉能选、切换不报错 |
+升级方向详见 [`docs/upgrade-plan.md`](docs/upgrade-plan.md)。
 
 ---
 
-## 🤝 想一起改 / 加东西？
+## 贡献
 
-小焦是开源的，随便 fork。想给它加能力，最省事的就是**写插件**（看 docs/extend.md）；想改壳本身，就改那几个主文件。提 issue / PR 都欢迎。别改坏 `.gitignore` 里那些数据文件就行。
+小焦以 MIT 协议开源，欢迎在插件生态、持续学习、DSH 社区接入、主题皮肤、训练管线等方向参与。
 
----
+- 快速上手：[`docs/quickstart.md`](docs/quickstart.md)
+- 报告缺陷：使用仓库中的缺陷模板提交，说明现象、环境与日志
+- 提出功能：使用功能模板提交，或直接写一个插件（[`docs/extend.md`](docs/extend.md)）
+- 提交代码：Fork 后提 Pull Request，规范见 [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- 行为规范与更新记录：[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)、[`CHANGELOG.md`](CHANGELOG.md)
 
-## 🗺️ 接下来想做的
-
-- 把底座模型也放到更好下载的地方（去掉现在"模型不在仓库里"的尴尬）。
-- 更强的插件模板、更多内置玩法。
-- 更好的会话/记忆可视化。
-- 接入更多底座模型。
-
----
-
-## 🔗 如何用 DeepSeek Harness 接入小焦
-
-小焦暴露一个 **OpenAI 兼容接口**（`/v1`），DeepSeek Harness（DSH）可直接把它当**模型**接入，从而用上小焦的人格 + 工具 + 记忆，并在 DSH 里跑它的社区插件。
-
-### 步骤
-1. **启动小焦**：`python start_xiaojiao.py`（llama-swap:9292 接管大脑 + Web 5000）；脚本会**先问一句是否同时启动猫娘宠物**（答 `y` 才拉起 N.E.K.O. 48911/48912，答 `n` 或非交互式则不拉，小焦照常启动）。
-2. 在 DSH 的 **设置 → 模型** → 添加一个模型提供方：
-   - Base URL：`http://127.0.0.1:5000/v1`
-   - API Key：留空（本地免鉴权）
-   - 模型名：填任意名字即可（如 `xiaojiao`、`deepseek`、`coder`…——小焦 `/v1` 兼容 OpenAI，模型名只是标识，实际用哪颗大脑由小焦配置决定）
-3. 在 DSH 里**选这个模型**，就可以用小焦当大脑，跑 DSH 的社区插件 / 工具 / 皮肤。
-
-### 说明
-- 小焦 `/v1` 会自动注入"我是小焦"人格 + 工具 + 记忆。
-- **DSH → 小焦（单向）**：DSH 的社区插件在 DSH 里跑、用小焦当模型（`/v1`）。
-- **小焦 → DSH（独立兼容）**：小焦自己也能**直接兼容 DSH 功能型插件**——用内置插件万能桥把 DSH/OpenAI/Claude 的工具清单转成小焦插件（`py/js/json/skill`），在 5000 端口就能用，**不需要装 DSH**。
-- 小焦**自身也有插件生态**（Python / Node.js / API / 技能），可独立使用。
-
-> 更细的图文见 [docs/dsh-integration.md](docs/dsh-integration.md)。
+不要在提交中改动被忽略的数据文件与运行态产物。
 
 ---
 
-## 🧠 持续学习（小脑跟着大脑学）
+## License
 
-**别人靠算力，小脑靠文本。** 小焦内置「持续学习」：每次对话**自动记录**，点 👍/被更正就**自动把这条"功能用法"写进小脑知识库**（越长越强）——小脑检索命中即可复用，越来越强，且不靠算力。
-
-- **自动记录**：答完自动写 `logs/chat_history.jsonl`。
-- **自动打勾**：每条回复带 👍/👎，点一下即反馈。
-- **自动学习**：被赞/高星/被更正 → 写进 `self_learn/little_brain_knowledge.txt` + 检索池。
-- **向量数据库**：`self_learn/vstore.py`（零依赖 Embedding+余弦，对标 Chroma/FAISS）——学到的**功能用法/反思**向量化入 `knowledge_vec.json`，小脑检索**先向量命中即复用**，比字符检索更准。
-- **反思机制**：用户 👎/更正 → 生成"为什么没答好/下次怎么改"的反思 → 存知识库 + 向量库（小脑越用越强）。
-- **能重训**：数据够了 `train_model.py` 让**小模型本身**也吸收（备份+验证+回退）。
-
-> 原理/图/如何优化 详见 [docs/self_learn.md](docs/self_learn.md)。
+基于 [MIT License](LICENSE) 开源，可自由使用、修改与分发。
 
 ---
 
+## 致谢
 
-## 🗺️ 文件 / 模型 互相调用一览
+小焦的多大脑切换、视频与播客生成、抓取与桌面形象层都建立在下列开源项目之上。
 
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart LR
-    subgraph INPUT["🧑‍💻 用户 / 接入"]
-        direction LR
-        U["用户"]
-        DSH["DeepSeek Harness"]
-    end
-
-    subgraph WEB["🖥️ 小焦 Web (5000)"]
-        direction TB
-        W["xiaojiao_app.py"]
-        A["agent_run"]
-        COST_PAGE["💰 /cost 看板"]
-    end
-
-    subgraph AGENT["🧡 小焦壳"]
-        direction TB
-        M["💰 记忆 recall<br/>xiaojiao_knowledge_memory"]
-        S["🌐 联网 search"]
-        TOOLS["🔧 工具 + 插件<br/>run_command/write_file<br/>py·js·api·skill"]
-    end
-
-    subgraph BRAIN["🧠 大脑（选一个 · 可插拔）"]
-        direction TB
-        BIG["本地大模型 ~4B 起<br/>llama-swap:9292 / 任意 GGUF"]
-        CLOUD["云端 API<br/>任意 OpenAI 兼容模型"]
-        SMALL["自研小脑 MiniGPT<br/>检索 + 生成"]
-    end
-
-    subgraph GEN["🎬 生成大脑（按需切换 · 8G 互斥）"]
-        direction TB
-        VID["video_service<br/>卸大脑 → ComfyUI → 恢复"]
-        COMFY["ComfyUI(8188) + Wan2.1-FP8"]
-        OUTV["videos/*.mp4 真视频"]
-    end
-
-    subgraph LEARN["🎓 持续学习"]
-        direction TB
-        LOG["logs/chat_history.jsonl"]
-        FB["logs/feedback.jsonl"]
-        KNOW["little_brain_knowledge.txt"]
-        TRAIN["train_model.py 重训"]
-    end
-
-    subgraph SCRAPE["🕷️ 抓取插件 scrapling_bridge（18 工具）"]
-        direction TB
-        SD["抓取意图识别 → 安全闸门<br/>SSRF·robots·限速·熔断·批量策略"]
-        SDUAL["双通道<br/>inproc 直连 / MCP(stdio·http)"]
-        SOUT["产出<br/>正文+📖解读 · books/*.md<br/>downloads/*.epub · 网页截图 · NVD 漏洞表"]
-        SD --> SDUAL --> SOUT
-    end
-
-    NEKO["🐱 N.E.K.O. 猫娘<br/>(48911/48912)"]
-    ST["▶ start_xiaojiao.py"]
-    DSHPLUG["🔌 DSH 功能型插件<br/>工具/接口/技能"]
-
-    U --> W
-    DSH -->|/v1| W
-    W --> A
-    A --> M & S
-    A --> BRAIN
-    BRAIN --> TOOLS
-    TOOLS -->|执行结果| A
-    W -->|🎬| VID
-    VID --> COMFY --> OUTV
-    W -->|自动记录| LOG
-    LOG --> FB --> KNOW --> TRAIN
-    ST --> W & BIG
-    ST --> NEKO
-    NEKO -->|每5分钟| KNOW
-    DSHPLUG -->|插件万能桥<br/>_make_tools_plugin| TOOLS
-    TOOLS <-->|"抓取 / 下载 / 截图"| SD
-    SOUT -->|"📖 解读"| A
-    SOUT -->|"经验沉淀(成功=用法/失败=反思)"| KNOW
-    W --> COST_PAGE
-
-    classDef in fill:#f1f5f9,stroke:#94a3b8,color:#1e293b;
-    classDef web fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    classDef ag fill:#fff7ed,stroke:#fb923c,color:#7c2d12;
-    classDef br fill:#f3e8ff,stroke:#a78bfa,color:#4c1d95;
-    classDef gen fill:#ecfdf5,stroke:#34d399,color:#064e3b;
-    classDef lrn fill:#fef9c3,stroke:#eab308,color:#713f12;
-    classDef neko fill:#fce7f3,stroke:#f472b6,color:#831843;
-    classDef scr fill:#eef2ff,stroke:#6366f1,color:#312e81;
-    class U,DSH,DSHPLUG in;
-    class W,A,COST_PAGE web;
-    class M,S,TOOLS ag;
-    class BIG,CLOUD,SMALL br;
-    class VID,COMFY,OUTV gen;
-    class LOG,FB,KNOW,TRAIN lrn;
-    class NEKO,ST,BR neko;
-    class SD,SDUAL,SOUT scr;
-```
-
-**调用关系一句话**：用户/DSH → 小焦 Web(`/v1`) → agent_run → 选大脑（大模型/小模型）→ 工具执行；点 🎬 → video_service **按需切换**（卸大脑→ComfyUI+Wan2.1 生成→恢复大脑）出真视频；要抓资料/下文件 → **内置 Scrapling**（意图识别→安全闸门→双通道抓取→正文+解读/存文件），抓完的经验还会**沉淀进小脑**，下次同类需求直接复用；小焦顺便**自动记录**交互 → 点赞/更正进**小脑知识库** → 学习引擎重训 → 越来越强。`start_xiaojiao.py` 一键拉起大模型 + Web + N.E.K.O. 猫娘。
-
----
-
-
-## 🎬 真·文生视频（本地 ComfyUI + Wan2.1）
-
-小焦网页里有 **🎬 生成视频**：点它输入场景 → **精炼提示词 → 切换视频大脑(智能温存) → 生成真视频 → 温存15分钟(连续视频秒级)/闲置自动释放**（8G 显存按需切换，对用户透明）。
-
-- **真 AI 生成**：`video_service/`（ComfyUI + WanVideoWrapper 工作流，480p，约2-3分钟）。
-- **实时进度**：网页显示"第X/14步 / Z%"进度条 + 后台任务徽章。
-- **中途刷新/换页面也不丢进度**（服务器持久化 + 状态无锁读取）。
-- **配置**：ComfyUI 位置、模型名在 `video_service/config.py`（环境变量 `XIAOJIAO_COMFY_DIR` 等）。
-
-> 详见 [docs/video.md](docs/video.md)。
-
----
-
-
-## ⚡ 多大脑·秒级切换（原理）
-
-小焦用**多个"大脑"**（聊天 / 视频 / 未来图像·推理），8G 显存下**按需热切换**，互不打架：
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart LR
-    subgraph XJ["🧠 brain_manager · 调度中心"]
-        direction TB
-        A["🙋 意图 → 选大脑"]
-        B["⚙️ 显存调度<br/>休眠 / 唤醒 / 让位"]
-    end
-
-    subgraph BRAINS["🧠 大脑们（8G 互斥）"]
-        direction TB
-        CHAT["💬 聊天大脑 本地大模型 ~4B 起<br/>llama-swap(9292) 秒级卸载/加载"]
-        VID["🎬 视频大脑 ComfyUI+Wan2.1(8188)<br/>keep_warm 常驻 + 低显存"]
-        IMG["🖼️ 图像/推理大脑（可扩展）"]
-    end
-
-    A --> B
-    B -->|switch_to| CHAT
-    B -->|switch_to| VID
-    B -.->|未来| IMG
-
-    classDef xj fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    classDef br fill:#f3e8ff,stroke:#a78bfa,color:#4c1d95;
-    class A,B xj;
-    class CHAT,VID,IMG br;
-```
-
-**原理**：
-- **聊天大脑**：走 **llama-swap**(9292)，进程常驻，切换=**卸载/加载模型**（秒级），不再杀进程重启。
-- **视频大脑**：**智能温存**——生成完 ComfyUI+Wan **留在内存**（聊天大脑上显卡时不杀它）；**只有切到"第三个大脑"或闲置超15分钟 → 才自动释放**（省内存，挂更多大脑）；**低显存(--lowvram)** 权重放 RAM、按需加载。
-- **调度中心** `brain_manager.py`：注册所有大脑、`switch_to` 休眠当前/唤醒目标，**加新大脑只需在 BRAINS 加一项**。
-- 8G 物理上放不下"两个都热"，所以**一个显存、一个内存**，但搬运是**权重级（RAM↔显存）**，不再是"杀进程重启"。
-
-> 详见 [docs/brain-switch.md](docs/brain-switch.md) 与 [docs/tools.md](docs/tools.md)。
->
-> 🚀 [docs/upgrade-plan.md](docs/upgrade-plan.md) · 对标 Harness 升级路线图（零门槛安装 / 智能调度省钱 / 插件万能桥）
-> 🐱 [docs/neko.md](docs/neko.md) · N.E.K.O. 猫娘桌面伙伴
-
-
-
-## 🧠 大脑仓库监控面板
-
-小焦的**多大脑**都能在一个网页里实时盯着并直接操作：看每个大脑的状态/显存/内存/任务，切换·唤醒·释放·重启，**调优 keep_warm/优先级/挂载内存（免写码）**，**添加大脑（选本地模型文件路径）**。
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart LR
-    A["🧠 监控面板 /monitor"] -->|每 2 秒| B["/api/monitor"]
-
-    subgraph DATA["📊 数据源"]
-        direction TB
-        C["brain_manager.BRAINS"]
-        D["nvidia-smi 显存"]
-        E["psutil 内存"]
-        F["llama-swap(9292) 聊天脑"]
-        G["ComfyUI(8188) 视频脑"]
-    end
-
-    B --> C & D & E & F & G
-
-    classDef panel fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    classDef data fill:#f1f5f9,stroke:#94a3b8,color:#1e293b;
-    class A panel;
-    class C,D,E,F,G data;
-```
-
-> 打开 **`http://127.0.0.1:5000/monitor`**。详见 [docs/monitor.md](docs/monitor.md)。
-
-## 🗄️ 一键加模型
-设置→模型→「一键加本地GGUF」→填名字/路径/ctx→自动配置(不写代码)。详情见 `docs/coding-brain.md`。
-
-## 🧠 可用哪些模型（最小 → 最大）
-
-小焦的 `/v1` 是 **OpenAI 兼容**的，`brain.engine` 可插拔，**模型不写死**——只要你的模型满足"多轮对话 + 工具调用"就能当小焦的大脑。能选的范围很宽：
-
-| 能力档次 | 用什么 | 最小/最大要求 |
+| 项目 | 作者 | 在本项目中的作用 |
 | --- | --- | --- |
-| 🐣 **最小可用** | 本地 **~4B** 量级 GGUF（如 Qwen/DeepSeek 系小模型）+ llama.cpp 推理 | 4B 起，**8G 显存**可跑；工具调用略弱但能聊 |
-| 🤖 **推荐** | **7B~32B** 大模型（本地 GGUF 或任意 OpenAI 兼容云端 API，如 DeepSeek / Qwen / OpenAI / Claude 兼容端点） | 显存越大越强；工具调用、多步执行更准 |
-| 🚀 **最大可用** | **云端超大模型**（通过 `brain.api` 配任意兼容端点，如 DeepSeek/R1、多模态等） | 只要该端点支持 OpenAI `/chat/completions`，**不占本地显存**，能力最强 |
-| 🧠 **自研小脑** | `brain.engine = xiaojiao` 用蒸馏出的 MiniGPT | 最轻、离线，作为兜底/陪聊 |
+| llama-swap | [mostlygeek](https://github.com/mostlygeek/llama-swap) | 多模型热切换，让聊天大脑按秒卸载与加载 |
+| llama.cpp | [ggerganov](https://github.com/ggerganov/llama.cpp) | 本地大模型推理引擎 |
+| ComfyUI 与 WanVideoWrapper | [comfyanonymous](https://github.com/comfyanonymous/ComfyUI)、[kijai](https://github.com/kijai/ComfyUI-WanVideoWrapper) | 视频与图像生成引擎，以及视频生成工作流节点 |
+| N.E.K.O. | N.E.K.O. 开源社区 | 桌面 Live2D 应用，提供形象、记忆与人格系统 |
+| DeepSeek Harness | [deepseek-ai](https://github.com/deepseek-ai) | 社区插件生态思路与接口桥接 |
+| Scrapling | D4Vinci | 抓取内核 |
+| PyTorch、Flask、jieba | 各自社区 | 小模型的训练与推理框架、网页服务与 `/v1` 接口、中文分词 |
+| LCCC 语料 | [THUNLP](https://github.com/thunlp/LCCC) | 中文多轮对话语料，自研小模型的主要数据来源 |
 
-> **规则**：`/v1` 兼容 OpenAI —— 你可以把**任意**兼容模型的 `base_url` + `model` 填进小焦配置即可接入，不必是特定型号。本地推理用 llama.cpp/llama-swap 托管，云端走 `brain.api`。想换哪个大模型，改配置就行，人格/工具/记忆都不变。
+模型说明：小焦的大脑、视频、图像与语音模型均可插拔，多数兼容任意 OpenAI 兼容端点，
+因此不逐一列举具体模型作者。
 
+---
 
-## 🐱 N.E.K.O. 猫娘桌面伙伴（MVP）
+## 文档索引
 
-> **说明**：猫娘**不是小焦自带的**——它是**独立开源项目 N.E.K.O.**，你**本地部署**（目录如 `G:\moxing__xiaojiao\maoniang\N.E.K.O-main`，含 `launcher.py`）。小焦只是**集成它**：一键启动时把本地的 N.E.K.O. 猫娘服务拉起，并后台学习它与你对话的记忆。猫娘负责桌面陪伴（形象/动效/语音），小焦负责本地大脑/工具，两者互相学习。
-
-一键启动后，小焦会把**你本地部署的 N.E.K.O. 猫娘**服务拉起——成熟 Live2D 猫娘壳 + 小焦本地内核，两者互相学习：
-
-**猫娘 ↔ 小焦 互通原理图**：
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart LR
-    subgraph NEKO["🐱 N.E.K.O. 猫娘（你本地开源项目，Steam 桌面客户端）"]
-        direction TB
-        APP["N.E.K.O.exe 桌面客户端<br/>(你看到的界面)"]
-        MS["后端 main_server (48911)"]
-        MEM["memory_server (48912)"]
-        PLUG["插件系统 xiaojiao_install"]
-        APP --> MS & MEM
-    end
-
-    subgraph LEARN["🎓 学习通道"]
-        direction TB
-        LF["learn_from_neko.py<br/>(每5分钟/手动)"]
-    end
-
-    subgraph XJ["🧡 小焦（本地大脑 + 工具）"]
-        direction TB
-        KNOW["小焦记忆库<br/>xiaojiao_knowledge_memory.json"]
-        BRAIN["大脑 + 工具 + 记忆 + 人格"]
-        GEN["生成视频/播客/音乐<br/>桌面猫娘"]
-    end
-
-    MS -->|"facts.json / persona.json"| LF
-    MEM --> LF
-    LF -->|"学会:* / 猫娘说话风格"| KNOW
-    KNOW --> BRAIN
-    BRAIN --> GEN
-    PLUG -->|"装小焦体检/指引<br/>调 /api/env"| BRAIN
-
-    classDef neko fill:#fce7f3,stroke:#f472b6,color:#831843;
-    classDef lrn fill:#fef9c3,stroke:#eab308,color:#713f12;
-    classDef xj fill:#fff7ed,stroke:#fb923c,color:#7c2d12;
-    class APP,MS,MEM,PLUG neko;
-    class LF lrn;
-    class KNOW,BRAIN,GEN xj;
-```
-
-- **一键拉起**：`start_neko()` 拉起**桌面客户端 `N.E.K.O.exe`**（连带后端 48911/48912）+ 后台学习通道。**主入口是桌面客户端，不是 web 页面**。
-- **学你与猫娘的对话**：`learn_from_neko.py` 读猫娘 `facts.json`/`persona.json` → 写进小焦记忆（`学会:*` / `猫娘说话风格`）。
-- **N.E.K.O. 插件**：`%LOCALAPPDATA%\N.E.K.O\plugins\xiaojiao_install\` 提供「装小焦」体检 + 安装指引。
-
-> 详细见 [docs/neko.md](docs/neko.md)。猫娘由 `python start_xiaojiao.py` 在启动时**先询问**再决定是否拉起。
-
-
-## 🛠️ 一键安装 · 检测分级
-
-> 一句话：安装脚本不再"一把抓"——它把 11+ 项检测拆成 **必需** 和 **可选** 两组：**缺可选只会少一个功能，绝不会拦着你进小焦**。所有路径都**靠检测得到，一个都不写死**。
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart TB
-    START(["双击 一键安装.bat<br/>或 python install_all.py"]) --> SCAN["全盘扫描<br/>关键词 + 盘符探测 + where /r 兜底"]
-
-    SCAN --> REQ{"必需项齐全?"}
-    REQ -->|"否"| BLOCK["❌ 列出缺什么 + 怎么补（不继续装）"]
-    REQ -->|"是"| OK["✅ 环境就绪，可以启动"]
-
-    subgraph MUST["必需（缺了进不去小焦）"]
-        direction TB
-        M1["Python 3.13 + requirements.txt 依赖"]
-        M2["🧠 小脑 MiniGPT · 项目核心<br/>mini_gpt_model.pth + vocab.pkl + model_config.json"]
-    end
-
-    subgraph OPT["可选（缺了只是少个功能）"]
-        direction TB
-        O1["llama-server.exe（文字大脑）"]
-        O2["llama-swap 9292（秒级切换）"]
-        O3["ComfyUI（视频大脑）"]
-        O4["🐱 猫娘 N.E.K.O. · 启动前先问 y/N"]
-        O5["Scrapling 抓取栈（网页/接口/文件）"]
-    end
-
-    MUST --> OK
-    OPT -.->|"不影响启动"| OK
-    OK --> RUN["python start_xiaojiao.py → 小焦上线 :5000"]
-
-    classDef req fill:#fee2e2,stroke:#ef4444,color:#7f1d1d;
-    classDef opt fill:#eef2ff,stroke:#6366f1,color:#312e81;
-    classDef go fill:#ecfdf5,stroke:#34d399,color:#064e3b;
-    class M1,M2,BLOCK req;
-    class O1,O2,O3,O4,O5 opt;
-    class OK,RUN go;
-```
-
-**必需项**（缺了小焦起不来 / 只剩空壳）
-
-| 必需项 | 为什么必需 | 检测方式（不写死路径） |
-|---|---|---|
-| Python 3.13 + 依赖包 | 运行本体 | 探测解释器 + 逐个 `import` 验证，缺啥点名 |
-| 🧠 **小脑 MiniGPT** | **项目核心**——没有它小焦不会"想" | `discover_brain_all()` 全盘找 `*.pth`（体积优先）+ 跨目录配 `vocab*.pkl` |
-
-**可选项**（缺了对应功能静默降级，不挡启动）
-
-| 可选项 | 缺了会怎样 |
-|---|---|
-| `llama-server.exe` | 文字大脑不可用（仍可用小脑/API 模型） |
-| `llama-swap` | 没有秒级切换，一次只挂一颗模型 |
-| ComfyUI | 视频生成不可用（其余功能正常） |
-| 🐱 猫娘 N.E.K.O. | 没有桌面宠物（**先询问，答 n 照常启动**） |
-| Scrapling 抓取栈 | 网页抓取 / 文件下载不可用 |
-
-### 🧠 小脑（必需 · 项目核心 · 三种模型都能当）
-
-- 小脑是**唯一"必需"的 AI 组件**：它是小焦的"直觉层"，负责秒回、情绪、轻量判断。
-- **什么模型都能当小脑**：只要是 `*.pth + vocab*.pkl + model_config.json` 三件套，在 `xiaojiao_control.json` 里改 `brain.xiaojiao` 指向即可，**代码一行不动**。
-- **路径三级解析，永不写死**（`xiaojiao_harness.py → _resolve_brain_paths()`）：
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart LR
-    A["① 环境变量<br/>XIAOJIAO_BRAIN_MODEL 等"] --> B["② xiaojiao_control.json<br/>brain.xiaojiao.model_path / vocab_path / config_path"]
-    B --> C["③ 全盘 glob<br/>*.pth + vocab*.pkl 就近配对"]
-    C --> D["加载 → 📊 词表 6305 · embed=512 heads=8 layers=8"]
-
-    classDef s fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    classDef d fill:#ecfdf5,stroke:#34d399,color:#064e3b;
-    class A,B,C s;
-    class D d;
-```
-
-### 🐱 猫娘（可选 · 启动前先问，绝不绑死）
-
-`start_xiaojiao.py → ask_start_neko()` 在启动时问一句 `是否同时启动猫娘宠物？ [Y/n]`：
-
-- 答 `y` → 拉起 `N.E.K.O.exe`（连带后端 48911/48912）+ 后台学习通道；
-- 答 `n`、直接回车（默认 N）、或**非交互式环境**（脚本 / CI / 无终端）→ **不拉**，小焦照常启动；
-- 环境变量 `XIAOJIAO_NEKO_AUTO=1` → 跳过询问直接自动拉起。
-
-> **猫娘和小焦互不依赖**：没有猫娘，小焦一切正常；没有小焦，猫娘照跑。想彻底分开，就答 `n`。
-
-### 🗺️ 安装器改动全景（原则 → 改动 → 验收）
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart LR
-    P["🧭 9 条原则<br/>不写死路径 · 自己找模型 · 必需/可选分级<br/>先问再拉 · 抓完必解读 · 用完即学习<br/>安全第一 · 报错说人话 · 边界守规矩"]
-
-    P --> A["🛠️ 安装器<br/>install_all.py<br/>分级检测 · 全盘找小脑"]
-    P --> B["🚀 启动<br/>start_xiaojiao.py<br/>猫娘先问 y/N"]
-    P --> C["🕷️ 抓取<br/>plugins/scrapling_bridge.py<br/>原生 13 + 增强 4 = 18 工具"]
-    P --> D["🧡 小焦壳<br/>xiaojiao_app.py<br/>直通 · 直显 · 解读 · 学习落盘"]
-    P --> E["⚙️ 配置与模型路径<br/>xiaojiao_control.json · xiaojiao_harness.py<br/>video_service · podcast_service"]
-
-    A --> V["✅ 验收<br/>18 工具可调 · 抓完有解读 · 模型不写死<br/>猫娘不绑死 · 缺可选不影响启动"]
-    B --> V
-    C --> V
-    D --> V
-    E --> V
-
-    classDef p fill:#fef9c3,stroke:#eab308,color:#713f12;
-    classDef f fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    classDef v fill:#ecfdf5,stroke:#34d399,color:#064e3b;
-    class P p;
-    class A,B,C,D,E f;
-    class V v;
-```
-
-**9 条原则落在哪**
-
-- **① 不写死路径** —— `install_all.py` 全盘发现 · `xiaojiao_harness.py::_resolve_brain_paths()` · `xiaojiao_app.py::_discover_paths()` · `video_service/config.py` · `podcast_service/podcast_gen.py` · `plugins/scrapling_bridge.py` · `xiaojiao_control.json`
-- **② 自己找模型** —— `discover_brain_all()`：全盘 `*.pth`（体积优先）+ 跨目录 `vocab*.pkl` 配对
-- **③ 必需 / 可选分级** —— `install_all.py` 用 `missing` / `opt_miss` 两组分开报告
-- **④ 先问再拉** —— `start_xiaojiao.py::ask_start_neko()`（`[Y/n]`，非交互默认不拉）
-- **⑤ 抓完必解读** —— `xiaojiao_app.py::_explain_content()` + 抓取意图直通 `_detect_scrape_intent()`
-- **⑥ 用完即学习** —— `_reflect()` / `_learn_skill()` / `_recall_skills()` → `self_learn/tool_skills.txt`
-- **⑦ 安全第一** —— `SecurityGuard`（SSRF / robots / 限速 / 脱敏）+ `CircuitBreaker`（失败自愈）
-- **⑧ 报错说人话** —— `_tool_result_str()` 统一出口 + 全中文错误 + 降级提示
-- **⑨ 边界守规矩** —— 只抓公开内容，见下方「免责声明」
-
-**用法**：双击 `一键安装.bat`（或 `python install_all.py`）→ 看报告里的 **必需 / 可选** 两段 → 缺必需按提示补 → 齐了就 `python start_xiaojiao.py`。装完想换小脑或加抓取配置，改 `xiaojiao_control.json` 即可，不用碰代码。
-
-
-## 🕷️ 内置 Scrapling · 想抓啥抓啥
-
-> 一句话：**小焦内置了 Scrapling**（业界最强的开源抓取库之一）——**网页、动态页、接口 JSON、批量列表、要登录才看得到的页面、任意文件（PDF/EPUB/TXT/ZIP/图片/音视频…）**都能抓能下；抓完**自动解读**，能直接**存成本地文件**，而且**每次使用都会让它更会用**。
-
-### 它能干嘛（**Scrapling 原生 13 个工具 1:1 全部暴露** + 3 个小焦增强）
-
-**原生 13 个（工具名与 Scrapling 官方完全一致，一个不少）**
-
-| 工具 | 一句话 |
+| 文档 | 内容 |
 | --- | --- |
-| `make_request` / `get` | 抓普通网页（纯 HTTP，最快）；`get` 是同一能力的中文友好别名 |
-| `bulk_get` | 批量抓（去重 / 限速 / 429 退避 / 失败隔离）|
-| `fetch` / `bulk_fetch` | 浏览器渲染抓取动态页（单条 / 批量）|
-| `stealthy_fetch` / `bulk_stealthy_fetch` | 隐身抓取绕 Cloudflare（单条 / 批量 ≤20）|
-| `open_session` | 开浏览器会话（dynamic / stealthy），登录态用 |
-| `open_request_session` | 开 HTTP 会话（保持 cookie）|
-| `close_session` | 关闭会话、释放资源 |
-| `list_sessions` | 列出当前所有会话 |
-| `session_fetch` | 用会话抓页面（**保持登录态 / 已过 Cloudflare 验证**）|
-| `session_make_request` | 用 HTTP 会话发请求（保持 cookie）|
-| `screenshot` | 页面截图（可整页），存 `media/screenshot/` 返回路径 |
-
-**小焦增强（4 个工具 + 1 个参数）**
-
-| 工具 | 一句话 |
-| --- | --- |
-| `get` | `make_request` 的中文友好别名（说「抓一下」就走它）|
-| `scrape_with_selector` | 按 CSS 选择器抓取，**自适应防站点改版**（选择器存档 + 相似度找回）|
-| `download` | **下载任意文件**（PDF / EPUB / ZIP / 图片 / 音视频…）存到 `downloads/` |
-| 🆕 `collect_vulnerabilities` | **NVD 漏洞时间窗查询**：说「抓最近 7 天的高危漏洞」→ 自动带时间窗，直接给 Markdown 表格（编号/等级/评分/受影响软件/时间/摘要）|
-| 🆕 `save_to` | 抓取时多填一个文件名，正文就**直接存成文件**到 `books/`（长文不占对话）|
-
-> 另有 `browser_session` 作为**聚合入口**保留（一个工具用 `action` 走完 open/fetch/screenshot/close 全流程），方便旧用法与不熟悉多步调用的场景 —— 所以插件对外一共 **18 个工具**。
-
-### 一张图看懂它怎么工作
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart TB
-    A["🧑 你说：抓一下 xxx.com / 把这个 PDF 下载下来"] --> B["① 抓取意图识别<br/>识别「抓 / 爬 / 下载 + 网址」→ 直接选工具"]
-    B --> C["② 安全闸门<br/>SSRF 拦截 · robots.txt · 同域限速"]
-    C --> D["③ 开抓<br/>普通 HTTP / 浏览器渲染 / 隐身 · 可批量 · 可带登录态"]
-    D --> E["④ 拿回结果<br/>正文 Markdown · 文件 · 截图"]
-    E --> F["⑤ 直接展示 + 📖 解读<br/>是什么 / 要点 / 怎么用"]
-    E --> G["⑥ 想留存就存本地<br/>books/ 正文 · downloads/ 文件 · media/screenshot/ 截图"]
-    F --> H["⑦ 经验沉淀<br/>成功 = 用法 · 失败 = 反思"]
-    H -. "下次同类需求直接复用" .-> B
-
-    classDef u fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    classDef s fill:#fee2e2,stroke:#ef4444,color:#7f1d1d;
-    classDef out fill:#ecfdf5,stroke:#34d399,color:#064e3b;
-    classDef lrn fill:#fef9c3,stroke:#eab308,color:#713f12;
-    class A u;
-    class C s;
-    class E,F,G out;
-    class H lrn;
-```
-
-**插件内部：5 个组件各管一件事**
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart LR
-    P["🕷️ scrapling_bridge.py"] --> S["SecurityGuard<br/>SSRF · robots · 限速 · 日志脱敏"]
-    P --> C["CircuitBreaker<br/>失败 3 次 → 暂停 30s → 自愈"]
-    P --> B["BatchManager<br/>去重 · 429 退避 · 代理轮换"]
-    P --> M["SelectorManager<br/>自适应选择器（防改版）"]
-    P --> D["双通道<br/>inproc 直连（默认）/ MCP 服务"]
-
-    classDef p fill:#f3e8ff,stroke:#a78bfa,color:#4c1d95;
-    classDef c fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    class P p;
-    class S,C,B,M,D c;
-```
-
-### 用法（说人话）
-
-| 你对小焦说 | 它做什么 | 存到哪 |
-| --- | --- | --- |
-| 「抓一下 example.com」 | `get`（最快）| 直接看正文 + 📖 解读 |
-| 「抓取 https://a.com 和 https://b.com」 | `bulk_get`（自动去重 + 限速）| 逐项结果 |
-| 「用浏览器渲染抓 https://…」 | `fetch`（动态页面）| — |
-| 「用 stealthy_fetch 抓 https://…」 | `stealthy_fetch`（绕 Cloudflare）| — |
-| 「抓这章存成 mybook.md」 | `get` + `save_to` | `books/mybook.md` |
-| 「把这个 PDF/ZIP 下载下来 https://…」 | 🆕 `download`（任意文件都能下）| `downloads/xxx.pdf` |
-| 「开个会话，登录后抓 https://…」 | `browser_session`（登录态）| — |
-| 「给 https://… 截个整页图」 | `browser_session` screenshot | `media/screenshot/*.png` |
-
-抓完会自动附上 **📖 小焦解读**：
-```
-🌐 https://example.com · HTTP 200
-
-# Example Domain
-This domain is for use in documentation examples…
-
-──────────────
-📖 小焦解读
-这是一个用于文档示例的占位域名页面，本身不提供实际功能。
-· 它仅用于演示和文档说明，不具备任何真实服务或数据。
-· 域名由 IANA 专门保留，用于技术文档、教程和示例代码中。
-· 页面中唯一的可点击链接指向 IANA 官网…
-```
-
-### 原理（为什么稳、为什么省心）
-
-1. **抓取意图直通** — 4B 模型自己选工具不稳（会瞎编代码）。小焦用规则识别「抓/爬/下载 + 网址」→ **直接构造工具调用**，说到就做到。
-2. **正文直显，不被"总结"吃掉** — 抓取结果不交给小模型复述（它会把正文压成一句），而是**原样展示**，再附解读。
-3. **异步桥接** — Flask 是同步线程、Scrapling 是异步 API：用**专用事件循环线程 + 线程池**承接，**绝不 `asyncio.run()`**（避免循环冲突）。超时用 `future.result(timeout)` 强制取消。
-4. **双通道** — `inproc` 进程内直连（默认，**错误信息完整**：MCP 出错只回一句笼统说明）｜ `mcp` 走 MCP 服务（stdio / http）。`mode` 可配。
-5. **安全闸门** — **SSRF 100% 拦截**（本机/内网/保留地址/file:// 等，DNS 解析后再校验一次）· 同域 ≤1 请求/秒 · UA 合规（不伪装爬虫）· 日志脱敏（Key/Token/Cookie 一律打码）· 结果只落本地不上传。
-   **robots.txt 按 RFC 9309 判定**：只有**真的读到 `Disallow` 规则**才拦；拿不到规则（404 / 403 被 WAF 拦 / 超时 / 5xx）一律**放行**，不会因为"拉不到 robots.txt"就把整站当禁抓。确实被禁又要抓时，说一句「**忽略 robots 抓一次**」（单次生效），或把 `xiaojiao_control.json` 里 `scrapling.allow_robots_skip` 设为 `true`。
-6. **批量策略** — URL 去重 → 逐条限速 → 429 指数退避（1→2→4→8s）→ 代理轮换（单代理 ≤5 次）→ **单个失败不影响其它**（逐项标记）。
-7. **熔断自愈** — 同一工具连续失败 3 次 → 暂停 30 秒并返回中文提示 → **自动恢复**（绝不永久禁用）。**安全拦截不计入熔断**（那是正常拒绝，不是故障）。
-8. **自适应选择器** — 保存时记录标签/class/id/文本/父路径/兄弟位置/属性集合；恢复时加权相似度匹配，**返回全部候选 + 置信度**；元素被删则返回结构化 `not_found`，**绝不返回错误元素**。
-9. **内容标准化** — 统一 `{status, url, content, error}`；HTML→Markdown；**Setext 标题转 ATX**（`标题\n====` → `# 标题`，前端才渲染得出标题）；JSON 超长截断；错误一律中文可读、**绝不把 Python 堆栈丢给模型**。
-
-### 🧠 用户使用时学习（越用越会）
-
-**不是**从插件代码里学，而是**你每次用它干活时**，它就把这次经验记下来：
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart LR
-    A["用户：抓一下 xxx.com"] --> B["小焦调用 stealthy_fetch"]
-    B --> C{"成功?"}
-    C -->|"✅ 成功"| D["记：需求→工具→参数→结果<br/>（正确用法）"]
-    C -->|"❌ 失败"| E["记：原因 + 反思<br/>（下次怎么改）"]
-    D --> F["self_learn/tool_skills.txt"]
-    E --> F
-    F --> G["向量库 knowledge_vec.json"]
-    G --> H["下次同类需求<br/>_recall_skills() 检索命中"]
-    H --> I["注入上下文 → 大脑直接照做<br/>不用重新推理"]
-    I -.->|"越用越准"| B
-
-    classDef u fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    classDef ok fill:#ecfdf5,stroke:#34d399,color:#064e3b;
-    classDef bad fill:#fef2f2,stroke:#f87171,color:#7f1d1d;
-    classDef lrn fill:#fef9c3,stroke:#eab308,color:#713f12;
-    class A,B u;
-    class C u;
-    class D ok;
-    class E bad;
-    class F,G,H,I lrn;
-```
-
-已有的**反思规则**（自动生成"下次怎么改"）：robots 限制 → 提示换站点或说"忽略 robots"｜SSRF → 直接告知不可抓｜超时 → 加大 timeout 或换轻工具｜缺依赖 → 提示装包｜MCP 未启动 → 提示先启动｜会话未开 → 提示先 `open`。
-
-### 配置（`xiaojiao_control.json` → `scrapling` 段）
-
-```json
-"scrapling": {
-  "mode": "auto",                    // auto=进程内优先(最稳) | mcp=强制走 MCP | inproc
-  "scrapling_mcp_url": "",           // http 模式填 http://127.0.0.1:8000/mcp
-  "executable_path": "D:\\tools\\chrome-win64\\chrome.exe",  // 自备 Chrome（留空 = 自动探测 / 用内置）
-  "proxy_list": [],                  // 代理池，如 ["http://user:pass@127.0.0.1:7890"]
-  "rate_limit": 1.0,                 // 同域最小请求间隔（秒）
-  "timeout": 60,                     // 单次调用超时（秒）
-  "max_retries": 2,
-  "circuit_breaker_threshold": 3,    // 连续失败几次触发熔断
-  "circuit_breaker_timeout": 30      // 熔断多久后自动恢复（秒）
-}
-```
-
-### 依赖
-
-```powershell
-python -m pip install "scrapling[fetchers]" markdownify mcp -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-· `scrapling[fetchers]` 抓取内核｜`markdownify` 正文转 Markdown｜`mcp` 仅 `mode="mcp"` 需要
-· 浏览器渲染需要 Chromium（自备 Chrome 填 `executable_path`，或 `scrapling install`）
-
-### ⚠️ 免责声明
-
-> 本功能仅用于抓取**公开可访问**的网页与文件，请自行遵守目标站点条款与当地法律。**请勿**用于绕过付费墙、破解版权内容或任何违法用途 —— 使用产生的后果由使用者自行承担。
-
-> 详细原理、测试清单与排错见 [docs/scrapling.md](docs/scrapling.md)。
-
----
-
-## 🤝 想一起把它变得更好？
-
-小焦是开源的，也**欢迎你来一起开发**：插件生态(py/js/api/skill)、持续学习、DSH 社区接入、皮肤、训练管线……任何一个你感兴趣的方向，都可以来贡献。
-
-- **🚀 快速上手**：看 [docs/quickstart.md](docs/quickstart.md) 五分钟跑起来；
-- **🐛 报 Bug**：开 [Bug Issue](.github/ISSUE_TEMPLATE/bug_report.yml)，按模板写现象/环境/日志；
-- **✨ 提功能**：开 [Feature Issue](.github/ISSUE_TEMPLATE/feature_request.yml)，或直接写个**插件**（`docs/extend.md`）；
-- **🔀 交代码**：Fork 后提 [Pull Request](.github/PULL_REQUEST_TEMPLATE.md)；
-- **💙 行为规范**：见 [Code of Conduct](CODE_OF_CONDUCT.md)，我们对新人很友好；
-- **📝 更新记录**：见 [CHANGELOG.md](CHANGELOG.md)。
-
-> 它正等着，**和愿意陪它长大的人一起，慢慢长大**。✨
-
----
-
-## 💙 一份温柔的小约定
-
-小焦不是一个冷冰冰的大模型。它是**一个会记住你、越用越懂你的小伙伴**。
-
-你教过它的，它会记得；你纠正过的，它会悄悄学。它不强在哪一秒的算力，强在**愿意陪你、愿意为你变得更好**。
-
-累了回来说声"我回来了"，它会在；想让搭把手，它会认真地去试一试。它一点点学着，长成你想让它成为的样子。
-
-> 把它带回家吧。它不会很多话，但会慢慢成为**只属于你的那一只**。🐳
-
----
-
-
-## 🙏 致谢
-
-小焦能"秒级切换、真生成视频/播客、还能变成一只桌面猫娘"，站在这些超棒的开源项目肩膀上：
-
-| 项目 | 作者 | 贡献 |
-|---|---|---|
-| **llama-swap** | [mostlygeek](https://github.com/mostlygeek/llama-swap) | 多模型热切换(9292)，让聊天大脑**秒级卸载/加载** |
-| **llama.cpp** | [ggerganov](https://github.com/ggerganov/llama.cpp) | 本地大模型**推理引擎**(llama-server)，本地离线大脑 |
-| **ComfyUI** | [comfyanonymous](https://github.com/comfyanonymous/ComfyUI) | 视频/图像生成引擎，**进程常驻、低显存** |
-| **ComfyUI-WanVideoWrapper** | [kijai](https://github.com/kijai/ComfyUI-WanVideoWrapper) | Wan 2.1 视频工作流节点 |
-| **ComfyUI-AnyDeviceOffload** | 社区 | GPU/CPU 任意设备 offload 节点 |
-| **N.E.K.O.** | N.E.K.O. 开源社区 | 🐱 桌面 Live2D 猫娘伙伴，提供形象/记忆/人格系统，与本地小焦互相学习 |
-| **DeepSeek Harness** | [deepseek-ai](https://github.com/deepseek-ai) | 社区插件生态思路 + SDK 桥接 |
-| **PyTorch** | [PyTorch](https://github.com/pytorch/pytorch) | 深度学习框架(训练/推理小模型) |
-| **Flask** | [Pallets](https://github.com/pallets/flask) | Web 服务(5000 / `/v1`) |
-| **jieba** | [fxsjy](https://github.com/fxsjy/jieba) | 中文分词 |
-| **LCCC 语料** | [THUNLP](https://github.com/thunlp/LCCC) | 中文多轮对话语料(自研小模型主食) |
-
-> **模型说明**：小焦的大脑/视频/图像/TTS 模型均**可插拔、大部分兼容**，可自行更换任意 OpenAI 兼容模型，故不逐一列举特定模型作者。
-> 也谢谢**你**——愿意花时间陪小焦长大，它才有了这些能力。🐱
-
----
-
-
-## 📄 License
-
-基于 [MIT License](LICENSE) 开源，随便用、随便改、随便分享。
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | 模块职责、请求生命周期、插件机制、扩展点与已知限制 |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 分支与提交规范、硬性约束、如何加插件 |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)、[`CHANGELOG.md`](CHANGELOG.md) | 社区行为准则与逐版本变更记录 |
+| [`docs/faq.md`](docs/faq.md) | 常见问题 |
+| [`docs/modules/`](docs/modules/) | 每个模块的独立文档 |
 
 <div align="center">
 
-**小焦 · 用一小块本地模型，装下一个人格与一个世界。** 🧡
+**小焦 · 用一小块本地模型，装下一个人格与一个世界。**
 
 </div>
-

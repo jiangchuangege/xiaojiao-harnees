@@ -230,12 +230,27 @@ def start_all(cfg=None, learn_interval_s=None, watch_poll_s=None):
     为什么用 enabled 一刀切：后台会自己联网、自己调模型。用户没点头就在后台烧额度，
     是小焦最不该犯的错。返回启动概况 dict（含 enabled 字段），宿主可以据此在界面上
     如实显示"自主功能：已开/已关"，而不是让用户猜。
+
+    【返回字段为什么补了 tasks / watchers / reason —— 实测抓出来的显示缺陷】
+      宿主 `start_xiaojiao.start_autonomy()` 打的是
+        「已启用：定时任务 %s 个 / 盯梢源 %s 个」% (r.get("tasks", 0), r.get("watchers", 0))
+      而这里原来只返回 `enabled / scheduler / learner / watcher` 四个字段 ——
+      名字对不上，于是 `.get("tasks", 0)` **永远取到 0**：
+      用户看到"定时任务 0 个 / 盯梢源 0 个"，会以为自主性没起来（其实线程已经拉起来了）。
+      关掉那一侧同样：宿主读 `r.get("reason")`，这里连 `reason` 都没返回，
+      提示语只能退回硬编码的 "enabled=false"，看不出**到底缺了哪一项配置**。
+      修法：返回字段与宿主显示口径对齐，补 `tasks` / `watchers` 真实数量与 `reason`；
+      **原来的 `scheduler` / `learner` / `watcher` 布尔全部保留**（老调用方照旧可用）。
     """
     cfg = _cfg() if cfg is None else cfg
     auto = _autonomy_cfg(cfg)
     out = {"enabled": bool(auto.get("enabled")), "scheduler": False,
-           "learner": False, "watcher": False}
+           "learner": False, "watcher": False, "tasks": 0, "watchers": 0}
     if not out["enabled"]:
+        # 如实说明"为什么没启用"：是没打开开关，还是开关打开了却没配任务/盯梢源
+        out["tasks"] = len(auto.get("tasks") or [])
+        out["watchers"] = len(auto.get("watchers") or [])
+        out["reason"] = "autonomy.enabled 未设为 true"
         return out
     from . import learner as _learner
     from . import scheduler as _scheduler
@@ -251,6 +266,16 @@ def start_all(cfg=None, learn_interval_s=None, watch_poll_s=None):
     wt.load_from_config(cfg)
     out["watcher"] = wt.start(watch_poll_s or auto.get("watch_poll_s") or 60)
     _RUNNING["watcher"] = wt
+    # 真实数量：报"装配进调度器的任务数 / 装配进盯梢器的源数"，不是报配置里的条数 ——
+    # 配置里有、装配失败的那些不该算进"正在干活"的数量里。
+    try:
+        out["tasks"] = len(sch.list_tasks())
+    except Exception:      # noqa: silent-ok — 数不出来就报 0，不影响启动
+        out["tasks"] = 0
+    try:
+        out["watchers"] = len(wt.list_watchers())
+    except Exception:      # noqa: silent-ok — 同上
+        out["watchers"] = 0
     return out
 
 
