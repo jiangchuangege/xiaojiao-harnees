@@ -197,9 +197,9 @@ Web 页面右上角的设置面板同样能换大脑、改人设、调参数、�
 因此换任意自训模型只需要改配置或设环境变量：
 
 ```powershell
-$env:XIAOJIAO_BRAIN_MODEL = "D:\models\my_minigpt.pth"
-$env:XIAOJIAO_BRAIN_VOCAB = "D:\models\my_vocab.pkl"
-$env:XIAOJIAO_BRAIN_CONFIG = "D:\models\my_model_config.json"
+$env:XIAOJIAO_BRAIN_MODEL = "<模型目录>\my_minigpt.pth"
+$env:XIAOJIAO_BRAIN_VOCAB = "<模型目录>\my_vocab.pkl"
+$env:XIAOJIAO_BRAIN_CONFIG = "<模型目录>\my_model_config.json"
 python xiaojiao_app.py
 ```
 

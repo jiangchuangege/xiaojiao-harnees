@@ -83,23 +83,37 @@ def main():
     print("  阶段 E · 文档逐项核对")
     print("=" * 78)
 
-    print("\n[一] README 顶部（要求 15 行内，九条要义齐全）")
+    print("\n[一] README 的定位块（九条要义齐全；位置不限定在文件顶部）")
     rp = os.path.join(_ROOT, "README.md")
     ck("README.md 存在", os.path.exists(rp))
     if os.path.exists(rp):
         with open(rp, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.read().split("\n")
-        top = []
-        for l in lines[:24]:
+            raw = f.read()
+        lines = raw.split("\n")
+        # 【为什么不再只查"前 24 行"—— spec 变了】
+        #   原判据要求九条要义写在一个**文件顶部**的引用块里（"前 15 行内说清硬指标"）。
+        #   现在要求改成：定位块放在「## 这是什么」一节**之后**，先讲清"这是什么"，
+        #   再列要点。位置一变，只扫前 24 行就必然扫不到 —— 那是判据的坐标过期，不是内容缺失。
+        #   所以改成：① 先找到那个引用块（不管它在第几行）；② 块本身仍要求 ≤15 行；
+        #   ③ 再逐条核对九条要义。位置约束从"必须在顶部"放宽为"必须在正文里且连续成块"。
+        blocks, cur = [], []
+        for l in lines:
             if l.startswith(">"):
-                top.append(l)
-            elif top and not l.strip():
-                break
+                cur.append(l)
+            else:
+                if cur:
+                    blocks.append(cur)
+                    cur = []
+        if cur:
+            blocks.append(cur)
+        top = max(blocks, key=len, default=[])
         blob = "\n".join(top)
-        ck("顶部有引用块（不是直接进正文）", bool(top), len(top))
-        ck("顶部在 15 行内（spec 要求，实测 %d 行）" % len(top), len(top) <= 15, len(top))
+        ck("正文里有连续的引用块（不是散落各处的单行引用）", bool(top), len(top))
+        ck("定位块在 15 行内（实测 %d 行）" % len(top), len(top) <= 15, len(top))
         for name, kws in README_POINTS:
-            ck("顶部含：%s" % name, any(k in blob for k in kws))
+            ck("定位块含：%s" % name, any(k in blob for k in kws))
+        ck("定位块不在文件最顶部（先讲「这是什么」，再列要点）",
+           not lines[0].startswith(">"), lines[0][:40] if lines else "")
 
     print("\n[二] design-philosophy.md（要求 %d 行内 + 前十三节 + 后半篇九节）" % DP_MAX_LINES)
     dp = os.path.join(_ROOT, "docs", "design-philosophy.md")

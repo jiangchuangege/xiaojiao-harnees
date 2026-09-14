@@ -275,7 +275,7 @@ def real_tool_names():
 # -*- coding: utf-8 -*-
 import sys
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r"C:\xiaojiao\xiaojiao harness")
+sys.path.insert(0, r"<仓库目录>")
 
 from core.health import degeneration as D
 
@@ -459,7 +459,7 @@ def _h_reload_kv(session=None):
 # -*- coding: utf-8 -*-
 import sys
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r"C:\xiaojiao\xiaojiao harness")
+sys.path.insert(0, r"<仓库目录>")
 
 from core.mind_stream import inject as I
 
@@ -644,7 +644,7 @@ def random_seeds(question, n=3):
 # -*- coding: utf-8 -*-
 import sys
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r"C:\xiaojiao\xiaojiao harness")
+sys.path.insert(0, r"<仓库目录>")
 
 from core.boost import creative as CR
 
@@ -829,11 +829,11 @@ def associations(memory_id, limit=5, now=None):
 # -*- coding: utf-8 -*-
 import sys, json
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r"C:\xiaojiao\xiaojiao harness")
+sys.path.insert(0, r"<仓库目录>")
 
 # 1. 确认自我改进目录不存在
 import os
-print(os.path.exists(r"C:\xiaojiao\xiaojiao harness\logs\self_improve"))   # False
+print(os.path.exists("logs/self_improve"))        # False（在仓库根目录下跑）
 
 # 2. 观察已落地的两项相邻机制
 from core.metacognition import boundary as B
@@ -1024,7 +1024,7 @@ def api_central():
 # -*- coding: utf-8 -*-
 import sys
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r"C:\xiaojiao\xiaojiao harness")
+sys.path.insert(0, r"<仓库目录>")
 
 from core import central as C
 
@@ -1258,7 +1258,7 @@ def decay(age_seconds):
 # -*- coding: utf-8 -*-
 import sys
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r"C:\xiaojiao\xiaojiao harness")
+sys.path.insert(0, r"<仓库目录>")
 
 from core import embedder as E
 
@@ -1478,7 +1478,7 @@ def real_tool_names():
 # -*- coding: utf-8 -*-
 import sys
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r"C:\xiaojiao\xiaojiao harness")
+sys.path.insert(0, r"<仓库目录>")
 
 import xiaojiao_app as A
 
@@ -1684,7 +1684,7 @@ def _safe_sid(sid):
 # -*- coding: utf-8 -*-
 import sys, json, os
 sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r"C:\xiaojiao\xiaojiao harness")
+sys.path.insert(0, r"<仓库目录>")
 
 # 1. 确认后台是否被门控
 from core.autonomy import start_all
@@ -1701,7 +1701,7 @@ print(os.path.basename(ST.path_for("../../etc/passwd")))    # 过滤后仍是仓
 
 # 4. 观察后台落盘产物
 for p in ("logs/autonomy/tasks.jsonl", "logs/autonomy/notifications.jsonl"):
-    fp = os.path.join(r"C:\xiaojiao\xiaojiao harness", p)
+    fp = os.path.join(r"<仓库目录>", p)
     print(p, sum(1 for l in open(fp, encoding="utf-8") if l.strip()) if os.path.exists(fp) else "不存在")
 ```
 
@@ -1913,7 +1913,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 # 事件主题分布
 c = collections.Counter()
-for line in open(r"C:\xiaojiao\xiaojiao harness\logs\central\events.jsonl", encoding="utf-8"):
+for line in open("logs/central/events.jsonl", encoding="utf-8"):   # 在仓库根目录下跑
     line = line.strip()
     if line:
         c[json.loads(line).get("topic")] += 1

@@ -257,14 +257,14 @@ flowchart TB
 
 | 常量 | 含义 | 本机实测值 |
 | --- | --- | --- |
-| `VIDEO_ROOT` | 视频模型根目录 | `G:\moxing__xiaojiao\视频模型` |
+| `VIDEO_ROOT` | 视频模型根目录 | `<视频模型根目录>（由 `XIAOJIAO_VIDEO_ROOT` 或自动探测决定）` |
 | `COMFY_DIR` | 含 `main.py` 的 ComfyUI 目录 | `...\ComfyUI_windows_portable\ComfyUI` |
 | `COMFY_PORT` | ComfyUI 端口 | `8188` |
 | `COMFY_URL` | ComfyUI 基地址 | `http://127.0.0.1:8188` |
 | `BRAIN_PORT` | 聊天大脑兜底端口 | `8080` |
 | `OUT_DIR` | 成片输出目录 | `<仓库根>/videos` |
 | `find_checkpoint()` | 检查点文件名 | `dit_fp8.safetensors` |
-| `brain_llama()` | 大脑启动三元组 | `C:\llama\llama-server.exe`、`C:\llama\xiaojiao1.0-4B.gguf`、8080、ctx 20224 |
+| `brain_llama()` | 大脑启动三元组 | `<llama-server 可执行文件路径>`、`<GGUF 路径>`、8080、ctx 20224 |
 
 目录不写死在代码里，按以下顺序探测：
 

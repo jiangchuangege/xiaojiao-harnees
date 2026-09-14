@@ -468,7 +468,7 @@ DEFAULT_PRIORITY = 100
 不需要外网。测试使用本机临时启动的假服务与临时插件目录。
 
 ```powershell
-cd "C:\xiaojiao\xiaojiao harness"
+cd <仓库目录>
 $env:PYTHONUTF8="1"
 
 python tools/test_carrier.py         # 火种登记处与能力登记处

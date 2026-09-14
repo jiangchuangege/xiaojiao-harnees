@@ -252,7 +252,7 @@ flowchart TB
 
 ### 5.1 与旧文档不一致的两处
 
-- 训练器**不做 G 盘备份**，仓库里也没有 `mini_gpt_model_backup.pth`。续训只依赖当前目录的 `mini_gpt_model.pth`。
+- 训练器**不往任何固定盘位写副本**，仓库里也没有 `mini_gpt_model_backup.pth`。续训只依赖当前目录的 `mini_gpt_model.pth`。
 - `progress.txt` 只写不读（仓库内没有任何读取方），因此它是一个进度留痕，不是断点续训依据。
 
 ### 5.2 训练侧风险

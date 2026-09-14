@@ -45,8 +45,7 @@ N.E.K.O. 猫娘**不是小焦自带的组件**，而是一个独立的开源项�
 `start_neko()` 的定位顺序：
 
 1. 环境变量 `XIAOJIAO_NEKO_DIR` 指向的目录。
-2. 内置候选列表：`C:\Program Files (x86)\Steam\steamapps\common\n.e.k.o`、
-   `C:\Program Files\Steam\steamapps\common\n.e.k.o`、仓库目录下的 `N.E.K.O`、用户主目录下的 `N.E.K.O`，
+2. 内置候选列表：Steam 默认安装位置下的 `steamapps\common\n.e.k.o`（按系统实际安装位置探测，不写死盘符）、仓库目录下的 `N.E.K.O`、用户主目录下的 `N.E.K.O`，
    以及各盘符下的 `SteamLibrary`、`Steam`、`Games`、`游戏` 目录中的 `steamapps\common\n.e.k.o`。
 3. 以上都未命中时，交给 `install_all.discover_neko()` 做全盘探测（按目录名关键词与 `N.E.K.O.exe` 特征）。
 

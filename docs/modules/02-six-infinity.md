@@ -820,7 +820,7 @@ flowchart TB
 
 ```powershell
 $env:PYTHONUTF8="1"
-cd "C:\xiaojiao\xiaojiao harness"
+cd <仓库目录>
 ```
 
 ### 7.1 记忆无限
@@ -918,7 +918,7 @@ python tools/test_single_request_limit.py
 ### 7.7 查看某一轮的真实装配账本
 
 ```powershell
-Get-Content "C:\xiaojiao\xiaojiao harness\logs\context_fit.log" -Tail 10
+Get-Content logs/context_fit.log -Tail 10
 ```
 
 ### 7.8 直接调用切片函数

@@ -50,11 +50,11 @@
 ```yaml
 models:
   xiaojiao:
-    cmd: C:/llama/llama-server.exe --port ${PORT} --model C:/llama/xiaojiao1.0-4B.gguf -c 20000 --reasoning off
+    cmd: <llama-server 路径> --port ${PORT} --model <GGUF 路径> -c 20000 --reasoning off
     ttl: 0
     useModelName: xiaojiao1.0-4B
   coder:
-    cmd: "C:/llama/llama-server.exe --port ${PORT} --model <Qwen3-8B 权重路径> -c 20000 --reasoning off"
+    cmd: "<llama-server 路径> --port ${PORT} --model <Qwen3-8B 权重路径> -c 20000 --reasoning off"
     ttl: 0
     useModelName: qwen3-8b
 ```

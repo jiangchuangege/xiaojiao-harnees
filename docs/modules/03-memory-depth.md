@@ -492,8 +492,8 @@ explain() -> str
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-cd C:\xiaojiao\xiaojiao harness
-python -c "import sys; sys.path.insert(0, r'C:\xiaojiao\xiaojiao harness'); from core import memory_deep as M; print(M.classify('我叫张三，住在济南')); print(M.classify('你好')); print([M.CLARITY_CN[M.clarity_of(d)] for d in (0.5, 10, 60, 400)])"
+cd <仓库目录>
+python -c "import sys; sys.path.insert(0, r'<仓库目录>'); from core import memory_deep as M; print(M.classify('我叫张三，住在济南')); print(M.classify('你好')); print([M.CLARITY_CN[M.clarity_of(d)] for d in (0.5, 10, 60, 400)])"
 ```
 
 预期输出：
@@ -512,7 +512,7 @@ python -c "import sys; sys.path.insert(0, r'C:\xiaojiao\xiaojiao harness'); from
 import sys
 import time
 
-sys.path.insert(0, r"C:\xiaojiao\xiaojiao harness")
+sys.path.insert(0, r"<仓库目录>")
 
 from core import memory_deep as M
 
@@ -543,8 +543,8 @@ print("压缩条数", c["compressed"], "是否写回", c["applied"])
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-cd C:\xiaojiao\xiaojiao harness
-python -c "import sys; sys.path.insert(0, r'C:\xiaojiao\xiaojiao harness'); from core import memory_deep as M; r = M.recall('我的车牌号是多少'); print(r['verdict']); print(r['text'][:60]); print([(h['score'], h['overlap']) for h in r['hits'][:1]])"
+cd <仓库目录>
+python -c "import sys; sys.path.insert(0, r'<仓库目录>'); from core import memory_deep as M; r = M.recall('我的车牌号是多少'); print(r['verdict']); print(r['text'][:60]); print([(h['score'], h['overlap']) for h in r['hits'][:1]])"
 ```
 
 按设计，用户从未提过的内容应当返回 `none`。本次会话的一次实测结果是 `precise`，返回了一条无关内容。该缺口在第 7.2 节说明。
@@ -553,8 +553,8 @@ python -c "import sys; sys.path.insert(0, r'C:\xiaojiao\xiaojiao harness'); from
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-cd C:\xiaojiao\xiaojiao harness
-python -c "import sys; sys.path.insert(0, r'C:\xiaojiao\xiaojiao harness'); from core.security import no_delete as ND; print(len(ND.BAN_RULES), len(ND.SUSPECT_RULES)); print(ND.check_command('rm -rf data')[:40]); print(repr(ND.check_command('Select-String -Path a.py -Pattern delete'))); print(repr(ND.check_command('dir')))"
+cd <仓库目录>
+python -c "import sys; sys.path.insert(0, r'<仓库目录>'); from core.security import no_delete as ND; print(len(ND.BAN_RULES), len(ND.SUSPECT_RULES)); print(ND.check_command('rm -rf data')[:40]); print(repr(ND.check_command('Select-String -Path a.py -Pattern delete'))); print(repr(ND.check_command('dir')))"
 ```
 
 预期输出：
@@ -572,7 +572,7 @@ python -c "import sys; sys.path.insert(0, r'C:\xiaojiao\xiaojiao harness'); from
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-cd C:\xiaojiao\xiaojiao harness
+cd <仓库目录>
 python tools\test_memory_depth.py
 python tools\test_no_delete.py
 python tools\test_redline_integration.py

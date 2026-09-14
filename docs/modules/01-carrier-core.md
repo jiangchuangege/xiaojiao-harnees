@@ -471,7 +471,7 @@ flowchart TB
 
 ```powershell
 $env:PYTHONUTF8="1"
-cd "C:\xiaojiao\xiaojiao harness"
+cd <仓库目录>
 python tools/test_mind.py
 ```
 
@@ -508,7 +508,7 @@ print(app.plan_tool("写个文件到桌面"))
 装配账本每轮追加一行，可以直接查看最近若干轮的实际开销。
 
 ```powershell
-Get-Content "C:\xiaojiao\xiaojiao harness\logs\context_fit.log" -Tail 10
+Get-Content logs/context_fit.log -Tail 10
 ```
 
 ### 7.4 查看体检报告
@@ -517,7 +517,7 @@ Get-Content "C:\xiaojiao\xiaojiao harness\logs\context_fit.log" -Tail 10
 
 ```powershell
 $env:PYTHONUTF8="1"
-cd "C:\xiaojiao\xiaojiao harness"
+cd <仓库目录>
 python tools/check_prompt_size.py
 ```
 

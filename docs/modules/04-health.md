@@ -606,8 +606,8 @@ summary(days=7) -> dict
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-cd C:\xiaojiao\xiaojiao harness
-python -c "import sys; sys.path.insert(0, r'C:\xiaojiao\xiaojiao harness'); from core.health.monitor import HealthMonitor, is_carrier_action; m = HealthMonitor(); print([s.code for s in m.check('然后说：嗯。' * 25)]); print(is_carrier_action('这条操作被载体的删除禁区拦下了'))"
+cd <仓库目录>
+python -c "import sys; sys.path.insert(0, r'<仓库目录>'); from core.health.monitor import HealthMonitor, is_carrier_action; m = HealthMonitor(); print([s.code for s in m.check('然后说：嗯。' * 25)]); print(is_carrier_action('这条操作被载体的删除禁区拦下了'))"
 ```
 
 预期输出：
@@ -623,8 +623,8 @@ True
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-cd C:\xiaojiao\xiaojiao harness
-python -c "import sys; sys.path.insert(0, r'C:\xiaojiao\xiaojiao harness'); from core.health.diagnose import HealthDiagnose; d = HealthDiagnose().diagnose(['garbled', 'vram_alert'], {'turns': 2}); print(d['severity'], d['cause'], d['codes']); print(d['reason']); print(d['advice'])"
+cd <仓库目录>
+python -c "import sys; sys.path.insert(0, r'<仓库目录>'); from core.health.diagnose import HealthDiagnose; d = HealthDiagnose().diagnose(['garbled', 'vram_alert'], {'turns': 2}); print(d['severity'], d['cause'], d['codes']); print(d['reason']); print(d['advice'])"
 ```
 
 预期输出：
@@ -644,7 +644,7 @@ import os
 import sys
 import tempfile
 
-sys.path.insert(0, r"C:\xiaojiao\xiaojiao harness")
+sys.path.insert(0, r"<仓库目录>")
 
 from core.health.heal import HealthHealer
 from core.health.records import HealthRecords
@@ -675,8 +675,8 @@ print("预防说明", report["notes"])
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-cd C:\xiaojiao\xiaojiao harness
-python -c "import sys; sys.path.insert(0, r'C:\xiaojiao\xiaojiao harness'); from core.health import degeneration as D; h = D.detect('然后说：嗯。' * 25); print(h.kind, h.phrase, h.count, h.keep_until); print(len(D.truncate_repeat('然后说：嗯。' * 25)))"
+cd <仓库目录>
+python -c "import sys; sys.path.insert(0, r'<仓库目录>'); from core.health import degeneration as D; h = D.detect('然后说：嗯。' * 25); print(h.kind, h.phrase, h.count, h.keep_until); print(len(D.truncate_repeat('然后说：嗯。' * 25)))"
 ```
 
 预期输出：
@@ -692,8 +692,8 @@ phrase_repeat 然后说：嗯。 25 12
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-cd C:\xiaojiao\xiaojiao harness
-python -c "import sys; sys.path.insert(0, r'C:\xiaojiao\xiaojiao harness'); from core.health.records import HealthRecords; r = HealthRecords(); a = r.analyze(7); print(a['total'], a['by_severity'], a['heal_rate'], a['trend']); print(a['top_symptoms'][:3]); print(r.suggest_prevention()[0])"
+cd <仓库目录>
+python -c "import sys; sys.path.insert(0, r'<仓库目录>'); from core.health.records import HealthRecords; r = HealthRecords(); a = r.analyze(7); print(a['total'], a['by_severity'], a['heal_rate'], a['trend']); print(a['top_symptoms'][:3]); print(r.suggest_prevention()[0])"
 ```
 
 本次实测输出：
@@ -710,7 +710,7 @@ python -c "import sys; sys.path.insert(0, r'C:\xiaojiao\xiaojiao harness'); from
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-cd C:\xiaojiao\xiaojiao harness
+cd <仓库目录>
 python tools\test_health.py
 python tools\test_degeneration.py
 python tools\test_degen_strategy.py

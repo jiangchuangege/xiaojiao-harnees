@@ -213,7 +213,7 @@ while True:
 | 续训来源 | 当前目录的 `mini_gpt_model.pth` |
 | 产物 | `mini_gpt_model.pth`、`vocab.pkl`、`model_config.json`、`progress.txt` |
 
-两点与旧文档不一致：训练器**不写 G 盘备份**，也不存在 `mini_gpt_model_backup.pth`；`progress.txt` 只写不读，因此它不是续训依据。参数量不是「亿级以内」的估数，而是实测的 3273 万。
+两点与旧文档不一致：训练器**不做任何外部盘副本**，仓库里也不存在 `mini_gpt_model_backup.pth`；`progress.txt` 只写不读，因此它不是续训依据。参数量不是「亿级以内」的估数，而是实测的 3273 万。
 
 ---
 
@@ -290,7 +290,7 @@ python start_xiaojiao.py       # 或：一键拉起本地大脑与 Web 界面
 | 编号 | 旧文档说法 | 代码实况 |
 | --- | --- | --- |
 | 1 | `MiniGPT(embed=1024, heads=16, hidden=4096, layers=16)` | 实际 `512 / 8 / 2048 / 8`，`seq_len=64`；权重实测参数量 32,730,273 |
-| 2 | 优先从 G 盘备份 `mini_gpt_model_backup.pth` 断点续训 | 无 G 盘备份，无该文件；续训只读当前目录 `mini_gpt_model.pth` |
+| 2 | 优先从外部盘副本 `mini_gpt_model_backup.pth` 断点续训 | 不存在该机制与该文件；续训只读当前目录 `mini_gpt_model.pth` |
 | 3 | 每批存 `.pth` 并 `shutil.copy2` 到 G 盘 | `train_model.py` 未导入 `shutil`，不向 G 盘写文件 |
 | 4 | 模型参数规模约在亿级以内 | 实测 32,730,273（约 3273 万） |
 | 5 | `massive_distill.py` 按 40+ 种子主题生成 | `SEED_TOPICS` 实为 35 个 |

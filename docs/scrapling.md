@@ -77,7 +77,7 @@ python start_xiaojiao.py
 ```json
 "scrapling": {
   "mode": "auto",
-  "executable_path": "D:\\tools\\chrome-win64\\chrome.exe",
+  "executable_path": "<自备 Chrome 路径，留空即自动探测>",
   "rate_limit": 1.0,
   "timeout": 60
 }
@@ -470,7 +470,7 @@ flowchart TB
 | `mode` | `auto` | `auto`（进程内优先）/ `mcp`（强制 MCP）/ `inproc` |
 | `scrapling_mcp_url` | `""` | MCP 的 HTTP 模式地址，如 `http://127.0.0.1:8000/mcp` |
 | `mcp_command` | `scrapling` | stdio 模式的可执行命令 |
-| `executable_path` | 自动探测 | 自备 Chrome / Chromium 路径（如 `D:\tools\chrome-win64\chrome.exe`；留空即自动探测或使用内置 Chromium） |
+| `executable_path` | 自动探测 | 自备 Chrome / Chromium 路径（留空即自动探测或使用内置 Chromium） |
 | `proxy_list` | `[]` | 代理池，逐条轮换（单个最多用 5 次） |
 | `rate_limit` | `1.0` | 同域最小请求间隔（秒） |
 | `timeout` | `60` | 单次调用超时（秒）；浏览器类工具内部自动换算成毫秒 |

@@ -641,7 +641,7 @@ explain() -> str                                # 面向用户的中文说明
 不需要联网、不需要启动小焦。世界层测试使用脚本自己启动的本地站点。
 
 ```powershell
-cd "C:\xiaojiao\xiaojiao harness"
+cd <仓库目录>
 $env:PYTHONUTF8="1"
 
 python tools/test_world.py               # 感知与世界模型
@@ -710,7 +710,7 @@ for step, detail in (res.get("steps") or {}).items():
 ### 6.4 验证删除红线
 
 ```powershell
-cd "C:\xiaojiao\xiaojiao harness"
+cd <仓库目录>
 $env:PYTHONUTF8="1"
 python -c "from core.security import no_delete as N; print(N.check_command('rm -rf data') or '放行')"
 python -c "from core.security import no_delete as N; print(N.check_command('echo hi') or '放行')"

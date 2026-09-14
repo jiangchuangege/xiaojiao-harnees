@@ -182,7 +182,7 @@ Windows 上也可以双击 `一键安装.bat`（它只做一件事：调用 `ins
 | 显存不足（CUDA OOM） | 调小 `xiaojiao_control.json` 的 `brain.llama.ctx`，例如从 32768 降到 16384；或改用云端 `brain.api` |
 | 只想用云端接口 | `brain.engine` 设为 `api`，填好 `brain.api.base_url` / `api_key` / `model` |
 | 找不到 `llama-swap.exe` | 设 `XIAOJIAO_LLAMA_SWAP` 指向该文件，或把 `llama-swap.exe` 放到项目目录 / `llama-swap/` 子目录 |
-| 找不到大脑模型 | 把 GGUF 放到项目目录、`C:/llama`、用户目录或 `Downloads`，或直接填 `brain.llama.gguf` |
+| 找不到大脑模型 | 把 GGUF 放到项目目录、用户目录或 `Downloads`（启动器会自动探测），或直接填 `brain.llama.gguf` |
 | 插件加载后启动报错 | 检查 `capabilities.plugins` 是否为对象（见 [2.3](#23-生成控制文件)） |
 
 ## 6. 换电脑与迁移
@@ -191,7 +191,7 @@ Windows 上也可以双击 `一键安装.bat`（它只做一件事：调用 `ins
 
 | 方式 | 做法 |
 | --- | --- |
-| 自动查找 | 把 `llama-server.exe` 与模型 GGUF 放到 `C:/llama`、项目目录、用户目录或 `Downloads`，启动器会自动找到 |
+| 自动查找 | 把 `llama-server.exe` 与模型 GGUF 放到项目目录、用户目录或 `Downloads`，启动器会自动找到 |
 | 环境变量 | 见下表 |
 | 控制文件 | 直接改 `xiaojiao_control.json` 的 `brain.llama.server` / `gguf` / `port`、`brain.xiaojiao.*`、`scrapling.*` |
 

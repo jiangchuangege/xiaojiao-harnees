@@ -35,7 +35,7 @@ python -m pip install -r requirements.txt
 
 | 方式 | 配置位置 | 说明 |
 | --- | --- | --- |
-| 本地 GGUF | `xiaojiao_control.json` → `brain.llama.gguf` | 已有 GGUF 就填它的路径；没有可从 Hugging Face 下载 Qwen 系 GGUF。留空时启动器会在 `C:/llama`、项目目录、用户目录、`Downloads` 里自动找 |
+| 本地 GGUF | `xiaojiao_control.json` → `brain.llama.gguf` | 已有 GGUF 就填它的路径；没有可从 Hugging Face 下载 Qwen 系 GGUF。留空时启动器会在 自动探测目录、项目目录、用户目录、`Downloads` 里自动找 |
 | 云端接口 | `xiaojiao_control.json` → `brain.api` | 填 `base_url` / `api_key` / `model`，并把 `brain.engine` 设为 `api` |
 
 `brain.engine` 保持 `auto`（或 `llama`）。不要选 `xiaojiao`，那表示只用自研小脑（MiniGPT），能力明显弱于大模型，默认不启用。

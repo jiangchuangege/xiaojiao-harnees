@@ -134,7 +134,7 @@ Chatterbox，模型目录由 `XIAOJIAO_TTS_MODEL`、控制文件的 `brain.tts_m
 | `pydub`、`soundfile` | 拼接音频 | 拼接失败，任务转为 `error` |
 | `torchaudio` | 单句 wav 落盘 | 配音全部失败，最终无音频 |
 | Chatterbox TTS | 语音合成 | 配音失败 |
-| SD1.5 权重 | 封面 | 由 `XIAOJIAO_SD_MODEL` 指定，默认取 `G:\moxing\v1-5-pruned-emaonly.safetensors` |
+| SD1.5 权重 | 封面 | 由 `XIAOJIAO_SD_MODEL` 指定；不写死位置，未指定时按自动探测顺序查找 |
 
 封面权重路径注意两点：默认值是写死的 Windows 路径；该文件不存在时 `_get_sd()` 只打印一行提示
 并返回 `None`，封面随即跳过，不影响音频。

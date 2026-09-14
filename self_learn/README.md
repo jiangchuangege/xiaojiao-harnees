@@ -230,7 +230,7 @@ python self_learn/learn.py search "截取B站视频"
 
 ```text
 查询: 截取B站视频
-命中(>0.5): False | 最佳: 0.233 用户 删掉 C:\Users\Jiao\Desktop\test_never_exists.txt → 小焦用「web_
+命中(>0.5): False | 最佳: 0.233 用户 删掉 <任意不存在的路径> → 小焦用「web_
 ```
 
 ### 6.6 生成一条反思

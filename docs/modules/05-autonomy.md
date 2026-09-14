@@ -539,7 +539,7 @@ content_hash(text) -> str               # 归一化后的 sha1
 不需要启动小焦、不需要模型、不需要外网。脚本接触的网络仅限于它自己启动的本地 HTTP 服务（端口由系统分配）。
 
 ```powershell
-cd "C:\xiaojiao\xiaojiao harness"
+cd <仓库目录>
 $env:PYTHONUTF8="1"
 python tools/test_autonomy.py
 ```
