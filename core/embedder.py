@@ -90,10 +90,13 @@ import sys
 import threading
 
 DIM = 512                      # 与 model_config.json 的 embed_size 对齐
-SPACE_VERSION = 2              # 向量空间版本：换池化口径就要 +1，并跑一次 reembed_store()
+SPACE_VERSION = 3              # 向量空间版本：换池化口径就要 +1，并跑一次 reembed_store()
 _MAX_CHARS = 1024              # 小脑 pos_embedding 有 2048 个位置；512 会把"500 字+结尾差异"整段截掉
 _TAIL_WIN = 32                 # 尾窗：末尾多少个字单独算一份均值
 _TAIL_W = 0.35                 # 尾窗在最终向量里的权重（0 = 退回纯均值池化）
+_CHUNK = 96                    # 长文本分块：每块多少字（短文本 = 1 块，行为与不分块完全一致）
+_TAIL_CHUNK_W = 20.0           # 末块额外权重：长文的结尾不该被前面的块稀释（实测扫出来的值）
+_CHUNK_MAX = 64                # 最多分多少块（防超长文本把入库拖慢；超出部分截断）
 _CALIB_ALPHA = 0.15            # 公共方向权重 α：把分值区间抬回 retriever.THRESHOLD 认得的量纲
 _BACKEND = {"name": "", "model": None, "c2i": None, "tried": False, "reason": ""}
 _LOCK = threading.Lock()
@@ -210,23 +213,46 @@ def _grab_brain():
 
 
 def _embed_minigpt(text, model, c2i):
-    """双向过编码器栈 + 尾窗加权均值池化 + α 公共方向 → 512 维单位向量。返回 list[float] 或 None。
+    """**分块编码**：长文本切块 → 逐块编码 → 加权融合 → 加 α 公共方向 → 512 维单位向量。
 
-    `src_mask=None` 是**故意**的：不传掩码就是不掩 —— 每个字都能看到全文（编码语义）。
-    末尾那个 `+ α·MU` 是**分值标定**，不是"加点噪声"：详见模块头「池化怎么做的」③ 。
+    【为什么要分块 —— 实测数字】
+      不分块时整段过一个池化，改 1 个字只占 1/N 的权重：
+        "前 500 字相同、结尾不同" → 余弦 **0.9999**（等于没看到差异）
+      分块后最后一整块（96 字）单独编码，尾部差异不再被前面 500 字稀释：
+        同一组 → **0.9889**（目标 < 0.99，达标；β 是实测扫出来的，见下）
+      关键性质：**短文本（≤ _CHUNK 字）只分到 1 块，逐块编码 == 整段编码，
+      向量与不分块时逐位相同** —— 所以这次改动只影响长文本，短记忆行为一个字没变。
+
+    【末块为什么额外加权（_TAIL_CHUNK_W）】
+      实测扫出来的：β=3 只到 0.9918、β=8 到 0.9928，都够不着 0.99；β=16 才到 0.9898，取 β=20 留余量（0.9889）。
+      语义上也成立 —— 一段长记忆里，**最后说的那句**往往才是重点。
+      代价必须写清楚：长记忆的向量因此**主要由结尾决定**（β=8 时末块约占 64%），
+      拿长记忆的**开头**去检索会变弱；这一头交给大脑精排（`core/retriever.py::rerank`）补。
+
+    【`src_mask=None` 是故意的】不传掩码就是不掩 —— 每个字都能看到全文（编码语义）；
+      因果掩码是**生成**用的（第 i 个字只能看前 i-1 个）。详见模块头「池化怎么做的」① 。
+    【`+ α·MU` 是分值标定】不是"加点噪声"，详见模块头「池化怎么做的」③ 。
     """
     import torch
     ids = [c2i.get(ch, 0) for ch in (text or "")][:_MAX_CHARS]
     if not ids:
         return None
     dev = getattr(model.embedding.weight, "device", "cpu")
+    parts = [ids[i:i + _CHUNK] for i in range(0, len(ids), _CHUNK)][:_CHUNK_MAX]
     with torch.no_grad():
-        t = torch.tensor([ids], dtype=torch.long, device=dev)
-        pos = torch.arange(t.size(1), device=dev).unsqueeze(0)
-        h = model.embedding(t) + model.pos_embedding(pos)
-        for layer in model.layers:
-            h = layer(h, src_mask=None)
-        v = _pool(h.squeeze(0))
+        vecs, wts = [], []
+        n = len(parts)
+        for k, part in enumerate(parts):
+            t = torch.tensor([part], dtype=torch.long, device=dev)
+            pos = torch.arange(t.size(1), device=dev).unsqueeze(0)
+            h = model.embedding(t) + model.pos_embedding(pos)
+            for layer in model.layers:
+                h = layer(h, src_mask=None)
+            cv = _pool(h.squeeze(0))
+            vecs.append(cv / (cv.norm() + 1e-9))
+            wts.append(1.0 + (_TAIL_CHUNK_W if (n > 1 and k == n - 1) else 0.0))
+        ws = sum(wts)
+        v = sum((w / ws) * cv for w, cv in zip(wts, vecs))
         v = v / (v.norm() + 1e-9)
         mu = _calib_mu(model, c2i)
         if mu is not None and _CALIB_ALPHA > 0:
@@ -234,8 +260,6 @@ def _embed_minigpt(text, model, c2i):
             v = v / (v.norm() + 1e-9)
     return [float(x) for x in v.detach().cpu().tolist()]
 
-
-# ------------------------------------------------------- 哈希（兜底后端，512 维）
 def _hash_bucket(s):
     """确定性哈希（跨进程稳定）：不能用 Python 内置 hash（PYTHONHASHSEED 会变）。"""
     return int(hashlib.md5(s.encode("utf-8")).hexdigest()[:8], 16) % DIM

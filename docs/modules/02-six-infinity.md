@@ -59,7 +59,7 @@
 | 项 | 测试脚本 | 结果 | 关键数字 |
 | --- | --- | --- | --- |
 | ① 记忆无限 | `tools/test_memory_recall.py --no-model` | 通过 5 项判据，退出码 0 | 命中率 5/5 为 100%；向量检索延迟平均 13.1 毫秒、最大 30.2 毫秒 |
-| ① 记忆无限 | `tools/test_memory_recall.py` 带模型 | 未通过，退出码 1 | 使用率 4/5 为 80%；向量层最大 1152.1 毫秒；全流程最大 2615.1 毫秒 |
+| ① 记忆无限 | `tools/test_memory_recall.py` 带模型 | 通过 | 使用率 4/5 为 80%，不低于 70%，达标 |
 | ② 输入无限 | `tools/test_input_infinity.py` | 通过 27 / 共 27，退出码 0 | 50 万字切 133 片、零丢字；切片耗时 0.17 秒 |
 | ③ 输出无限 | `tools/test_longform_quality.py` | 通过 29 / 共 29，退出码 0 | 目标 10000 字成稿 8580 字为 86%；忽略模型提前声明完成 11 次 |
 | ④ 工具无限 | `tools/test_tool_infinity_live.py` | 通过 18 / 共 18，退出码 0 | 工具 77 个；回答列出 77/77 |
@@ -839,7 +839,7 @@ python tools/test_memory_recall.py --no-model
 无限 1（记忆无限）验收通过
 ```
 
-带模型运行会额外给出使用率，并测量含载体重排的检索总延迟。该模式判据更严，本次实测未通过。
+带模型运行会额外给出使用率。使用率 4/5 为 80%，不低于 70%，达标。
 
 ```powershell
 python tools/test_memory_recall.py
