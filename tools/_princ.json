@@ -1,0 +1,428 @@
+{
+ "files_scanned": 117,
+ "bare_except": [
+  {
+   "file": "plugins\\code_intelligence.py",
+   "line": 270
+  },
+  {
+   "file": "plugins\\code_intelligence.py",
+   "line": 254
+  },
+  {
+   "file": "plugins\\code_intelligence.py",
+   "line": 306
+  },
+  {
+   "file": "plugins\\code_intelligence.py",
+   "line": 345
+  },
+  {
+   "file": "plugins\\code_intelligence.py",
+   "line": 356
+  },
+  {
+   "file": "plugins\\db_helper.py",
+   "line": 195
+  },
+  {
+   "file": "plugins\\xiaojiao-plugins-main\\plugins\\code_intelligence.py",
+   "line": 270
+  },
+  {
+   "file": "plugins\\xiaojiao-plugins-main\\plugins\\code_intelligence.py",
+   "line": 254
+  },
+  {
+   "file": "plugins\\xiaojiao-plugins-main\\plugins\\code_intelligence.py",
+   "line": 306
+  },
+  {
+   "file": "plugins\\xiaojiao-plugins-main\\plugins\\code_intelligence.py",
+   "line": 345
+  },
+  {
+   "file": "plugins\\xiaojiao-plugins-main\\plugins\\code_intelligence.py",
+   "line": 356
+  },
+  {
+   "file": "plugins\\xiaojiao-plugins-main\\plugins\\db_helper.py",
+   "line": 193
+  }
+ ],
+ "silent_except": [
+  {
+   "file": "core\\continuation.py",
+   "line": 685
+  },
+  {
+   "file": "core\\embedder.py",
+   "line": 164
+  },
+  {
+   "file": "core\\input_splitter.py",
+   "line": 206
+  },
+  {
+   "file": "core\\world\\model.py",
+   "line": 593
+  },
+  {
+   "file": "plugins\\archify.py",
+   "line": 213
+  },
+  {
+   "file": "plugins\\archify.py",
+   "line": 222
+  },
+  {
+   "file": "plugins\\code_intelligence.py",
+   "line": 345
+  },
+  {
+   "file": "plugins\\code_intelligence.py",
+   "line": 356
+  },
+  {
+   "file": "plugins\\xiaojiao-plugins-main\\plugins\\code_intelligence.py",
+   "line": 345
+  },
+  {
+   "file": "plugins\\xiaojiao-plugins-main\\plugins\\code_intelligence.py",
+   "line": 356
+  },
+  {
+   "file": "tests\\stress\\ui_style_check.py",
+   "line": 91
+  },
+  {
+   "file": "tools\\check_cloud_brain.py",
+   "line": 81
+  },
+  {
+   "file": "tools\\reset_releases.py",
+   "line": 94
+  },
+  {
+   "file": "tools\\strict_integration_test.py",
+   "line": 327
+  },
+  {
+   "file": "tools\\test_autonomy.py",
+   "line": 74
+  }
+ ],
+ "hardcoded_path": [
+  {
+   "file": "xiaojiao_app.py",
+   "line": 948,
+   "code": "os.path.join(os.path.expanduser(\"~\"), \"Documents\"), \"C:\\\\llama\"]"
+  },
+  {
+   "file": "podcast_service\\podcast_gen.py",
+   "line": 164,
+   "code": "\"C:\\\\llama\"]"
+  }
+ ],
+ "hardcoded_ip": [],
+ "secret": [],
+ "long_function": [
+  {
+   "file": "install_all.py",
+   "line": 320,
+   "name": "main",
+   "lines": 444
+  },
+  {
+   "file": "start_xiaojiao.py",
+   "line": 86,
+   "name": "start_neko",
+   "lines": 89
+  },
+  {
+   "file": "train_model.py",
+   "line": 132,
+   "name": "main",
+   "lines": 100
+  },
+  {
+   "file": "xiaojiao_app.py",
+   "line": 2686,
+   "name": "_run_tool_impl",
+   "lines": 205
+  },
+  {
+   "file": "xiaojiao_app.py",
+   "line": 2912,
+   "name": "llm_chat_tools",
+   "lines": 163
+  },
+  {
+   "file": "xiaojiao_app.py",
+   "line": 3869,
+   "name": "_scrape_direct",
+   "lines": 136
+  },
+  {
+   "file": "xiaojiao_app.py",
+   "line": 4038,
+   "name": "_diagram_layout_inject",
+   "lines": 115
+  },
+  {
+   "file": "xiaojiao_app.py",
+   "line": 4262,
+   "name": "_diagram_direct",
+   "lines": 99
+  },
+  {
+   "file": "xiaojiao_app.py",
+   "line": 5030,
+   "name": "_health_hooks",
+   "lines": 185
+  },
+  {
+   "file": "xiaojiao_app.py",
+   "line": 5324,
+   "name": "agent_run",
+   "lines": 444
+  },
+  {
+   "file": "xiaojiao_app.py",
+   "line": 6605,
+   "name": "api_env",
+   "lines": 116
+  },
+  {
+   "file": "xiaojiao_app.py",
+   "line": 6848,
+   "name": "api_chat_stream",
+   "lines": 152
+  },
+  {
+   "file": "xiaojiao_app.py",
+   "line": 6873,
+   "name": "_gen",
+   "lines": 123
+  },
+  {
+   "file": "core\\continuation.py",
+   "line": 418,
+   "name": "generate_unlimited",
+   "lines": 382
+  },
+  {
+   "file": "core\\continuation.py",
+   "line": 462,
+   "name": "_generate_raw",
+   "lines": 85
+  },
+  {
+   "file": "plugins\\archify.py",
+   "line": 527,
+   "name": "get_tool_descriptions",
+   "lines": 162
+  },
+  {
+   "file": "plugins\\code_intelligence.py",
+   "line": 35,
+   "name": "get_tool_descriptions",
+   "lines": 84
+  },
+  {
+   "file": "plugins\\scrapling_bridge.py",
+   "line": 2429,
+   "name": "_do_collect_vulnerabilities",
+   "lines": 96
+  },
+  {
+   "file": "plugins\\scrapling_bridge.py",
+   "line": 2527,
+   "name": "_do_download",
+   "lines": 94
+  },
+  {
+   "file": "plugins\\scrapling_bridge.py",
+   "line": 2744,
+   "name": "_do_native_session",
+   "lines": 92
+  },
+  {
+   "file": "plugins\\xiaojiao-plugins-main\\plugins\\code_intelligence.py",
+   "line": 35,
+   "name": "get_tool_descriptions",
+   "lines": 84
+  },
+  {
+   "file": "tests\\stress\\live_check.py",
+   "line": 26,
+   "name": "main",
+   "lines": 209
+  },
+  {
+   "file": "tests\\stress\\preset_check.py",
+   "line": 31,
+   "name": "main",
+   "lines": 90
+  },
+  {
+   "file": "tests\\stress\\stability_30m.py",
+   "line": 495,
+   "name": "main",
+   "lines": 321
+  },
+  {
+   "file": "tests\\stress\\test_app_logic.py",
+   "line": 47,
+   "name": "run",
+   "lines": 357
+  },
+  {
+   "file": "tests\\stress\\test_network.py",
+   "line": 16,
+   "name": "run",
+   "lines": 172
+  },
+  {
+   "file": "tests\\stress\\test_security.py",
+   "line": 28,
+   "name": "run",
+   "lines": 139
+  },
+  {
+   "file": "tests\\stress\\test_units.py",
+   "line": 20,
+   "name": "run",
+   "lines": 325
+  },
+  {
+   "file": "tests\\stress\\ui_check.py",
+   "line": 32,
+   "name": "main",
+   "lines": 98
+  },
+  {
+   "file": "tests\\stress\\ui_style_check.py",
+   "line": 28,
+   "name": "main",
+   "lines": 287
+  },
+  {
+   "file": "tools\\check_docs.py",
+   "line": 185,
+   "name": "main",
+   "lines": 112
+  },
+  {
+   "file": "tools\\check_principles.py",
+   "line": 69,
+   "name": "main",
+   "lines": 178
+  },
+  {
+   "file": "tools\\publish_all.py",
+   "line": 47,
+   "name": "main",
+   "lines": 82
+  },
+  {
+   "file": "tools\\publish_release.py",
+   "line": 61,
+   "name": "main",
+   "lines": 95
+  },
+  {
+   "file": "tools\\publish_via_api.py",
+   "line": 151,
+   "name": "main",
+   "lines": 115
+  },
+  {
+   "file": "tools\\reset_releases.py",
+   "line": 36,
+   "name": "main",
+   "lines": 88
+  },
+  {
+   "file": "tools\\strict_integration_test.py",
+   "line": 78,
+   "name": "test2",
+   "lines": 130
+  },
+  {
+   "file": "tools\\sync_release.py",
+   "line": 46,
+   "name": "main",
+   "lines": 126
+  },
+  {
+   "file": "tools\\test_autonomy.py",
+   "line": 216,
+   "name": "test_watcher",
+   "lines": 109
+  },
+  {
+   "file": "tools\\test_autonomy.py",
+   "line": 352,
+   "name": "test_learner",
+   "lines": 89
+  },
+  {
+   "file": "tools\\test_bug2_dedup.py",
+   "line": 63,
+   "name": "main",
+   "lines": 120
+  },
+  {
+   "file": "tools\\test_bug3_repeat.py",
+   "line": 82,
+   "name": "main",
+   "lines": 108
+  },
+  {
+   "file": "tools\\test_bug45_ui.py",
+   "line": 45,
+   "name": "main",
+   "lines": 152
+  },
+  {
+   "file": "tools\\test_degeneration.py",
+   "line": 49,
+   "name": "main",
+   "lines": 131
+  },
+  {
+   "file": "tools\\test_health.py",
+   "line": 191,
+   "name": "main",
+   "lines": 434
+  },
+  {
+   "file": "tools\\test_health_integration.py",
+   "line": 59,
+   "name": "main",
+   "lines": 160
+  },
+  {
+   "file": "tools\\test_memory_recall.py",
+   "line": 68,
+   "name": "main",
+   "lines": 81
+  },
+  {
+   "file": "tools\\test_redline_integration.py",
+   "line": 43,
+   "name": "main",
+   "lines": 117
+  }
+ ],
+ "print_in_module": [],
+ "todo": [
+  {
+   "file": "xiaojiao_app.py",
+   "line": 5918,
+   "code": "# TODO: 在这里实现你的逻辑；异常请自己接住并返回**中文可读**的说明"
+  }
+ ],
+ "syntax_error": []
+}

@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+# 小焦系统本身不依赖任何具体模型。
+# 它是完整的载体（器官齐全），模型是火种（可替换）。
+# 接入任何模型 → 系统活；换任何模型 → 系统不变。
+# 这就是"模型平等"和"变形金刚"的工程基础。
 """小焦 · 载体层 · 对话记忆向量库（无限 1：记忆无限）
 
 定位：**所有历史对话永久留存到外部文件**，不占模型 ctx；要用的那一刻按需检索 top-K 注入。
@@ -144,6 +148,13 @@ def add_memory(text, kind="dialogue", entities=None, ts=None, meta=None, key_tex
            "v": _pack(vec)}
     if key_text and key_text.strip() and key_text.strip() != text:
         rec["key"] = key_text.strip()[:400]     # 留一份索引键原文，便于人肉排查"为什么没检索到"
+    else:
+        # 【为什么无条件留 key】向量永远按 key 算（没给 key_text 就是 text）。
+        # 不留下来 → 事后**没法按同一把键重建这条的向量**：
+        #   `memory_deep.flush_index()` 要把"文件里有、索引里没有"的行补回索引，
+        #   没有 key 就只能拿 text 重算，两条向量就会微妙地不一样（检索结果不稳定）。
+        # 存下来=让"重建索引"这件事变成**可精确重放**的，代价只是每行多几十字节。
+        rec["key"] = text[:400]
     if meta:
         rec["meta"] = meta
     with _LOCK:
@@ -165,6 +176,49 @@ def add_memory(text, kind="dialogue", entities=None, ts=None, meta=None, key_tex
         elif np is not None and len(_INDEX["rows"]) == 1:
             _rebuild_matrix()
     return rec["id"]
+
+
+def ids():
+    """当前索引里所有记忆的 id（给 `memory_deep.flush_index()` 对账用）。
+
+    为什么要暴露这个：`reload()` 只保证"文件里已有的行"在索引里，
+    但"先 `add_memory` 追加、再整体重写文件"这条路径上，重写可能把新行挤掉 ——
+    于是出现"文件里有、搜不到"。对账需要先知道索引里到底有哪些 id。
+    """
+    with _LOCK:
+        _ensure_loaded()
+        return [m.get("id", "") for m in _INDEX["meta"]]
+
+
+def reindex_row(rec):
+    """把一条**已经存在于文件里**的记录补进内存索引（不写文件）。
+
+    与 `add_memory` 的区别：不重新生成 id/时间戳、不写盘，只用记录里存的 `key`
+    重算向量并挂上索引 —— 保证"补回来的"和"原本该有的"是同一把键算出来的。
+    返回 True/False（算不出向量就 False，绝不抛错影响调用方）。
+    """
+    if not isinstance(rec, dict) or not rec.get("id"):
+        return False
+    vec = _unpack(rec.get("v") or "")
+    if vec is None:
+        vec = embedder.embed((rec.get("key") or rec.get("text") or "").strip())
+    if vec is None:
+        return False
+    with _LOCK:
+        _ensure_loaded()
+        for m in _INDEX["meta"]:
+            if m.get("id") == rec.get("id"):
+                return True                     # 已在索引里，不重复挂
+        _INDEX["rows"].append(vec)
+        _INDEX["meta"].append(rec)
+        _INDEX["count"] = len(_INDEX["rows"])
+        np = _try_numpy()
+        if np is not None and _INDEX["mat"] is not None:
+            try:
+                _INDEX["mat"] = np.vstack([_INDEX["mat"], np.asarray([vec], dtype="float32")])
+            except Exception:      # noqa: silent-ok — 拼不上就下次整体重建
+                _INDEX["mat"] = None
+        return True
 
 
 # ------------------------------------------------------------------ 检索

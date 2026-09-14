@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+# 小焦系统本身不依赖任何具体模型。
+# 它是完整的载体（器官齐全），模型是火种（可替换）。
+# 接入任何模型 → 系统活；换任何模型 → 系统不变。
+# 这就是"模型平等"和"变形金刚"的工程基础。
 """
 小焦 · 一键启动（把她融合成一套：大模型大脑 + 小焦壳 + Web + N.E.K.O. 猫娘）
 
@@ -226,6 +230,116 @@ def ask_start_neko():
     return ans in ("", "y", "yes", "是", "1")
 
 
+def start_carrier():
+    """变形金刚：启动时**扫描能力 + 注册火种**（第 6 部分）。
+
+    【为什么要在启动时做】这两件事都是"把当前世界的样子读进来"：
+      · 能力扫描：用户随时往 `plugins/` 丢新 .py/.json/.md，工具数就变 ——
+        不扫就还是旧清单，"用户加什么工具它就会什么"这句话就不成立；
+      · 火种注册：模型是可替换的零件，注册表是"有哪些零件可用"的花名册，
+        出问题时三级治疗要能从这里拿备用火种。
+    【去掉它会怎样】能力清单停在常量上（新插件要重启才认），
+    健康系统的"切备用火种"永远无火种可切 —— 变形金刚变不了形。
+    全程 try/except：能力/火种读不出来不影响小焦本体启动。
+    """
+    info = {"tools": 0, "source": "", "brains": []}
+    try:
+        from core.carrier import BrainRegistry, CapabilityRegistry
+    except Exception as e:      # noqa: silent-ok — 载体层不可用也要能启动
+        print("  [载体] 变形金刚模块不可用（跳过）：%s" % e)
+        return info
+    try:
+        cap = CapabilityRegistry()
+        r = cap.scan()
+        info["tools"], info["source"] = r.get("count", 0), r.get("source", "")
+        cap.manifest()
+        print("  [载体] 能力已扫描：%d 个工具（来源=%s，插件目录=%s）—— 上限不封顶，丢新插件即生效"
+              % (info["tools"], info["source"], r.get("files", 0)))
+    except Exception as e:      # noqa: silent-ok — 扫描失败不影响启动
+        print("  [载体] 能力扫描失败（跳过）：%s" % e)
+    try:
+        reg = BrainRegistry()
+        info["brains"] = reg.names()
+        cur = reg.current()
+        print("  [载体] 火种已注册：%d 个%s —— 当前=%s"
+              % (len(info["brains"]), ("（%s）" % "、".join(info["brains"][:4])),
+                 (cur.name if cur else "未指定")))
+        if len(info["brains"]) < 2:
+            print("  [载体] 提示：只登记了 1 个火种，健康系统三级治疗时将无备用火种可切"
+                  "（在 xiaojiao_control.json 的 brains 里多配一个即可）")
+    except Exception as e:      # noqa: silent-ok — 同上
+        print("  [载体] 火种注册失败（跳过）：%s" % e)
+    return info
+
+
+def start_autonomy():
+    """自主性：启动后台调度/学习/盯梢（第 4 部分）。
+
+    【为什么默认是关的】自主性会在后台花用户的额度与带宽（抓网页、跑模型）——
+    这种事必须用户点头，不能替用户决定。`xiaojiao_control.json` 里
+    `autonomy.enabled=true` 才起；没配就是一个线程都不起，并**如实说明**怎么打开。
+    【为什么这里返回统计】"用户不说 → 也在做事"是它活着的证据；
+    启动时把"起了几个任务、盯了几个源"打出来，用户才知道它到底在不在干活。
+    """
+    try:
+        from core.autonomy import start_all
+        r = start_all(app.CONTROL)
+        if not r.get("enabled"):
+            print("  [自主性] 未启用（%s）—— 想让它自己在后台做事，把 xiaojiao_control.json 的 "
+                  "autonomy.enabled 设为 true（tasks/watchers 一起配）" % (r.get("reason") or "enabled=false"))
+        else:
+            print("  [自主性] 已启用：定时任务 %s 个 / 盯梢源 %s 个"
+                  % (r.get("tasks", 0), r.get("watchers", 0)))
+        return r
+    except Exception as e:      # noqa: silent-ok — 自主性起不来不影响小焦本体
+        print("  [自主性] 启动失败（跳过）：%s" % e)
+        return {"enabled": False, "reason": str(e)[:80]}
+
+
+def stop_autonomy():
+    """退出时**优雅关闭**自主性线程（不优雅关闭会留下半截状态的盯梢文件）。"""
+    try:
+        from core.autonomy import stop_all
+        r = stop_all(timeout=3)
+        print("  [自主性] 已优雅关闭：%s" % (r,))
+    except Exception as e:      # noqa: silent-ok — 关不掉也得让主进程退出（线程本来就是 daemon）
+        print("  [自主性] 关闭时出错（忽略）：%s" % e)
+
+
+def start_world():
+    """世界层：起**自主探索器**（从"人给地图"改成"自己啃互联网"）。
+
+    【为什么默认是开的（和自主性相反）】自主性默认关，因为它会花用户的**模型额度**；
+    而世界探索花的是**带宽**，且有硬预算（daily_budget）、硬间隔（explore_speed=slow）、
+    禁区名单 —— 代价小、可预期。更关键的是：**不主动探索，世界层就是一张空地图**，
+    "它一直在啃互联网"这件事就无从谈起（用户明确要的就是这个）。
+    所以要关就显式关：`world.explore_enabled=false`。
+    """
+    try:
+        from core.world import maybe_start as _world_start
+        r = _world_start(app.CONTROL)
+        if not r.get("enabled"):
+            print("  [世界层] 自主探索未启用（%s）" % (r.get("reason") or "explore_enabled=false"))
+            return r
+        st = r.get("status") or {}
+        print("  [世界层] 自主探索已启动：空闲 %ss 后开啃 ｜ 速度=%s ｜ 今日预算剩 %s ｜ 地图里已有 %s 个站"
+              % (st.get("idle_seconds", "?"), st.get("speed"), st.get("budget_left"),
+                 st.get("model_sites")))
+        return r
+    except Exception as e:      # noqa: silent-ok — 世界层起不来不影响小焦本体
+        print("  [世界层] 启动失败（跳过）：%s" % e)
+        return {"enabled": False, "reason": str(e)[:80]}
+
+
+def stop_world():
+    """退出时停掉探索线程（它在抓网页，得让它把手上的活收干净）。"""
+    try:
+        from core.world import stop_all as _world_stop
+        print("  [世界层] 已停止探索：%s" % (_world_stop(timeout=3),))
+    except Exception as e:      # noqa: silent-ok — 停不掉也得让主进程退出（线程本来就是 daemon）
+        print("  [世界层] 停止时出错（忽略）：%s" % e)
+
+
 def main():
     print("=" * 50)
     print("  小焦 · XiaoJiao")
@@ -259,6 +373,14 @@ def main():
     else:
         print("🐱 已跳过 N.E.K.O. 猫娘（不影响小焦启动；想开时单独运行本脚本并选 y 即可）")
 
+    # 3d. 载体层：扫描能力 + 注册火种（变形金刚）→ 启动自主性（后台 daemon 线程）
+    #     顺序有意：先把"有哪些能力、有哪些火种"读进来，再放后台任务出去跑 ——
+    #     反过来的话，自主任务的第一轮会拿着一份还没注册的空火种表去干活。
+    start_carrier()
+    start_autonomy()
+    # 3e. 世界层：自己啃互联网（空闲就开啃；有预算、有间隔、有禁区名单）
+    start_world()
+
     # 4. 打开浏览器
     _host, _host_lines = app.bind_host(port)      # 与 main() 共用同一套监听规则，见该函数说明
     print(f"🌐 启动小焦 Web: http://127.0.0.1:{port}")
@@ -276,6 +398,8 @@ def main():
         app.app.run(host=_host, port=port, debug=False, use_reloader=False)
     finally:
         # 清理所有子进程
+        stop_autonomy()          # 先优雅关掉自主性线程（有序收尾，别留下半截盯梢状态）
+        stop_world()             # 再停世界层（它可能正在抓网页，先收干净）
         if llama_proc:
             try:
                 llama_proc.kill()

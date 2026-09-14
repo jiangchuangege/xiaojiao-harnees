@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+# 小焦系统本身不依赖任何具体模型。
+# 它是完整的载体（器官齐全），模型是火种（可替换）。
+# 接入任何模型 → 系统活；换任何模型 → 系统不变。
+# 这就是"模型平等"和"变形金刚"的工程基础。
 """
 小焦 · XiaoJiao Web —— 本地部署的「联网搜索 AI」
 
@@ -91,22 +95,141 @@ def _load_control():
 LLM_KEY_ENV = "XIAOJIAO_API_KEY"
 
 
-def _resolve_llm_key(brain):
-    """解析大脑密钥。优先级：环境变量 XIAOJIAO_API_KEY > 控制文件 brain.api.api_key。
+def _mask_key(k):
+    """密钥的**可安全打印**形式：前 4 + 后 4 + 长度。绝不打印整串。"""
+    s = str(k or "")
+    if not s:
+        return "（空）"
+    if len(s) <= 10:
+        return "%s…（len=%d）" % (s[:2], len(s))
+    return "%s…%s（len=%d）" % (s[:4], s[-4:], len(s))
+
+
+def _key_from_models(models, brain):
+    """从 `models[]` 里挑出**当前大脑对应的那把 key**（Web 界面就是往这里填的）。
+
+    为什么要加这一路（真缺陷）：
+      界面把 Key 存进 `models[].api_key`，而运行时只读 `brain.api.api_key` ——
+      用户填完 Key，系统照样报"没有 key"。两处各存一份，谁也不知道对方写没写。
+    匹配顺序（宁可精确也不乱猜）：
+      ① `brain.api.model` 完全同名的条目；
+      ② 同 base_url 的条目；
+      ③ 全表里**唯一**一把非空 Key（只有一把时没有歧义）。
+    """
+    try:
+        api = (brain or {}).get("api", {}) if isinstance(brain, dict) else {}
+        want_model = str(api.get("model") or "").strip()
+        want_base = str(api.get("base_url") or "").strip().rstrip("/")
+        items = [m for m in (models or []) if isinstance(m, dict)]
+        for m in items:
+            if want_model and str(m.get("model") or "").strip() == want_model:
+                k = str(m.get("api_key") or "").strip()
+                if k:
+                    return k, "models[]（模型名匹配 %s）" % want_model
+        for m in items:
+            if want_base and str(m.get("base_url") or "").strip().rstrip("/") == want_base:
+                k = str(m.get("api_key") or "").strip()
+                if k:
+                    return k, "models[]（base_url 匹配）"
+        withkey = [str(m.get("api_key") or "").strip() for m in items
+                   if str(m.get("api_key") or "").strip()]
+        if len(withkey) == 1:
+            return withkey[0], "models[]（全表唯一一把）"
+    except Exception as e:      # noqa: silent-ok — 取不到就退回旧来源，不能因此读不到 key
+        LOG.debug("从 models[] 解析 Key 失败（忽略）：%s", e)
+    return "", ""
+
+
+def _resolve_llm_key(brain, models=None):
+    """解析大脑密钥。优先级：环境变量 XIAOJIAO_API_KEY > models[当前大脑].api_key > brain.api.api_key。
 
     控制文件里还允许写 `"api_key": "env:某个名字"` 这种**间接引用**（模板
     xiaojiao_control.json.example 就是这么写的）：这时读的是"某个名字"那个环境变量，
     而不是把 "env:..." 这串字面量当密钥发出去（那会白白换来一个 401）。
+
+    为什么要有 `models[]` 这一路（**真缺陷**，用户实测）：
+      Web 界面填 Key 只写 `models[].api_key`，而这里原来只读 `brain.api.api_key` ——
+      于是"界面上填了 key，系统还说没有 key"。而 `api_model_select` 还会把
+      `brain.api.api_key` 显式清成空串（它有意不搬模型条目里的明文 Key），
+      等于**每次切模型都会把那把 Key 抹掉**。现在两处都能读到，且下面 `_sync_api_key`
+      会在保存时把它们对齐，不再各写各的。
+    环境变量仍然**最高优先**（安全第一批·任务3 的意图不变：密钥可以只活在环境里）。
     """
     env_key = (os.environ.get(LLM_KEY_ENV) or "").strip()
     if env_key:
+        LOG.info("大脑密钥来源：环境变量 %s = %s", LLM_KEY_ENV, _mask_key(env_key))
         return env_key
+    # ---- models[] 优先于 brain.api.api_key（顺序不能反，否则 Bug 1 等于没修）----
+    # 界面填的 Key 落在 models[]，而 brain.api.api_key 很可能是**上一次**留下的旧值。
+    # 若先读 brain.api，用户新填的 Key 会被旧值压住 —— 表现还是"填了没生效"。
+    # 所以：环境变量 > models[] > brain.api.api_key。brain.api 只作为兜底（老配置兼容）。
+    try:
+        # `models` 可注入（默认取实时配置）：生产环境永远是当前 CONTROL，
+        # 但留一个入参才能把这条优先级**单独测出来**（不然测试只能改真实配置文件）。
+        _ms = models if models is not None else (CONTROL.get("models") or [])
+        mk, why = _key_from_models(_ms, brain)
+    except Exception:      # noqa: silent-ok — 导入期 CONTROL 可能还没就绪
+        mk, why = "", ""
+    if mk:
+        LOG.info("大脑密钥来源：%s = %s", why, _mask_key(mk))
+        return mk
     api = brain.get("api", {}) if isinstance(brain, dict) else {}
     raw = api.get("api_key", "") if isinstance(api, dict) else ""
     raw = raw.strip() if isinstance(raw, str) else ""
     if raw.lower().startswith("env:"):
-        return (os.environ.get(raw[4:].strip()) or "").strip()   # 控制文件指向环境变量
-    return raw
+        v = (os.environ.get(raw[4:].strip()) or "").strip()   # 控制文件指向环境变量
+        LOG.info("大脑密钥来源：控制文件指向环境变量 %s = %s", raw[4:].strip(), _mask_key(v))
+        return v
+    if raw:
+        LOG.info("大脑密钥来源：brain.api.api_key = %s", _mask_key(raw))
+        return raw
+    LOG.info("大脑密钥来源：无（环境变量、models[]、brain.api 都没有可用 Key）")
+    return ""
+
+
+def _sync_api_key(brain, models):
+    """保存时把两处 Key **对齐**（有则同步、都没有则都空），返回修了什么。
+
+    为什么要自动同步而不是只改一处：只要存在两个存放位置，就一定会出现
+    "一边填了、另一边是空的"，而运行时只认其中一条路 —— 用户看到的就是
+    "我明明填了却没生效"。所以保存是**唯一的写入口**，在这里对齐最省事也最可靠。
+    方向：**谁有值听谁的**（两处都有值且不同则以 brain.api 为准，并记账说明）。
+    """
+    try:
+        api = brain.setdefault("api", {}) if isinstance(brain, dict) else {}
+        brain_key = str(api.get("api_key") or "").strip()
+        if brain_key.lower().startswith("env:"):
+            return ""            # 间接引用（指向环境变量）不参与同步，也绝不能覆盖
+        want_model = str(api.get("model") or "").strip()
+        want_base = str(api.get("base_url") or "").strip().rstrip("/")
+        hit = None
+        for m in (models or []):
+            if not isinstance(m, dict):
+                continue
+            if want_model and str(m.get("model") or "").strip() == want_model:
+                hit = m
+                break
+            if want_base and str(m.get("base_url") or "").strip().rstrip("/") == want_base:
+                hit = m
+                break
+        if hit is None:
+            return ""
+        model_key = str(hit.get("api_key") or "").strip()
+        if brain_key == model_key:
+            return ""
+        if brain_key and not model_key:
+            hit["api_key"] = brain_key
+            LOG.info("Key 同步：brain.api → models[%s] = %s", hit.get("model") or hit.get("name"),
+                     _mask_key(brain_key))
+            return "brain→models"
+        # 模型条目里有、brain.api 里没有（**界面填 Key 的常态**）→ 补到 brain.api
+        api["api_key"] = model_key
+        LOG.info("Key 同步：models[%s] → brain.api = %s",
+                 hit.get("model") or hit.get("name"), _mask_key(model_key))
+        return "models→brain"
+    except Exception as e:      # noqa: silent-ok — 同步失败不能挡住保存本身
+        LOG.warning("Key 同步失败（忽略）：%s", e)
+        return ""
 
 
 CONTROL = _load_control()
@@ -218,6 +341,14 @@ def compose_system_prompt(role, plugins=None):
     为什么单独立个函数：`reload_control()`（切人设/改配置后调用）原来直接
     `SYSTEM_PROMPT = CONTROL.get("role","")`，把规则全丢了 —— 缺陷会悄悄复发。
     每条规则都只加**一份**：先剥掉人设里历史遗留的规则文本，再按固定顺序拼。
+
+    【为什么这么设计】规则散着拼就会重复（人设里写一遍、代码里再拼一遍），
+    重复的规则既吃 token 又会让模型看到自相矛盾的两段话；
+    而且"哪些规则生效"变得没人说得清。集中在一处、固定顺序、每条只加一次，
+    才让"system 里到底有什么"成为一个**可断言**的事实（`test_infinity_456.py` 就钉这一点）。
+
+    【去掉它会怎样】切人设/改配置时规则丢失（真实发生过），
+    表现为"改了个性之后它就不守工具铁律了"——而且是间歇性的，极难复现。
     """
     # 补偿第 6 项：**技能文档（.md 插件）也要进 SYSTEM_PROMPT**。
     # 真实缺陷：PLUGIN_SKILLS 只在"每轮临时拼进 messages"那条路上用过，
@@ -225,7 +356,28 @@ def compose_system_prompt(role, plugins=None):
     _skills = globals().get("PLUGIN_SKILLS") or []
     _skill_txt = ("\n\n[技能插件]\n" + "\n\n".join(c for _, c in _skills)) if _skills else ""
     return (strip_search_rules(role) + _SEARCH_RULES + _TOOL_RULES + _plugin_list(plugins)
-            + _skill_txt)
+            + _skill_txt + _persona_rules_text())
+
+
+def _persona_rules_text():
+    """人格层规则（模块 9）—— 每次组装提示词都带上（十条人味 + 绝对不要）。
+
+    为什么要单独一个函数、并且**吞掉所有异常**：
+      人格层是"说话方式"的软约束，属于锦上添花；而 `compose_system_prompt` 是
+      全局唯一入口，它一抛异常整个对话就起不来。所以这里任何问题（模块缺失、
+      导入失败、语法错）都必须退化为**空串** —— 宁可这次没有人格规则，
+      也绝不能因为"想让它说话像人"而让系统起不来。
+      这里只负责**追加**，不做任何删除：用户自己写的人设一个字都不动。
+    """
+    try:
+        from core import persona as _p
+        return "\n\n" + _p.persona_block()
+    except Exception as e:      # noqa: silent-ok — 人格规则拿不到不影响对话，绝不外抛
+        try:
+            LOG.debug("人格层规则不可用（忽略）：%s", e)
+        except Exception:       # noqa: silent-ok — 连日志都拿不到时静默，保持原行为
+            pass
+        return ""
 
 
 def refresh_system_prompt(plugins=None):
@@ -248,7 +400,7 @@ FULL_ACCESS = CONTROL.get("capabilities", {}).get("full_access", False)  # 默�
 LAN_ACCESS = bool(CONTROL.get("capabilities", {}).get("lan_access", False))
 ACCESS_TOKEN = str(CONTROL.get("capabilities", {}).get("access_token", "") or "").strip()
 # 除这些路径外，所有请求都要带令牌（/health 用于探活，不带敏感信息）
-_AUTH_EXEMPT = ("/health", "/favicon.ico")
+_AUTH_EXEMPT = ("/health", "/favicon.ico", "/api/central")
 BEH = CONTROL.get("behavior", {})
 
 HISTORY_FILE = "xiaojiao_history.json"              # 对话上下文（持久化）
@@ -721,9 +873,19 @@ def _shrink_raw_fences(text, raws):
 
 
 def _history_summary_line(raws):
-    """兜底摘要：工具名 + 状态码 + 前 200 字（spec 要求的最小信息量）。"""
+    """兜底摘要：工具名 + 状态码 + 前 200 字（spec 要求的最小信息量）。
+
+    ⚠️ 必须容忍 `None`/非列表：这个函数在**请求收尾路径**上被调用，
+    而调用点可能因为"这一轮压根没有工具结果"而传 None ——
+    第一版直接 `raws[:3]` 会在那种情况下抛 `TypeError: 'NoneType' is not subscriptable`，
+    把一次正常的收尾变成 500（自测用 None 打进来的，属于提前抓到而不是线上抓到）。
+    摘要生成失败本身没有任何业务影响，所以这里**降级成空摘要**而不是报错。
+    """
+    rows = raws if isinstance(raws, (list, tuple)) else []
     parts = []
-    for e in raws[:3]:
+    for e in list(rows)[:3]:
+        if not isinstance(e, dict):
+            continue
         parts.append("· `%s`%s：%s…"
                      % (e.get("tool") or "?",
                         ("（HTTP %s）" % e["status"]) if e.get("status") else "",
@@ -876,7 +1038,17 @@ def _trace_entry(tool, args, result):
 
     为什么不在轨迹里直接塞原文：轨迹要经 HTTP 回给界面，塞原文等于把几百 KB 的
     JSON/HTML 在网络上再搬一遍。原文另有去处（会话缓存），轨迹只留一行摘要 + 长度 + 前 200 字。
+
+    **轨迹里的参数必须是"真正发出去的那份"**（本轮实测抓到的体验缺陷）：
+    模型写的是 `C:/Users/当前用户/Desktop`，`run_tool` 内部会把它展开成真实路径再执行
+    （所以工具是成功的），但轨迹里记的还是**展开前**的占位符 —— 用户在界面上看到的就是
+    一个假路径，以为小焦拿错路径去跑了。这里统一过一次 `_fix_args_paths`，让轨迹如实反映
+    实际调用。（对已经展开过的参数是幂等的，重复调用不会改坏。）
     """
+    try:
+        args = _fix_args_paths(tool, args or {})
+    except Exception:      # noqa: silent-ok — 展不开就照原样记，绝不能因为记轨迹而报错
+        args = args or {}
     _r = str(result or "")
     e = {"tool": tool, "args": args, "result": _r[:800]}
     if len(_r) > _TOOL_RESULT_KEEP:
@@ -1084,7 +1256,11 @@ def _clean_html(s):
 # 复盘：用户说"用搜索工具找漏洞" —— 模型把整句/单个功能字直接丢给 web_search，
 # 搜出来的是"用（汉语汉字）"这种百科词条，完全跑偏。
 # 修法：① 代码层强制清洗（不管模型/上层给的是什么）；② 清洗后仍无内容 → 反问用户要关键词，绝不用单字硬搜。
-_SEARCH_CMD_MARKERS = ("搜", "查", "找", "抓", "爬", "检索", "联网", "上网", "搜索", "工具")
+_SEARCH_CMD_MARKERS = ("搜", "查", "找", "抓", "爬", "检索", "联网", "上网", "搜索", "工具",
+                       # Bug 2 的修法：信息收集动作词也要算"这是一次检索请求"，
+                       # 否则 `extract_search_keywords` 的强清洗分支**根本不会执行** ——
+                       # 于是"整理一下最近的新闻信息"原样拿去搜，搜的是"整理"的读音和组词。
+                       "整理", "汇总", "归纳", "梳理", "盘点")
 _SEARCH_FILLERS = (
     "用搜索工具", "搜索工具", "联网搜索", "联网查一下", "联网查", "上网搜一下", "上网搜", "网上搜",
     "帮我搜一下", "帮我搜", "帮忙搜", "帮我查一下", "帮我查", "帮忙查", "帮我找一下", "帮我找",
@@ -1092,7 +1268,35 @@ _SEARCH_FILLERS = (
     "搜索", "检索", "联网", "上网", "网上", "帮我", "帮忙", "请问", "麻烦", "谢谢", "一下",
     "一个", "一些", "给我", "来个", "给出", "列一下", "看看", "瞧瞧", "找找", "找一找",
     "写个", "帮我写个", "做一个", "搞一个", "查查", "搜搜",
+    # ↓ Bug 2 修法：信息收集动作词 + 口语量词。它们都是**指令的壳**，不是检索内容。
+    #   实测："整理一下最近的新闻信息" 原来洗出 "整理 最近的新闻信息" —— 把"整理"当检索词，
+    #   搜回来的是"整理的读音/组词"（用户实测截图就是这么来的）。
+    #   长词在前（sorted by len reverse 会保证"整理一下"先于"整理"被吃掉）。
+    "整理一下", "汇总一下", "归纳一下", "梳理一下", "盘点一下",
+    "整理", "汇总", "归纳", "梳理", "盘点", "收集", "搜集", "看一看", "看一下",
+    "了解一下", "关注一下", "跟进", "盯一下", "查一查", "翻一翻",
+    # ⚠️⚠️ 时间词**绝不能**出现在 fillers 里 —— 包括"最近的/今天的"这种带"的"的写法。
+    #    `_SEARCH_FILLERS` 是"整段删除"，而"最近/今天"是**检索内容的一部分**：
+    #    删掉之后"整理一下最近的新闻信息"只剩"新闻信息"，
+    #    而用户要的是"最近新闻"（时效性就是这个请求的重点）。
+    #    我第一版恰恰把"最近的/今天的"放进了这里 → 时间词连同"的"被一起抹掉。
+    #    正确做法：**只删动作词与量词**；时间词保留，由 `_finalize_search_query`
+    #    规范化（今天→今日）并前置。时间词后面的"的"由 `_SEARCH_MID_FUNC` 那道规则去掉。
+    "一下这个", "有关", "关于",
 )
+# 时间限定词 → 检索口径的规范化（用户口语说法 ↔ 搜索引擎习惯用词）。
+# 为什么要换：用户说"今天"，而搜索引擎/新闻站上更常见"今日"；
+# 实测口径要求 "汇总今天的科技动态" → 检索词 "今日科技动态"。
+# ⚠️ 名字**不能**叫 `_SEARCH_TIME_WORDS` —— 文件后面（`_query_variants`/`_query_tokens`）
+#    已经有一个同名元组，是"时间词清单（用来剥离/后置）"，语义完全不同。
+#    我第一版就撞了名，导致运行时用的是**后定义的那个**（文件里后写的覆盖前面的），
+#    于是 `for src, dst in ...` 直接在字符串上解包报 ValueError。
+#    教训：往大文件里加常量前先 grep 名字，别让"后定义覆盖"这一条悄悄改掉行为。
+_SEARCH_TIME_ALIASES = (("今天", "今日"), ("本日", "今日"),
+                        ("这周", "本周"), ("这个星期", "本周"),
+                        ("这个月", "本月"), ("近期", "最近"),
+                        ("这几天", "最近"), ("近几天", "最近"),
+                        ("昨天", "昨日"), ("昨儿", "昨日"))
 # 单字功能/语气词：只在"开头或两侧带空格"时算噪声，避免误伤"未来/在线/用户"这类真词
 _SEARCH_FUNC_CHARS = "用搜找抓查看搞请帮要想来去呗吧的了呢吗啊呀把给让我你它他她是个些就都还很这那与和在有"
 _SEARCH_MEANINGLESS = set(_SEARCH_FUNC_CHARS)
@@ -1143,11 +1347,183 @@ def extract_search_keywords(text):
         # 但不动"在线/未来"这类会把真词切坏的字符。
         s = re.sub(r"(?<=\s)[%s]+(?=\s|[\u4e00-\u9fa5]|$)" % _SEARCH_MID_FUNC, " ", s)
         s = re.sub(r"(^|\s)[%s](?=\s|$)" % _SEARCH_FUNC_CHARS, r"\1", s)            # 独立成词的功能字
+        s = re.sub(r"\s+", " ", s).strip()
+        # ⚠️ **时间词规范化只在"这确实是一次检索请求"时做**。
+        #    为什么要有这个门：`extract_search_keywords` 除了被检索路径调用，
+        #    也会被别处当"保守清洗"用；而无条件做 今天→今日 会把**闲聊弄坏** ——
+        #    实测："今天好累" 洗成 "今日好累"（用户没要找新闻，却把他的话改了）。
+        #    判据：有检索命令词（搜/查/整理…）或本身就是信息收集请求。
+        if _has_search_marker(text or "") or _asks_info_collect(text or ""):
+            return _finalize_search_query(s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _finalize_search_query(q):
+    """收尾：**保留**时间限定词并规范化，再把它排到主题词前面。
+
+    为什么要保留而不是删：`_SEARCH_FILLERS` 删的是"指令的壳"（整理/帮我/一下），
+    而"最近/今天/本周"是**检索内容的一部分** —— "最近新闻"和"新闻"搜出来是两回事。
+    实测口径要求：
+        "整理一下最近的新闻信息" → "最近新闻"
+        "汇总今天的科技动态"     → "今日科技动态"（今天 → 今日，且时间词前置）
+    为什么要前置：与 `_query_variants` 里的实测结论一致 ——
+    中文搜索引擎对"最近 X"这种前缀不友好，所以另有变体机制去剥离；
+    但用户看到的检索词应该是**规范的"时间 + 主题"**形态，前置是最接近自然写法的。
+    """
+    s = (q or "").strip()
+    if not s:
+        return ""
+    # 1) 时间词规范化（今天→今日 这类同义替换）
+    found = []
+    for src, dst in _SEARCH_TIME_ALIASES:
+        if src in s:
+            s = s.replace(src, " ")
+            if dst not in found:
+                found.append(dst)
+    # 2) 无别名的时间词**原样保留**（最近/最新/本周/本月 在别名表里是自己映射自己，
+    #    但语言里还有"这几天/近几天"这类，统一在这里兜一遍）
+    for w in _SEARCH_TIME_WORDS:
+        if w in s and w not in found:
+            s = s.replace(w, " ")
+            found.append(w)
+    s = re.sub(r"\s+", " ", s).strip()
+    # 时间词被抠掉后会留下孤立的"的"或空格（"最近 的新闻信息"）——
+    # 中文检索词里这些是纯噪声，必须清掉，否则发出去的还是带壳的关键词。
+    s = re.sub(r"(^|\s)[的了是]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s:
+        return "".join(found)           # 只剩时间词也要留着（"最近的"这种极端输入）
+    if not found:
+        return _prune_generic_noun(s)
+    # 中文不加空格（"最近新闻"而不是"最近 新闻"）；含 ASCII 主题词时保留空格
+    # （"最近 AI 新闻"，那个空格是词边界，去掉会变成"最近AI新闻"，检索反而更差）。
+    joined = (" ".join(found) + " " + s).strip() if re.search(r"[A-Za-z0-9]", s) \
+        else ("".join(found) + s)
+    return _prune_generic_noun(joined)
+
+
+# 具体信息名词（有它就不需要再挂"信息/消息"这种泛化头）
+_SPECIFIC_INFO_NOUNS = ("新闻", "动态", "资讯", "热点", "行情", "报道", "舆情",
+                        "榜单", "排行", "进展", "漏洞")
+_GENERIC_INFO_NOUNS = ("信息", "消息", "情况", "资料")
+
+
+def _prune_generic_noun(q):
+    """主题里同时有"具体名词 + 泛化名词"时，删掉泛化那个。
+
+    实测口径要求："整理一下最近的新闻信息" → "最近新闻"。
+    为什么可以删：中文里"新闻信息"是**同义叠加**（信息是泛化头，新闻是具体类），
+    留一个就够了；留着反而让检索词变长、稀释掉真正有区分度的"新闻"。
+    只在**两个都存在**时才删（"今日信息"这种只有泛化名词的必须保留）。
+    """
+    s = q or ""
+    if any(sp in s for sp in _SPECIFIC_INFO_NOUNS):
+        for g in _GENERIC_INFO_NOUNS:
+            s = s.replace(g, "")
     return re.sub(r"\s+", " ", s).strip()
 
 
 # 当前这次对话的用户原话（供工具层判断"模型是不是只截了一个碎片"）
 _CTX = {"user_input": ""}
+
+
+# ================== Bug 2：同一轮"同一 URL 的同一工具"只许调一次 ==================
+# 【真实缺陷，复发过一次】用户实测：一次抓取**失败**时，轨迹里出现**两条"调用 get"**。
+# 根因不是模型乱调，而是载体自己调了两遍：
+#   ① `agent_run` 里"句子里有网址 → 规则直通"（②b）会调一次 `_scrape_direct`；
+#   ② 紧接着的兜底（②）判据是"没抓到页面" —— 抓取**失败**正好满足，于是**又调一次**，
+#      第二条轨迹把第一条覆盖掉，用户看到的就是"同一个 get 抓了两遍"。
+#      而 `_scrape_direct` 内部还有"get → fetch → stealthy_fetch"的升级链，
+#      两遍就是 6 次真实网络请求 —— 慢一倍、还可能拿到两个不同的结果（UUID 那次就是这样）。
+# 修法（两道锁，缺一不可）：
+#   · **本轮去重表**：同一轮里 (工具, 规范化参数) 相同 → 直接复用上次结果，不再真调。
+#     这是最后一道保险：无论上层怎么重入，网络请求都只发一次。
+#   · **直通只做一次**：`_scrape_direct` 一旦跑过（无论成败）就置位，兜底不再重跑。
+#     这是根因修复：失败也是"已经抓过了"，不该因为失败而重来一遍。
+# 用 thread-local：并发请求（网页 + 脚本 + 第二个标签页）各自有自己的"轮"，互不干扰。
+_ROUND = threading.local()
+
+# 这些工具**不去重**：它们本来就可能在一轮里被调用多次，且每次都有副作用/时效性。
+_DEDUP_EXCLUDE = frozenset({
+    "write_file", "edit_file", "open_app", "ask_user", "background", "background_result",
+    "capture_screen", "screen_text", "now", "check_env",
+})
+
+
+def _round_begin():
+    """每次 `agent_run` 开头调一次：开一份干净的"本轮状态"。
+
+    为什么在开头清、不在结尾清：`agent_run` 有十几条 return 分支，逐个加清理必然漏
+    （漏了就是"上一轮的结果被当成本轮缓存"—— 比不去重更坏：用户会拿到**过期内容**）。
+    在入口重置则天然不会有残留：同一线程的下一轮一定先经过这里。
+    """
+    _ROUND.dedup = {}
+    _ROUND.scrape_done = False
+    _ROUND.scrape_tool = ""
+
+
+def _round_dedup_key(name, args):
+    """(工具, 参数) 的规范化键。参数排序后再序列化，键顺序不同也算同一个调用。"""
+    try:
+        return name + "|" + json.dumps(args or {}, sort_keys=True, ensure_ascii=False)
+    except Exception:      # noqa: silent-ok — 序列化不了（含非 JSON 值）就不去重，宁可多抓一次
+        return ""
+
+
+def _round_cached(name, args):
+    """本轮这个调用是不是已经做过了？做过就把上次结果原样还回去。"""
+    if name in _DEDUP_EXCLUDE:
+        return None
+    d = getattr(_ROUND, "dedup", None)
+    if not d:
+        return None
+    k = _round_dedup_key(name, args)
+    return d.get(k) if k else None
+
+
+def _round_remember(name, args, result):
+    """把这次调用的结果记进本轮去重表（成功、失败都记 —— 失败重来同样要防）。
+
+    为什么失败也要记：Bug 2 的复发点正是"失败之后又调一遍"。
+    如果只记成功，失败的那次不会被去重，第二次照样真跑 —— 等于没修。
+    """
+    if name in _DEDUP_EXCLUDE:
+        return
+    d = getattr(_ROUND, "dedup", None)
+    if d is None:
+        return
+    k = _round_dedup_key(name, args)
+    if k:
+        d[k] = result
+        try:
+            LOG.info("本轮工具调用留档：%s %s", name,
+                     _summarize_args_for_log(name, args))
+        except Exception:      # noqa: silent-ok — 日志失败绝不能影响工具执行
+            pass
+
+
+def _summarize_args_for_log(name, args):
+    """工具参数的日志摘要 —— **抓取类一定要打出真实 URL**（Bug 2 要求"每次 get 记实际 URL"）。
+
+    为什么必须打 URL：用户排查"为什么抓的不是我要的页"时，唯一能看的就是这条日志。
+    只打工具名等于没打（`get` 抓哪个网址完全看不出来）。
+    """
+    try:
+        a = args or {}
+        u = a.get("url") or a.get("urls") or ""
+        if u:
+            return "url=%s%s" % (u if isinstance(u, str) else ("%d 个" % len(u)),
+                                (" ignore_robots=1" if a.get("ignore_robots") else ""))
+        if name == "run_command":
+            return "cmd=%s" % str(a.get("command", ""))[:120]
+        if name in ("write_file", "edit_file", "read_file", "list_files"):
+            return "path=%s" % a.get("path", "")
+        if name == "web_search":
+            return "q=%s" % str(a.get("query", ""))[:60]
+        keys = list(a.keys())[:4]
+        return "args=%s" % (keys if keys else "{}")
+    except Exception:      # noqa: silent-ok — 摘要失败就给空串
+        return ""
 
 
 def _better_search_query(model_q, user_text):
@@ -1206,9 +1582,26 @@ def _strip_think(text):
 
 
 def resolve_search_query(text):
-    """检索统一闸门：返回 (可用关键词, 错误提示)。关键词为空时**必须**提示用户，不许硬搜。"""
+    """检索统一闸门：返回 (可用关键词, 错误提示)。关键词为空时**必须**提示用户，不许硬搜。
+
+    【修法 3：加一道"提取结果不合格就重提"的校验】
+        `extract_search_keywords` 的清洗是**逐层删词**的，任何一层没删干净，
+        结果就会带着"壳"（"整理 最近的新闻信息"）或者只剩半个动作词（"索"）。
+        这两种都会真的发出去搜，搜回来一堆无关词条。
+        所以这里做**只读校验**（不改原逻辑）：长度 < 4 字、或剔掉功能字后不足 2 字，
+        就再洗一次（对"已清洗结果"再跑一遍清洗），仍不合格才如实提示用户 ——
+        宁可问一句，也不拿垃圾关键词去搜。
+    """
     raw = (text or "").strip()
     q = extract_search_keywords(raw)
+    # ---- 校验一：太短（< 4 字）或就是"壳"→ 重提一次 ----
+    # 为什么阈值取 4："新闻"这种 2 字词其实也能搜，但**单靠它**在中文搜索里太泛，
+    # 而 `resolve_search_query` 面对的是"用户口语指令"，清洗后 < 4 字基本等于没洗出主题。
+    if len(q.strip()) < 4 or _is_meaningless_query(q):
+        q2 = extract_search_keywords(q)
+        if len(q2.strip()) > len(q.strip()):
+            LOG.info("检索词过短，重提一次：%r → %r", q[:30], q2[:30])
+            q = q2
     if _is_meaningless_query(q):
         LOG.warning("检索词无效，已拒绝搜索（原文=%r，清洗后=%r）", raw[:60], q[:60])
         return "", SEARCH_KEYWORD_HINT
@@ -1554,6 +1947,16 @@ def _retrieve_memory(query):
     """从对话向量库检索相关历史；返回注入文本（失败一律返回空串，绝不拖垮对话）。"""
     if not CAP.get("memory", True) or not (query or "").strip():
         return ""
+    # **纯寒暄不检索记忆**（问题 5：速度）。一句"你好"没必要塞 5 条历史片段 ——
+    # 那会让每轮 system 白白多 ~460 token 的**预填充**开销（llama.cpp 每轮都要 prefill 全部上下文，
+    # 实测 prompt 从 ~980 token 降到 ~520 token，纯聊天轮明显更快），而且对寒暄毫无帮助。
+    # 有实义的问题照常检索（记忆无限不受影响）。
+    try:
+        if _is_chitchat(query):
+            LOG.info("寒暄轮不检索记忆（省预填充）")
+            return ""
+    except Exception:      # noqa: silent-ok — 判不出来就当普通问题，照常检索
+        pass
     try:
         root = os.path.dirname(os.path.abspath(__file__))
         if root not in sys.path:
@@ -1568,6 +1971,16 @@ def _retrieve_memory(query):
             LOG.info("记忆检索：命中 %d 条 / 注入 %d 条 · %d token · %.1fms（后端 %s）",
                      len(res["hits"]), len(res["used"]), res["tokens"],
                      res["latency_ms"], res["backend"])
+        # 协同网络：把"本轮检索到了什么"广播出去 ——
+        # 订阅者（`app.memory_state`）会把它写进中央状态，推理/元认知/健康都能读到。
+        # 这是"模块 A 发布 → 模块 B 收到"在真实运行里的落点（事件同时落盘可复盘）。
+        try:
+            from core import central as _c
+            _c.publish("memory.retrieved", {"hits": len(res["hits"]),
+                                            "tokens": res["tokens"],
+                                            "query": query})
+        except Exception:      # noqa: silent-ok — 总线不在也不能影响检索本身
+            pass
         return res["text"]
     except Exception as e:      # noqa: silent-ok — 记忆检索失败照常对话，不能因此报错
         LOG.debug("记忆检索失败（忽略）(%s:%d): %s", __file__, 1105, e)
@@ -1658,7 +2071,7 @@ def _needs_continuation(text):
         return False
 
 
-def _generate_long(task, system, on_chunk=None):
+def _generate_long(task, system, on_chunk=None, on_delta=None):
     """按需生成任意长度并**无缝合并**；失败返回 None（回落普通单次回答，绝不把对话搞挂）。"""
     try:
         root = os.path.dirname(os.path.abspath(__file__))
@@ -1667,7 +2080,9 @@ def _generate_long(task, system, on_chunk=None):
         from core import continuation as _c
         _CONT_STOP.clear()
         res = _c.generate_unlimited(task, system, cfg=_continuation_cfg(), on_chunk=on_chunk,
-                                    should_stop=_CONT_STOP.is_set)
+                                    should_stop=_CONT_STOP.is_set,
+                                    stream_fn=(_llm_stream if on_delta else None),
+                                    on_delta=on_delta)
         LOG.info("长文续写：%d 段 / %d 字 / 去重裁掉 %d / 重试 %d / 停止=%s / 耗时 %.1fs",
                  len(res["chunks"]), res["chars"], res["dedup_chars"], res["retries"],
                  res["stopped"], res["elapsed_s"])
@@ -1684,6 +2099,88 @@ _PAGE_TOOLS = ("get", "fetch", "stealthy_fetch", "make_request", "scrape_with_se
                "bulk_get", "bulk_fetch", "session_fetch", "session_make_request", "download")
 
 
+def _llm_stream(messages, max_tokens=1200, temperature=0.7, timeout=180):
+    """真·流式：用 OpenAI 兼容的 `stream=True` 逐块取 content delta，边到边 yield。
+
+    为什么必须有它（用户实测："内容一大块一大块蹦，不是连续流"）：
+    以前每个 SSE 事件都是**一整段生成完**才推（长文一段 ~2000 token，一次蹦出来一大坨），
+    用户当然看不到"连续流出"。要连续，就得让模型的**每个 token** 尽快穿到前端 ——
+    这一层就是那条通道。
+
+    失败一律安静地"没有流"（一个 delta 都不 yield），调用方自然回落到非流式路径 ——
+    流式是体验优化，绝不能因为它挂了就把回答能力搞没。
+    """
+    for t in _llm_targets():
+        try:
+            r = requests.post(t["url"], headers=_llm_headers(t),
+                              json={"model": t["model"], "messages": messages,
+                                    "temperature": temperature, "max_tokens": int(max_tokens),
+                                    "stream": True},
+                              stream=True, timeout=timeout)
+        except Exception as e:      # noqa: silent-ok — 这个目标连不上就试下一个
+            LOG.debug("流式连接失败(%s)：%s", t.get("url"), e)
+            continue
+        if r.status_code != 200:
+            try:
+                r.close()
+            except Exception:      # noqa: silent-ok — 关不掉也不影响后面
+                pass
+            continue
+        try:
+            # **必须按字节收、按整行解码**：`iter_lines(decode_unicode=True)` 会先把每个网络分片
+            # 解码再切行 —— 中文一个字 3 字节，正好被切在分片边界上就变成乱码
+            # （实测流出来是 `ææ¯ Qwen3.5` 这种）。改成收 bytes、按 \n 切出**完整的一行**再 utf-8 解码。
+            for raw in r.iter_lines(decode_unicode=False):
+                if not raw:
+                    continue
+                line = raw.decode("utf-8", errors="ignore").strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    return
+                try:
+                    j = json.loads(payload)
+                except Exception:      # noqa: silent-ok — 半截 JSON 跳过即可，后面还有
+                    continue
+                try:
+                    ch = ((j.get("choices") or [{}])[0].get("delta") or {}).get("content")
+                except Exception:      # noqa: silent-ok — 结构不认识就当没有
+                    ch = None
+                if ch:
+                    yield ch
+            return
+        except Exception as e:      # noqa: silent-ok — 流中断就算这一轮结束，交给上层兜底
+            LOG.debug("流式读取中断：%s", e)
+            return
+        finally:
+            try:
+                r.close()
+            except Exception:      # noqa: silent-ok — 同上
+                pass
+
+
+def _trace_error_of(result):
+    """从工具结果 JSON 里取**真正的错误信息**（没有就返回空串）。
+
+    真实缺陷（本轮实测抓到的"get 被抓两次"）：抓取成功的结果长这样 ——
+        {"status": 200, "url": "...", "content": "...", "error": ""}
+    里面**恒有一个 `"error"` 字段**，成功时是空串。
+    只按键名判（`'"error"' in r`）会把**成功**当成失败 → 兜底链以为"没抓到"→ 又抓一遍
+    （实测同一个 uuid 抓了两次、拿到两个不同 UUID）。必须判**值**，不是判键。
+    """
+    try:
+        _m = re.search(r'"error"\s*:\s*"((?:[^"\\]|\\.)*)"', str(result or ""))
+        if _m:
+            return _m.group(1).strip()
+        _m2 = re.search(r'"error"\s*:\s*(null|true|false|\d+)', str(result or ""))
+        if _m2:
+            return "" if _m2.group(1) in ("null", "false", "0") else _m2.group(1)
+    except Exception:      # noqa: silent-ok — 解析不出来就当没有错误
+        pass
+    return ""
+
+
 def _trace_has_page(trace):
     """这一轮**真的抓到网页**了吗（不只是"调过工具"）。
 
@@ -1696,7 +2193,7 @@ def _trace_has_page(trace):
         if t.get("tool") not in _PAGE_TOOLS:
             continue
         r = str(t.get("result") or "")
-        if not r or '"error"' in r[:200].lower():
+        if not r or _trace_error_of(r):          # 判**值**不是判键（见 _trace_error_of 的说明）
             continue
         if "status" in r and re.search(r'"status"\s*:\s*(200|201|204)', r):
             return True
@@ -1798,6 +2295,166 @@ def current_messages():
     return s.get("messages", [])
 
 
+# ================== Bug 5：会话切换不再卡在"正在回答…" ==================
+# 【真实缺陷】回答完了，切走再切回来，界面卡在"正在回答…"，实际内容不显示。
+# 三个原因叠在一起，缺一道防线都会复发：
+#   ① 前端切会话时**没有关掉旧的 SSE 连接**，也没重置"生成中"标志 ——
+#      旧那条流还在往旧气泡里写字，新会话的渲染又被它搅乱；
+#   ② 后端"是否还在生成"只看占位符 `⏳__pending__` 在不在 ——
+#      这是个**一次性写下的标记**，回填失败（切走、断开、重启）就永久留在会话里；
+#   ③ 回答到一半切走时，已经生成的那部分**没有落盘** —— 切回来只剩一个占位符。
+# 三道防线：
+#   · `_INFLIGHT`：载体自己记"哪个会话真的在跑"（唯一可信的判据，不靠标记猜）；
+#   · 孤儿占位符清理：没人在跑却还挂着 → 如实标成"已中断"，不再假装在生成；
+#   · 断流落盘：客户端断开时把**已经生成的部分**写回会话（切回来能看到半截内容 + 中断说明）。
+_INFLIGHT = {}                      # sid -> {"started": ts, "chars": 已生成字数, "at": 最后心跳时间}
+_INFLIGHT_LOCK = threading.Lock()
+# 心跳间隔与"多久没心跳就算这一轮已经死了"。
+# 【为什么必须有心跳（问题 2 的根因：时好时坏）】
+# 原来判断"这个会话还在生成吗"全靠"在册表里有没有它"，而**注销依赖生成器真的执行到 finally**。
+# 客户端切走/断网时，Flask 关闭生成器的时机**不确定**（取决于 WSGI 什么时候发现写失败），
+# 于是会出现两种结果：赶上注销 → 一切正常；没赶上 → 标记永久留在内存里，
+# 界面就永远显示"正在回答…" —— 这正是用户说的"时好时坏"。
+# 修法：不再依赖"注销有没有发生"，而是让**活着的轮自己证明自己活着**：
+# 生成期间一条后台心跳线程每 5 秒刷一次时间戳；生成器一结束（正常/报错/断开），
+# finally 里停掉心跳。于是"时间戳超过 20 秒没动"就等价于"这一轮已经死了" ——
+# 这是一个**可验证的判据**，而不是"猜 Flask 有没有关掉生成器"。
+_INFLIGHT_HEARTBEAT_S = 5
+_INFLIGHT_DEAD_S = 20
+_INTERRUPTED_NOTE = ("⏹ 这条回答**中断了**（你切走了，或连接断了）。"
+                     "已经生成的部分没能完整保留 —— 想接着要，直接重说一次就行。")
+
+
+def _inflight_begin(sid):
+    """登记"这个会话开始生成"了。"""
+    if not sid:
+        return
+    now = time.time()
+    with _INFLIGHT_LOCK:
+        _INFLIGHT[sid] = {"started": now, "chars": 0, "at": now, "abandoned": False}
+
+
+def _inflight_tick(sid, n_chars=None):
+    """刷新一次心跳（有新字数就一并更新）—— 心跳线程与流式回调都会调它。"""
+    if not sid:
+        return
+    with _INFLIGHT_LOCK:
+        if sid in _INFLIGHT:
+            _INFLIGHT[sid]["at"] = time.time()
+            if n_chars is not None:
+                _INFLIGHT[sid]["chars"] = n_chars
+
+
+def _inflight_abandon(sid):
+    """前端说"这一轮我不要了"：**只让它从界面上消失，不动它的在册状态**。
+
+    为什么要分成"活着"和"界面要不要转圈"两件事（实测踩到）：
+      撤掉在册标记，界面确实不转圈了；但这一轮的生成器可能**还活着** ——
+      它结束时要把已经生成的部分落盘（`_flush_partial_answer` 靠替换占位符完成）。
+      标记一撤，`_clean_stale_pending` 就会认为"没人生成"，把占位符先改成"中断了"；
+      等那一轮真的结束、想去回填时，占位符已经不在，**半截内容就永久丢了**。
+      所以：`abandoned` 只影响"显示不显示"，`在册 + 心跳` 才决定"要不要清占位符"。
+    """
+    if not sid:
+        return
+    with _INFLIGHT_LOCK:
+        if sid in _INFLIGHT:
+            _INFLIGHT[sid]["abandoned"] = True
+
+
+def _inflight_end(sid):
+    """登记"这个会话生成结束了"。**必须在 finally 里调** —— 漏掉就是永久卡"正在回答"。"""
+    if not sid:
+        return
+    with _INFLIGHT_LOCK:
+        _INFLIGHT.pop(sid, None)
+
+
+def _inflight_idle(sid):
+    """这个会话"多久没有心跳"了（秒）；不在册返回 None。"""
+    if not sid:
+        return None
+    with _INFLIGHT_LOCK:
+        rec = _INFLIGHT.get(sid)
+        if not rec:
+            return None
+        return max(0.0, time.time() - float(rec.get("at") or rec.get("started") or 0))
+
+
+def _inflight_has(sid, max_idle=None):
+    """这个会话**真的**还在生成吗（心跳判据）。
+
+    `max_idle`：允许的最大静默秒数（默认 `_INFLIGHT_DEAD_S`）。
+    超过就认为这一轮已经死了（客户端断开后生成器没被关闭、或进程出过意外）——
+    这是"时好时坏"的解药：**判据从"有没有注销"改成"心跳还新不新"**。
+
+    注意：前端的"放弃"（abandon）**不影响**这个判断 —— 见 `_inflight_abandon`。
+    """
+    if not sid:
+        return False
+    idle = _inflight_idle(sid)
+    if idle is None:
+        return False
+    limit = _INFLIGHT_DEAD_S if max_idle is None else float(max_idle)
+    return idle <= limit
+
+
+def _inflight_generating(sid):
+    """界面口径：这个会话要不要显示"正在回答"（活着 **且** 用户没放弃它）。"""
+    if not _inflight_has(sid):
+        return False
+    with _INFLIGHT_LOCK:
+        rec = _INFLIGHT.get(sid) or {}
+        return not rec.get("abandoned")
+
+
+def _inflight_all():
+    with _INFLIGHT_LOCK:
+        return dict(_INFLIGHT)
+
+
+def _inflight_reap():
+    """把已经死了的在册项清掉（返回清掉几个）。
+
+    为什么要有它：死掉的项如果一直留在表里，界面就永远显示"正在回答…"。
+    清掉是安全的 —— 判定依据是心跳（见 `_INFLIGHT_DEAD_S` 的说明），
+    而真正活着的轮每 5 秒就会把时间戳顶新一次。**心跳没了的轮，答案也永远不会来了。**
+    """
+    now = time.time()
+    dead = []
+    with _INFLIGHT_LOCK:
+        for sid, rec in list(_INFLIGHT.items()):
+            if now - float(rec.get("at") or rec.get("started") or 0) > _INFLIGHT_DEAD_S:
+                dead.append(sid)
+        for sid in dead:
+            _INFLIGHT.pop(sid, None)
+    if dead:
+        LOG.warning("生成状态回收：%s 已经 %d 秒没有心跳 → 判定这一轮已死，清掉标记",
+                    dead, _INFLIGHT_DEAD_S)
+    return dead
+
+
+def _flush_partial_answer(sid, partial):
+    """客户端断开时，把**已经生成的部分**落盘，并在末尾如实标注"中断了"。
+
+    为什么必须落盘：用户"回答到一半切走"，切回来时如果只剩一个占位符，
+    他既看不到已经生成的内容、也分不清"是小焦卡住了"还是"是自己切走了"。
+    把半截内容 + 一句明确的中断说明写回去，用户就知道发生了什么，也能决定要不要重问。
+    内容太短（<40 字，多半是刚开头）就不写正文，只留中断说明 —— 半句话比没有更让人困惑。
+    """
+    if not sid:
+        return False
+    text = (partial or "").strip()
+    if len(text) >= 40:
+        body = text + "\n\n" + _INTERRUPTED_NOTE
+    else:
+        body = _INTERRUPTED_NOTE
+    ok = replace_pending_msg(sid, body)
+    LOG.info("客户端断开/切换：已把这一轮生成到的 %d 字落盘（会话 %s，成功=%s）",
+             len(text), sid, ok)
+    return ok
+
+
 def append_msg(role, content):
     s, d = get_current_session()
     s.setdefault("messages", []).append({"role": role, "content": content})
@@ -1815,8 +2472,14 @@ def replace_pending_msg(sid, content):
       于是 B 会话这一问的回答被写进了 A 会话，B 自己永远停在"⏳ 正在回答"，
       下一轮历史里又带着这个占位符 —— 正是第 5 步要防的**串台**。
       修法：调用方在写占位符时就把会话 id 记下来，回答出来时**按 id 定点回填**。
+
+    ---- Bug 5 补充：`sid` 为空时**不许乱写** ----
+    以前 `if not sid: return False` 只是"不写"；现在仍然不写，但会在日志里留痕 ——
+    因为"回填没发生"正是"界面卡在正在回答"的直接原因，不留痕就查不出来。
     """
     if not sid:
+        LOG.warning("回填占位消息时没有会话 id（这一轮的回答没写回会话）——"
+                    "界面可能停在「正在回答」，请检查 get_current_session()")
         return False
     try:
         d = _sessions()
@@ -2244,8 +2907,15 @@ def _bg_run(jid, cmd, timeout):
         _BG[jid] = {"state": "error", "result": str(e)}
 
 
-_PLACEHOLDER_RE = re.compile(r"[\[\<（(]\s*(?:用户名|username|user|userprofile|项目路径|项目目录|"
-                               r"默认目录|当前目录|项目根)\s*[\]\>）)]", re.I)
+_PLACEHOLDER_RE = re.compile(r"[\[\<（(]\s*(?:用户名|用户名称|当前用户|当前用户名|你的用户名|username|user|"
+                             r"userprofile|项目路径|项目目录|默认目录|当前目录|项目根)\s*[\]\>）)]", re.I)
+# **不带括号**的占位词（本轮实测抓到的真缺陷）：
+# 模型写的是 `C:/Users/当前用户/Desktop` —— 没有中括号，所以上面那条正则**根本不匹配**，
+# 替换不了 → list_files 直接 `WinError 3 系统找不到指定的路径`。
+# 判据落在"占位词出现在 Users 这一段的位置上"，而不是"有没有被括号包着"。
+_BARE_USER_RE = re.compile(
+    r"(?i)(users[\\/]+)(当前用户|当前用户名|用户名称|用户名|你的用户名|我的用户名|用户|"
+    r"username|user|your_?name|your_?username)(?=[\\/]|$)")
 
 
 def _expand_path_placeholders(p):
@@ -2253,18 +2923,35 @@ def _expand_path_placeholders(p):
 
     真实缺陷：说"列出我桌面上的 HTML 文件"，模型把桌面写成 C:\Users\[用户名]\Desktop 这种
     模板 → list_files 直接 WinError 3 找不到。提示词里给的其实一直是真实路径，但模型仍可能
-    "背模板"，所以工具侧再兜一层：把 [用户名]/<username>/%USERPROFILE% 换成真实值。
+    "背模板"，所以工具侧再兜一层。
+
+    **本轮修掉的两个真问题**：
+      ① 以前把 `[用户名]` 直接替换成**空串** → `C:\Users\\Desktop`（照样是错路径）。
+         占位符该换成**真实用户名**，不是删掉。
+      ② 以前的判据是"占位词有没有被 []/<>/() 包着"。而模型实测写的是
+         `C:/Users/当前用户/Desktop`（**没括号**）→ 正则不匹配 → 一点没改。
+         现在按"占位词是否坐在 Users 这一段的位置上"来判，带不带括号都抓得住。
     """
     s = str(p or "")
     if not s:
         return s
     home = os.path.expanduser("~")
-    s = _PLACEHOLDER_RE.sub("", s)
-    s = s.replace("%USERPROFILE%", home).replace("%USERNAME%", os.path.basename(home))
-    s = re.sub(r"[\\/]{2,}", "\\\\", s)
-    s = s.replace("\\Desktop", "\\Desktop")
+    user = os.path.basename(home) or ""
+    # ① 带括号的占位符 → 真实用户名（不是空串）
+    s = _PLACEHOLDER_RE.sub(user, s)
+    # ② 裸占位词（Users/当前用户/…）→ 真实用户名
+    s = _BARE_USER_RE.sub(lambda m: m.group(1) + user, s)
+    # ③ 环境变量式占位符
+    s = s.replace("%USERPROFILE%", home).replace("%USERNAME%", user)
+    # ④ 剩下的零散写法（模型偶尔只写 `<用户名>` 这种）
+    for _w in ("<用户名>", "<当前用户>", "【用户名】", "【当前用户】"):
+        s = s.replace(_w, user)
     if s.startswith("~"):
         s = home + s[1:]
+    # ⑤ 收拾多余分隔符（只合并"同一种"分隔符，别把 `C:/a\b` 这种混用改成更奇怪的样子）
+    s = re.sub(r"/{2,}", "/", s)
+    s = re.sub(r"\\{2,}", "\\\\", s)
+    s = s.replace(":\\\\", ":\\").replace(":\\\\", ":\\")
     return s
 
 
@@ -2280,9 +2967,151 @@ def _fix_args_paths(name, args):
     return out
 
 
+def _carrier_block(text):
+    """这段工具结果是不是**载体主动拦截**（红线/权限/安全/限流）？
+
+    为什么载体必须自己认得出这件事（缺陷 2 的根子）：
+    红线拦下之后，原来把"已拦截"这条消息**继续丢给模型去总结**，
+    结果模型编了一句"已在指定位置新建了文件" —— 用户看到的是**与事实相反**的话。
+    载体拦截是**载体的决定**，它的措辞就该由载体负责到底，不该让模型转述。
+    认出来之后：直接把载体原文交给用户，并且**不再让模型碰它**。
+
+    判定用 `core.health.monitor.is_carrier_action`（**同一个定义只有一处**）：
+    健康系统靠它把载体动作排除在症状之外，出口靠它决定"不经模型" ——
+    两边用同一份白名单，才不会出现"这边算拦截、那边算模型出错"的错位。
+    """
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core.health.monitor import is_carrier_action
+        return bool(is_carrier_action(text))
+    except Exception:      # noqa: silent-ok — 模块拿不到就退回本地标记判断（宁可保守）
+        s = str(text or "")
+        return any(m in s for m in ("🚫", "删除禁区", "〔待确认〕", "安全红线", "SSRF", "请求太频繁"))
+
+
+def _carrier_block_answer(kind, detail=""):
+    """把载体的拦截结果整理成**直接给用户看的原文**（缺陷 2 要求的口径）。
+
+    用户明确要求第一条就是这句话，一个字都不改：
+        ⚠️ 删除操作被载体层拦截（安全红线）。文件未被删除。
+    后面再接载体给出的原因与替代建议（也是载体写的，不是模型编的）。
+    """
+    if kind == "delete":
+        head = "⚠️ 删除操作被载体层拦截（安全红线）。文件未被删除。"
+    else:
+        head = "⚠️ 该操作被载体层拦截（安全红线）。操作未执行。"
+    # 细节原样保留（**不要把 🚫 去掉**）：那是载体写给机器看的固定标记，
+    # 健康系统的白名单与测试都靠它认出"这是载体主动动作"。用户看的是第一行。
+    body = str(detail or "").strip()
+    tail = "\n\n（这条提示由**载体层**直接给出，没有经过模型转述 —— 拦截是载体的决定，就该由载体说清。）"
+    return head + ("\n\n" + body if body else "") + tail
+
+
 def run_tool(name, args, force=False):
-    global PENDING
+    """工具调用的**唯一入口**：红线拦截 → 本轮去重 → 真执行 → 留档。
+
+    为什么要在外面再包一层（而不是把去重塞进 `_run_tool_impl` 里）：
+    `_run_tool_impl` 有二十多个 `return`（每个内置工具一条），想在每条返回前都记一次结果
+    必然会漏；而"漏记"的后果是**同一个 URL 又被抓一遍**——正是 Bug 2。
+    包一层就没有这个风险：出口只有一个。删除红线同理 —— **只有放在唯一入口上，
+    "所有文件/命令入口都拦得住"这句话才成立**。
+    """
     args = _fix_args_paths(name, args or {})   # 补充任务 7：先把 [用户名] 这类占位符展开成真实路径
+    # ---- 安全红线：删除禁区（**第一道，优先于一切**）----
+    # 为什么排在权限判断、去重、执行之前：删除是唯一不可逆的动作，
+    # 它不该有机会走到"要不要问用户确认"那一步 —— 直接拒绝，不给模型任何周旋空间。
+    _deny = _delete_redline(name, args)
+    if _deny:
+        return _deny
+    # ---- Bug 2：本轮去重（**放在权限判断之前**）----
+    # 放在前面是有意的：如果这一轮已经抓过同一个 URL，连"要不要问用户确认"都不用再走一遍 ——
+    # 用户不可能希望同一个动作被问两次。真正的网络请求更是一次都不该重复发。
+    _dup = _round_cached(name, args)
+    if _dup is not None:
+        LOG.info("本轮已调用过同一工具同一参数，直接复用上次结果（不再真调）：%s %s",
+                 name, _summarize_args_for_log(name, args))
+        return ("（本轮 `%s` 对同一目标已经调用过一次，这里直接复用上次的结果，没有重复执行）\n%s"
+                % (name, _dup))
+    _res = _run_tool_impl(name, args, force=force)
+    _round_remember(name, args, _res)
+    return _res
+
+
+# ================== 安全红线：小焦不能删除任何文件 ==================
+# 【为什么这条是红线】删除是**唯一不可逆**的动作。写错了可以改，删了就没了。
+# 载体层的分寸是：**允许小焦犯错，但不允许它造成无法挽回的损失。**
+# 所以这条约束不写在提示词里（那只是"请求模型自觉"，模型有否决权），而是写在这里：
+#   · 代码层硬拦 —— 模型的输出无论怎么绕，都走不过这个函数；
+#   · 与权限开关**无关** —— 就算 capabilities.full_access=true，删除照样拦（红线 4）；
+#   · 间接删除也拦 —— 命令拼接、`python -c`、脚本正文、重定向，绕道走不算放行（红线 6）。
+# 判定逻辑在 `core/security/no_delete.py`（可单独审计、可单独测试），这里只做**接线**：
+# 让"所有文件/命令入口"无一例外地经过它。
+# 【去掉它会怎样】模型一句幻觉、一次抽风、一段从网页里抄来的指令，都可能把用户的东西删掉；
+# 而载体是唯一能在"动作真的发生之前"说"不"的那一层 —— 模型自己说不了这个"不"。
+# 覆盖的入口（以后加了新工具要照着补，否则红线会从这里漏出去）：
+#   run_command / background（执行命令）、write_file / edit_file（写文件）、
+#   move_file / rename_file（带覆盖语义，同样是不可逆的破坏）。
+_DELETE_GUARD_TOOLS = {
+    "run_command": "command", "background": "command",
+    "write_file": "write", "edit_file": "edit",
+    "move_file": "move", "rename_file": "rename",
+}
+
+
+def _delete_redline(name, args):
+    """删除红线检查。返回空串 = 放行；非空 = 给用户看的**可读**拒绝提示。
+
+    一律 try/except：安全模块自己出问题时**宁可放行也不能把工具链打死**
+    （安全是加法，不该拿整个系统陪葬）。但会在日志里留 WARNING，绝不静默。
+    """
+    kind = _DELETE_GUARD_TOOLS.get(name)
+    if not kind:
+        return ""
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core.security import no_delete as _nd
+    except Exception as e:      # noqa: silent-ok — 安全模块不可用不能变成"工具全废"
+        LOG.warning("删除禁区模块不可用（本次放行，请检查 core/security/）：%s", e)
+        return ""
+    try:
+        a = args or {}
+        if kind == "command":
+            cmd = str(a.get("command") or "")
+            if not cmd.strip():
+                return ""
+            deny = _nd.check_command(cmd)
+            if deny:
+                LOG.warning("删除禁区：拦下工具 %s 的命令（原文 %r）", name, cmd[:200])
+                # 缺陷 2：直接给用户**载体的原文**，绝不交给模型总结
+                #（生成"已新建文件"那种假话的正是"让模型转述拦截"这条路）。
+                return _carrier_block_answer("delete", deny)
+            return ""
+        if kind in ("write", "edit"):
+            path = str(a.get("path") or "")
+            content = str(a.get("content") or a.get("new_string") or "")
+            r = _nd.check_file_op("write" if kind == "write" else "edit", path, content)
+            if r:
+                LOG.warning("删除禁区：拦下工具 %s 对 %s 的操作", name, path)
+                return _carrier_block_answer("delete", r)
+            return ""
+        # move / rename：源路径被移走同样是不可逆的 → 按 move 判
+        path = str(a.get("src") or a.get("path") or a.get("from") or "")
+        r = _nd.check_file_op(kind, path)
+        if r:
+            LOG.warning("删除禁区：拦下工具 %s 对 %s 的 %s", name, path, kind)
+            return _carrier_block_answer("delete", r)
+        return ""
+    except Exception as e:      # noqa: silent-ok — 判定异常按放行处理，但必须留痕
+        LOG.warning("删除禁区判定异常（本次放行）：%s", e)
+        return ""
+
+
+def _run_tool_impl(name, args, force=False):
+    global PENDING
     # 权限模式：Full access(默认)=所有命令直接执行、危险命令也不询问；Read-only=每次执行命令都询问
     if not force:
         # 权限模式（第一批任务 2）：默认 full_access=false —— **只对危险命令**要确认，
@@ -2508,7 +3337,7 @@ def _map_tool(name, args):
 
 
 def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget_s=0,
-                   workflow=""):
+                   workflow="", temperature=None):
     """带 function calling 的大脑调用：模型自己“想”并调用工具（优先），循环直到给出最终回答。
 
     返回 (answer, tool_trace)。兼容 OpenAI tool_calls 与 Qwen <tool_call> XML。
@@ -2587,7 +3416,11 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
                     "最后一步结果：\n\n```\n%s\n```\n\n（要接着做就说「继续」）"
                     % (budget_s, tool_trace[-1].get("tool"), str(_last)[:800])), tool_trace
         _t = _targets[_ti]
-        payload = {"model": _t["model"], "messages": m, "temperature": TEMPERATURE,
+        # 温度：调用方按意图给（思维流的温度自适应）；没给就用全局默认。
+        # 为什么不直接改全局 TEMPERATURE：那是**进程级**配置，改它会影响别的并发请求
+        # 与后台任务（自主性/世界层也在用同一个常量）—— 按轮传参才是正确的作用域。
+        _temp_use = TEMPERATURE if temperature is None else float(temperature)
+        payload = {"model": _t["model"], "messages": m, "temperature": _temp_use,
                    "max_tokens": (200 if lean else MAX_TOKENS),
                    "tools": ([] if lean else _build_tools(only=tools_subset))}
         try:
@@ -2629,6 +3462,13 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
                     m.append({"role": "tool", "content": _forced})
                     break
                 _vnote = _after_call(tname, targs, result)
+                if _carrier_block(result):
+                    # 缺陷 2：载体拦截**不进模型**，直接把载体原文交给用户。
+                    # 为什么连"再问模型一句"都不行：模型会把它当成"一个待完成的任务"，
+                    # 于是编一句"已完成"（实测：红线拦下删除，它回答"已在指定位置新建了文件"）。
+                    LOG.warning("载体拦截（%s）：直接把载体原文交给用户，不经过模型", tname)
+                    return _carrier_block_answer(
+                        "delete" if "删除" in str(result) else "other", result), tool_trace
                 _tripped = _tool_breaker(_fail_streak, tname, result, tool_trace)
                 if _tripped:
                     return _tripped, tool_trace
@@ -2651,6 +3491,11 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
                 m.append({"role": "tool", "tool_call_id": tc.get("id"), "content": _forced})
                 continue
             _vnote = _after_call(tname, targs, result)
+            if _carrier_block(result):
+                # 同上（OpenAI 标准工具调用这条）：拦截原文直接给用户，不让模型转述
+                LOG.warning("载体拦截（%s）：直接把载体原文交给用户，不经过模型", tname)
+                return _carrier_block_answer(
+                    "delete" if "删除" in str(result) else "other", result), tool_trace
             _tripped = _tool_breaker(_fail_streak, tname, result, tool_trace)
             if _tripped:
                 return _tripped, tool_trace
@@ -2678,12 +3523,27 @@ def _tool_failed(result):
 
     只认明确的失败信号：中文失败词 / Error / 校验 FAIL / 异常前缀。
     成功的正文里偶尔也会出现"失败"两字（比如"失败重试机制"），所以要求它出现在前 200 字内。
+
+    【为什么加了"失败/超时/拒绝"这些**短词** —— 实测定性出来的真缺陷】
+        原来只认复合词（`校验失败` `失败：` `调用失败` `工具执行失败`），
+        而工具实际吐回来的最常见措辞是**散的**：
+            连接超时 / 请求超时 / timeout / 请求被拒绝 / 服务器返回 500 / 执行失败
+        实测这些**一个都不认**（`_tool_failed('连接超时')` 返回 False）。
+        后果很严重：熔断器**永远不会计数**，于是
+        "同一工具连续失败 3 次就熔断"这条保护**从来没生效过** ——
+        工具一直失败，小焦就一直重试，用户看到的是转圈和烧 token。
+        既然函数已经用"只在前 200 字内匹配"把误判面压小了，
+        这里就补上这些**明确表示失败**的词（超时/拒绝/连不上/失败）。
+        仍然不认"成功""正常"这类正向词 —— 判据只朝"失败"这一侧加，不加模糊词。
     """
     head = str(result or "")[:200]
     if not head.strip():
         return True
     for k in ("校验失败", "失败：", "调用失败", "工具执行失败", "插件异常", "异常：",
-              "Error", "error:", "Traceback", "不存在", "非法", "禁止", "无效"):
+              "Error", "error:", "Traceback", "不存在", "非法", "禁止", "无效",
+              # ↓ 实测定性补上的"散词"（工具最常见的失败措辞）
+              "失败", "超时", "timeout", "timed out", "拒绝", "连不上", "无法连接",
+              "连接被", "不可用", "请求出错", "执行出错", "状态：FAIL"):
         if k in head:
             return True
     if re.search(r"状态：FAIL|FAIL\b", head):
@@ -2894,7 +3754,70 @@ _SCRAPE_TOOL_HINTS = [
     ("fetch", ("浏览器", "渲染", "动态页面", "js渲染", "js 渲染", "登录后", "点开")),
     ("get", ("抓取", "爬取", "爬一下", "抓一下", "抓个", "抓网页", "取网页", "请求网页", "抓取网页")),
 ]
-_SCRAPE_URL_RE = re.compile(r"https?://[^\s，。；、）)\]\"']+")
+_URL_STOP = "，。！？；：、（）【】《》“”‘’〈〉「」『』…—～·　"
+_SCRAPE_URL_RE = re.compile(r"https?://[^\s" + re.escape(_URL_STOP) + r"\"']+")
+_CJK_ANY = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff]")
+_URL_SAFE_PATH = "/-._~!$&'()*+,;=:@%"
+
+
+def _clean_url(raw):
+    r"""把"混进了中文/标点"的网址收拾成一个**真能抓**的网址（Bug 1）。
+
+    真实缺陷：用户说「抓一下 http://www.baidu.com的uuid」—— 中文"的uuid"紧贴在网址后面，
+    而原来的正则只挡了空格和几个全角标点、**没挡汉字**，于是整段（含中文）被当成网址去解析
+    → DNS 解析失败。用户可能在**任何位置**插中文，所以这不是单个 case，得按通用规则处理。
+
+    规则（按"中文落在哪一段"区分，这一步是关键）：
+      · 中文落在**主机名**里（`www.baidu.com的uuid`）→ 说明网址在中文处就结束了 → 截断；
+        但若主机名**本身就是**中文域名（`例子.com`）→ 那是合法的国际化域名，转成 punycode 保留。
+      · 中文落在**路径**里（`a.com/中文路径/xxx`）→ 那是网址的一部分 → **保留并百分号编码**，
+        绝不删（删了路径就变了）。
+    最后再按 URL 合法字符集裁一遍，砍掉尾巴上粘着的标点。
+    """
+    s = (raw or "").strip().strip("\"'<>()[]{}")
+    if not s:
+        return ""
+    # 先在句读处截断（防御性：调用方可能已经把正则结果传进来了，这里再兜一次）
+    for ch in _URL_STOP:
+        i = s.find(ch)
+        if i >= 0:
+            s = s[:i]
+    m = re.match(r"^(https?)://(.+)$", s, re.I)
+    if not m:
+        return ""
+    scheme, rest = m.group(1).lower(), m.group(2)
+    # 主机 / 路径 / 查询 分开处理（主机里出现中文 = 网址说完了；路径里的中文 = 网址的一部分）
+    cut = len(rest)
+    for ch in ("/", "?", "#"):
+        i = rest.find(ch)
+        if 0 <= i < cut:
+            cut = i
+    host, tail = rest[:cut], rest[cut:]
+    if _CJK_ANY.search(host):
+        head = _CJK_ANY.split(host, 1)[0]          # 中文之前的那截
+        if head and "." in head.rstrip("."):
+            host = head.rstrip(".")                # 情形一：网址到中文为止
+        else:
+            try:                                   # 情形二：本身就是中文域名 → punycode
+                host = host.encode("idna").decode("ascii")
+            except Exception:
+                return ""                          # 转不了就老实放弃，别拿半截地址去撞 DNS
+    # 端口要留着：`http://127.0.0.1:5000` 里的 `:5000` 是网址的一部分。
+    # （第一版把冒号一起当非法字符删了 → 变成 `127.0.0.15000`，实测被抓到。）
+    _hostname, _sep, _port = host.partition(":")
+    _hostname = re.sub(r"[^A-Za-z0-9\-._]", "", _hostname)
+    _port = re.sub(r"[^0-9]", "", _port)
+    host = _hostname + ((":" + _port) if (_sep and _port) else "")
+    if not _hostname or "." not in _hostname:
+        return ""
+    if tail:
+        path, sep, query = tail.partition("?")
+        path = requests.utils.quote(path, safe=_URL_SAFE_PATH)   # 路径里的中文 → 百分号编码
+        tail = path + (sep + query if sep else "")
+    url = "%s://%s%s" % (scheme, host, tail)
+    url = re.sub(r"[^A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]", "", url)   # 只留合法字符
+    return url.rstrip(".,;:!?、。，")
+
 _SCRAPE_DOMAIN_RE = re.compile(r"\b([a-z0-9][a-z0-9\-]*\.(?:com|cn|org|net|io|dev|gov|edu|ai|co|me|app)"
                                r"(?:/[^\s，。；、）)\]\"']*)?)", re.I)
 # 用户显式要求忽略 robots.txt（默认严格遵守，只有明确说了才放行）
@@ -2928,7 +3851,7 @@ def _detect_scrape_intent(q):
         if any(k.lower() in ql for k in kws):
             tool = name
             break
-    urls = _SCRAPE_URL_RE.findall(q or "")           # 显式 http(s):// 网址
+    urls = [u for u in (_clean_url(x) for x in _SCRAPE_URL_RE.findall(q or "")) if u]  # Bug 1：清洗
     explicit = bool(urls)
     if not urls:
         m = _SCRAPE_DOMAIN_RE.search(q or "")
@@ -2955,6 +3878,215 @@ def _detect_scrape_intent(q):
     if ignore:
         args["ignore_robots"] = True
     return tool, args
+
+
+# ================== 第 5 部分 · 世界层接入：抓取前查地图、抓取后更新地图 ==================
+# 【设计意图】互联网不是小焦的工具箱，是它的**世界**。它在这个世界里看、走、学、记。
+# 世界模型就是它"脑子里的地图"：这个站是干嘛的（type）、可不可信（trust）、多久刷新一次（refresh）。
+# 为什么在**抓取**这条路上接：
+#   · 抓取是"看世界"的唯一动作 —— 看图之前先看地图，看完再把地图改准，这是最小的闭环；
+#   · 不接的话，世界模型永远是一张空表，`core/world` 就只是个没人读的日志目录。
+# 【去掉它会怎样】每次抓取都是"第一次见这个站"：不知道它是新闻站还是 API、不知道该多勤地看、
+# 不知道它可不可信。世界层就退化成"又一个 HTTP 客户端"。
+_WORLD_CACHE = {"model": None, "perception": None, "tried": False, "override": None}
+
+
+def _world_layer():
+    """惰性拿 (WorldModel, WorldPerception)。拿不到就返回 (None, None) —— 世界层缺席不影响对话。
+
+    `override` 是给测试留的注入口：单测要的是"接线对不对"，不该把临时站点写进
+    小焦真正的世界地图里（那是用户的数据，不是测试的草稿纸）。
+    """
+    if _WORLD_CACHE.get("override"):
+        return _WORLD_CACHE["override"]
+    if _WORLD_CACHE["tried"] and _WORLD_CACHE["model"] is not None:
+        return _WORLD_CACHE["model"], _WORLD_CACHE["perception"]
+    _WORLD_CACHE["tried"] = True
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core import world as _w
+        p = _w.WorldPerception()
+        _WORLD_CACHE["model"], _WORLD_CACHE["perception"] = p.model, p
+        return _WORLD_CACHE["model"], p
+    except Exception as e:      # noqa: silent-ok — 世界层出问题不能让抓取跟着失败
+        LOG.debug("世界层不可用（忽略）：%s", e)
+        return None, None
+
+
+def _world_before_fetch(url):
+    """**抓取前先查世界模型** —— 知道这个站是干嘛的、多久刷新一次。
+
+    返回一句给日志/轨迹看的中文说明（拿不到世界层就返回空串）。
+    这里刻意**不做拦截**：用户点名要抓的，就抓 —— 地图的作用是"知道自己在哪"，
+    不是"替用户决定不去"。但地图会影响别的东西：可信度低的结果会被标注，
+    刷新周期会被记进模型，供后台的"持续观察"决定下次什么时候来看。
+
+    【必须分清的两件事（实测踩到）】"地图上没有这个站"和"有这个站但类型判不出来"
+    完全是两回事：前者是"第一次见"，后者是"我见过它，只是不知道它算什么站"（裸 IP 就是这样）。
+    第一版只看 `type_of` 返回 "unknown" 就报"第一次见到" —— 对一个已经看过十次的站
+    说"第一次见"，日志会骗人；用户排查时会以为世界模型根本没在记。
+    """
+    try:
+        wm, _p = _world_layer()
+        if wm is None or not url:
+            return ""
+        dom = wm.domain_of(url)
+        if not dom:
+            return ""
+        recorded = dom in (wm.snapshot().get("sites") or {})
+        known = wm.type_of(dom, default="")
+        if not recorded:
+            LOG.info("世界层：第一次见到 %s（未收录），抓完会把它记进世界模型", dom)
+            return "（世界层：第一次见到这个站，抓完会记进地图）"
+        if not known or known == "unknown":
+            LOG.info("世界层：%s 已收录但类型未判定（可信度 %.1f，通常 %s 刷新）",
+                     dom, wm.trust_of(dom), _fmt_interval(wm.refresh_interval(dom)))
+            return ("（世界层：%s 已收录，类型未判定，可信度 %.1f，通常 %s 刷新一次）"
+                    % (dom, wm.trust_of(dom), _fmt_interval(wm.refresh_interval(dom))))
+        note = ("世界层：%s = %s，可信度 %.1f，通常 %s 刷新一次"
+                % (dom, known, wm.trust_of(dom), _fmt_interval(wm.refresh_interval(dom))))
+        LOG.info(note)
+        return "（%s）" % note
+    except Exception as e:      # noqa: silent-ok — 查地图失败不能影响抓取
+        LOG.debug("世界层查询失败（忽略）：%s", e)
+        return ""
+
+
+def _fmt_interval(sec):
+    """秒 → 人能读的中文（1h / 30m / 2d）。"""
+    try:
+        s = int(sec or 0)
+        if s >= 86400 and s % 86400 == 0:
+            return "%dd" % (s // 86400)
+        if s >= 3600:
+            return "%.0fh" % (s / 3600.0)
+        if s >= 60:
+            return "%.0fm" % (s / 60.0)
+        return "%ds" % s
+    except Exception:      # noqa: silent-ok — 格式化成不了就给个兜底字面量
+        return "?"
+
+
+def _world_after_fetch(url, body, status=None):
+    """**抓取后更新世界模型**：把这次看到的内容记成快照，并感知"跟我上次看到的不一样了吗"。
+
+    为什么走 `ingest` 而不是 `snapshot`：正文已经在手里了 —— 再调 `snapshot()` 会让
+    "看世界"这个动作对同一个站点发出**第二次真实请求**（既慢又像在打人家的站）。
+    返回一句给用户/轨迹看的变化说明（没有变化就返回空串）。
+
+    【实测抓到的真 bug】`diff()` 返回的列表里**包含 `unchanged` 这一项**（"比过了、没变"也是一种结论）。
+    第一版把"列表非空"直接当成"变了" —— 于是每次抓一个没变的页面，都会对用户喊一句
+    "这个页面跟你上次看到的不一样了"。**假警报比没有警报更坏**：用户会从此不信这条提示。
+    所以这里必须先按 kind 过滤，只有出现真正的变化类 kind 才算变。
+    """
+    try:
+        _wm, p = _world_layer()
+        if p is None or not url or not (body or "").strip():
+            return ""
+        _rec, changes = p.ingest(url, body, status=(status or 0))
+        if not changes:
+            return ""
+        # 真正的"变化"才值得打扰用户；first_seen/unchanged 都是"没什么可说的"
+        changed = [c for c in changes if c.get("kind") in ("changed", "appeared", "disappeared")]
+        if not changed:
+            kinds0 = [c.get("kind") for c in changes]
+            LOG.info("世界层：%s 无变化（%s）", url, kinds0)
+            return ""
+        kinds = []
+        for c in changed:
+            k = c.get("kind")
+            if k and k not in kinds:
+                kinds.append(k)
+        LOG.info("世界层：%s 发生了变化 %s", url, kinds)
+        detail = ""
+        for c in changed:
+            if c.get("kind") == "changed" and c.get("detail"):
+                detail = str(c["detail"])[:120]
+                break
+        return "\n\n🌍 **世界层：这个页面跟你上次看到的不一样了**%s" % (("（%s）" % detail) if detail else "")
+    except Exception as e:      # noqa: silent-ok — 记世界失败绝不能影响"把页面给用户看"这件事
+        LOG.debug("世界层更新失败（忽略）：%s", e)
+        return ""
+
+
+# ================== 问题 4：抓取失败之后，"再来一次"必须真的再来一次 ==================
+# 【真实缺陷】用户实测的三步，一步比一步糟：
+#   ① 说"抓 http://www.baidu.com的uuid" → 被 robots 正确拦下（这条没错）；
+#   ② 按提示说"忽略 robots 抓一次" → **没调任何工具**，直接返回一段编造的 JSON + 一张
+#      跟 baidu 毫无关系的 NVD CVE 表格；
+#   ③ 用户完全看不出来那是编的（工具轨迹是空的，但界面上就是一段"像模像样"的回答）。
+# 根因有两条，缺一条都复现：
+#   · **载体把上下文丢了**：第二轮那句话里**没有网址**（用户没必要重复一遍），
+#     而 `_detect_scrape_intent` 的判据是"句子里必须有网址" → 判不出抓取意图 →
+#     交给模型 → 模型凭上下文里的碎片硬编。
+#   · **授权词没被识别**：`_SCRAPE_IGNORE_ROBOTS_HINTS` 里有"忽略robots"，
+#     但用户的说法是"忽略 robots 抓一次"（中间有空格、后面带动作）——
+#     而且这一轮**压根没走到那一步**（因为没网址就没意图）。
+# 修法：载体自己记住"上一次抓的是哪个网址、为什么失败"，并在用户说
+# "忽略/跳过/重试/再抓/我确认有权"时，**强制**用那个网址 + ignore_robots 再抓一次。
+# 判据写在代码里（不指望模型把"忽略 robots"理解成 `ignore_robots=true`）。
+_LAST_SCRAPE = {"url": "", "error": "", "at": 0.0, "tool": "", "robots": False}
+_SCRAPE_MEMORY_S = 1800          # 上一次失败的记忆时长（30 分钟）—— 太久的"再来一次"不该算数
+
+# 授权词：用户明确表示"我有权抓 / 我允许忽略 robots"
+_SCRAPE_GRANT_HINTS = ("忽略robots", "忽略 robots", "跳过robots", "跳过 robots", "无视robots",
+                       "无视 robots", "不管robots", "不管 robots", "不看robots", "不看 robots",
+                       "ignore robots", "别管robots", "不用管robots",
+                       "我确认有权", "我有权", "我是站长", "我拥有该站", "允许抓取", "授权抓取",
+                       "我授权", "合法抓取")
+# 重试词：用户要求"再来一次"
+_SCRAPE_RETRY_HINTS = ("再抓", "重抓", "重试", "再试", "再来一次", "重新抓", "接着抓",
+                       "继续抓", "抓一次", "试一次", "再查", "再拉")
+
+
+def _scrape_remember_fail(url, tool, result):
+    """记住"哪个网址没抓成、为什么"——供下一轮"再来一次"用。
+
+    为什么必须由载体记（而不是让模型记）：用户不会重复一遍网址（那本来就是我刚给你的），
+    指望模型从上下文里把网址捞出来并**原样**填进参数，实测就是"编一个看起来像的"。
+    载体记下来是**确定性**的：网址一个字符都不会变。
+    """
+    try:
+        low = str(result or "")[:600]
+        _LAST_SCRAPE.update({"url": str(url or ""), "tool": str(tool or ""),
+                             "error": low, "at": time.time(),
+                             "robots": ("robots" in low.lower())})
+        LOG.info("抓取未成功，已记住以备重试：%s（%s）", url,
+                 "robots 拦截" if _LAST_SCRAPE["robots"] else "其它失败")
+    except Exception as e:      # noqa: silent-ok — 记不住只是少一次重试机会，不能影响本轮
+        LOG.debug("记录失败抓取失败（忽略）：%s", e)
+
+
+def _scrape_retry_intent(user_input):
+    """用户这句话是不是"刚才那次没成，再来一次（并且我授权忽略 robots）"？
+
+    返回 (工具名, 参数) 或 None。判据（**全部由代码判，不问模型**）：
+      ① 句子里有授权词或重试词；
+      ② 网址：先看这句里有没有（用户重复说了就用新的），没有就用**上一次失败的那个**；
+      ③ 距离上次失败不超过 `_SCRAPE_MEMORY_S`（免得十分钟前的网址被莫名其妙重抓）。
+    """
+    q = (user_input or "")
+    ql = q.lower()
+    grant = any(k.lower() in ql for k in _SCRAPE_GRANT_HINTS)
+    retry = any(k.lower() in ql for k in _SCRAPE_RETRY_HINTS)
+    if not (grant or retry):
+        return None
+    urls = [u for u in (_clean_url(x) for x in _SCRAPE_URL_RE.findall(q)) if u]
+    url = urls[0] if urls else ""
+    if not url:
+        last = _LAST_SCRAPE
+        if not last.get("url") or (time.time() - float(last.get("at") or 0)) > _SCRAPE_MEMORY_S:
+            return None
+        url = last["url"]
+        LOG.info("用户要求重试，但句子里没给网址 → 用上一次失败的那个：%s", url)
+    # 授权词只有对"上次是被 robots 拦的"才有意义；其它失败也允许重试（就当再抓一次）
+    args = {"url": url}
+    if grant:
+        args["ignore_robots"] = True
+        LOG.info("用户明确授权忽略 robots → 本轮以 ignore_robots=true 重抓：%s", url)
+    return "get", args
 
 
 def _trace_summary(res: str) -> str:
@@ -3116,7 +4248,40 @@ def _recall_skills(query: str, k: int = 3) -> str:
 
 
 def plan_tool(user_input):
-    """让大脑把请求转成一个工具调用 JSON，返回 (tool, args)；失败返回 (None, None)。"""
+    """让大脑把请求转成一个工具调用 JSON，返回 (tool, args)；失败返回 (None, None)。
+
+    【为什么闲聊轮要在这里拦一道 —— 实测定性出来的真 bug】
+        这个函数是"让模型把请求变成工具调用"，它对**任何**输入都会问模型一次。
+        于是用户说「你好 / 在吗 / 今天好累 / 哈哈 / 嗯嗯」时，模型为了满足"必须输出一个
+        JSON"的格式要求，**凭空编出一个工具调用**。实测（本测试抓到）：
+            你好        → run_command  Get-Process | Select-Object ProcessName,Id,StartTime
+            你好呀      → run_command  echo 你好呀
+            今天好累    → run_command  Get-Process ... | Format-Table
+            嗯嗯 / 在吗 → list_files   .
+        这不是"多此一举"，而是**会真的动手**：用户只是打个招呼，系统却去列目录、
+        更糟的是去执行命令。而 `_CHAT_FALLBACK_HINT` 里那句"没真调用过工具就不许说已完成"
+        是给**模型**看的软约束，拦不住"载体自己把编造的计划当命令执行"。
+
+    【拦法为什么是"允许白名单"而不是"只拦寒暄"】
+        `_is_chitchat()` 只认明确寒暄（"今天好累"它认不出来，见上表），
+        拿它当唯一闸门会漏。所以这里用**更保守的规则**：
+        闲聊意图下，只允许 `_CHAT_SAFE_TOOLS`（只读、无害：查记忆/搜索/读文件/看目录）
+        里的工具；其余（run_command / write_file / open_app / 各类删除类）一律判为编造，
+        直接返回 (None, None) 让这一轮老老实实回话。
+        宁可漏掉一次"闲聊时顺手执行"（用户真想动手时下一轮说清楚就行），
+        也不能在用户没要求的时候动他的系统。
+    """
+    try:
+        # 注意：**不是"闲聊意图就拦"**，还要"这句话里没有明确的动手要求"。
+        # 因为 `_detect_intent` 对认不出来的输入一律兜底成 chat ——
+        # "写个文件到桌面" 就是 chat 意图 + 真任务；只按意图拦会把**正常的动手请求**一起拒掉
+        # （我第一版就是这么写错的，自测里"写个文件到桌面"当场被判成不该规划）。
+        if (_detect_intent(user_input) == "chat" and _is_chitchat(user_input)
+                and not _asks_action(user_input)):
+            LOG.debug("闲聊轮不做工具规划（避免凭空编出工具调用）：%s", str(user_input)[:40])
+            return None, None
+    except Exception as e:      # noqa: silent-ok — 闸门自身出错时按原路走，不影响正常规划
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 1279, e)
     prompt = ("用户请求：%s\n\n请把该请求转换为一个工具调用，只输出一个 JSON 对象，不要任何说明。\n"
               "可用工具：run_command(运行PowerShell命令,参数 command)、write_file(写文件,参数 path,content)、"
               "open_app(打开应用/文件,参数 path)、list_files(列目录,参数 path)、read_file(读文件,参数 path,max_chars)。\n"
@@ -3128,7 +4293,20 @@ def plan_tool(user_input):
         try:
             j = json.loads(m.group(0))
             if isinstance(j, dict) and j.get("tool"):
-                return j["tool"], j.get("args", {})
+                tool, args = j["tool"], j.get("args", {})
+                # 第二道闸（兜住 `_is_chitchat` 认不出的闲聊）：闲聊意图下只放只读工具。
+                # ⚠️ 条件里必须带上"用户没让我动手" —— 只按意图判会把
+                #    "写个文件到桌面"（chat 意图 + 真任务）这类**正常动手请求**一起丢掉
+                #    （自测抓到的第二处过拦）。
+                try:
+                    if (_detect_intent(user_input) == "chat"
+                            and not _asks_action(user_input)
+                            and tool not in _CHAT_SAFE_TOOLS):
+                        LOG.info("闲聊轮丢弃模型编造的动手类工具 %s（用户只是闲聊）", tool)
+                        return None, None
+                except Exception as e:      # noqa: silent-ok — 判断失败就保留原结果
+                    LOG.debug("忽略异常(%s:%d): %s", __file__, 1279, e)
+                return tool, args
         except Exception as e:
             LOG.debug("忽略异常(%s:%d): %s", __file__, 1279, e)
     return None, None
@@ -3256,21 +4434,71 @@ def _scrape_failed(res):
                                   "attention required", "access denied", "验证您是人类"))
 
 
-def _scrape_direct(user_input, tool_trace):
+# ===== 抓取之后的「第二个动作」（本轮实测的真缺口）=====
+# 用户说"抓 https://httpbin.org/json，**提取 slides 的标题做成表格**" —— 这是**两步**：
+#   ① 抓（工具的活）  ② 把抓到的内容加工成表格（模型的活）
+# 以前载体抓完就把原始 JSON 当答案返回（顶多附一段通用"解读"），**第二步没人做**，
+# 用户要的表格根本没出现。现在：识别出"要加工"就把真内容交给模型去加工。
+_TRANSFORM_HINTS = ("提取", "做成表格", "做成表", "做成列表", "整理成", "汇总成", "归纳", "提炼",
+                    "列出", "转成", "转成表格", "做成 markdown", "表格", "列表", "统计", "对比",
+                    "摘出", "抽出", "总结成", "整理一下", "梳理")
+
+
+def _transform_requested(text):
+    """用户是不是在"抓完之后还要加工"（提取/做成表格/汇总…）。"""
+    return any(k in (text or "") for k in _TRANSFORM_HINTS)
+
+
+def _apply_transform(user_input, content, url=""):
+    """让模型**基于刚抓到的真内容**完成用户要的加工（表格/提取/汇总）。
+
+    只依据抓到的内容，不许编造 —— 这是"结果校验"在生成侧的对应要求。
+    """
+    prompt = ("用户的要求：%s\n\n"
+              "这是刚从 %s 抓到的**真实内容**（只能依据它，不要编造里面没有的东西）：\n\n%s\n\n"
+              "请直接给出用户要的**结果本身**：要表格就给 Markdown 表格，要提取就给清单。"
+              "不要再重复粘贴原始内容，不要客套，不要解释你做了什么。"
+              % (user_input, url or "网页", (content or "")[:6000]))
+    try:
+        out = llm_chat([{"role": "user", "content": prompt}])
+    except Exception as e:      # noqa: silent-ok — 加工失败就退回"原样给内容"，不是致命错
+        LOG.debug("抓取后加工失败（忽略）(%s:%d): %s", __file__, 3310, e)
+        out = ""
+    return (out or "").strip()
+
+
+def _scrape_direct(user_input, tool_trace, force_intent=None):
     """"抓一下 <url>" 这类明确指令的**直通**执行：真调抓取工具，把正文原样给用户。
 
     抽成函数的原因：这条路径要在**模型之前**（规则先判，稳定）和**模型之后**（兜底）各用一次。
     抓取结果直接给用户看，不让模型"总结"（它会把正文吃掉）。
     返回 (answer 或 None, tool_trace)。
+
+    `force_intent`：由调用方**指定**这次抓什么（问题 4 的"再来一次"走这条）——
+    因为那时候用户那句话里**没有网址**（网址在上一次），靠 `_detect_scrape_intent` 判不出来。
     """
-    _sc = _detect_scrape_intent(user_input)
+    _sc = force_intent or _detect_scrape_intent(user_input)
     if not _sc:
         return None, tool_trace
+    # ---- Bug 2 根因修复：直通只做一次 ----
+    # 判据是"这一轮**跑过**直通"，不是"直通**成功**了"。原来兜底那条判据是"没抓到页面"，
+    # 于是**失败**（正是最需要省时间的情况）反而会触发第二遍 get→fetch→stealthy_fetch，
+    # 用户看到两条"调用 get"、白等一倍时间。失败也是"已经抓过了"，不该重来。
+    if getattr(_ROUND, "scrape_done", False):
+        LOG.info("本轮抓取直通已经跑过（工具=%s），不再重复执行兜底抓取",
+                 getattr(_ROUND, "scrape_tool", "") or "?")
+        return None, tool_trace
+    _ROUND.scrape_done = True
+    _ROUND.scrape_tool = _sc[0]
     try:
         _build_tools()                  # 填充 _TOOL2PLUGIN，确保插件工具可被调用
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 1538, e)
     _tn, _ta = _sc
+    LOG.info("抓取直通：工具=%s %s（失败会自动升级候选，但本轮不会重跑同一工具）",
+             _tn, _summarize_args_for_log(_tn, _ta))
+    # 世界层：抓之前先查地图（这个站是干嘛的、多久刷新）——结果只用于日志与可信度标注
+    _w_before = _world_before_fetch(_ta.get("url") or "")
     # 第 4 层：抓取类**自动升级** —— get 失败(被拦/403/空正文) → fetch → stealthy_fetch。
     # 用户实测："抓 https://www.cloudflare.com" 被风控挡住时原来直接报错；
     # 该升级就自动升级，而不是把失败原样丢回给用户。
@@ -3279,6 +4507,7 @@ def _scrape_direct(user_input, tool_trace):
     _chain = [_tn] + [x for x in _tool_fallback_for(_tn) if x != _tn]
     _res, _used, _tried = "", _tn, []
     _suspect_note = ""
+    _ok_found = False
     for _name in _chain:
         try:
             _res = _tool_result_str(run_tool(_name, _ta, force=True))
@@ -3295,11 +4524,51 @@ def _scrape_direct(user_input, tool_trace):
             continue
         _used = _name
         _suspect_note = _vnote if _vok is False else ""
+        _ok_found = True
         if _vok is False:
             LOG.warning("抓取 %s 的结果校验未通过，如实标注可能幻觉（已无更多候选）", _name)
         break
+    # ---- 问题 4 补的第二个洞：**整条链都没成功时，不能把风控页当成正文给用户** ----
+    # 真实缺陷：`_scrape_failed` 认出这是风控页（"Access Denied"），于是三个候选全都 `continue`，
+    # 链走完 → `_err` 是空的 → 代码掉进"单页成功"那条分支，把风控页正文**当成目标页面**摆了出来。
+    # 用户看到一段像模像样的内容，完全不知道那不是他要的页面。
+    # 现在：走完整条链还没找到可用内容，就**一律**如实标注（校验能给出更具体的原因就用它的）。
+    if not _ok_found:
+        _vok, _vnote = _validate_tool_result(_used, _ta, _res)
+        if _vok is False:
+            _suspect_note = _vnote
+        elif not _suspect_note:
+            _suspect_note = ("⚠️ **这一次没抓到目标内容**（已依次试过：%s）。"
+                             "下面这段内容**不能确认**属于该网址，仅供参考。"
+                             % "、".join(_tried))
+        LOG.warning("整条抓取候选链都没拿到可用内容（%s）→ 如实标注", _tried)
     _entry = _trace_entry(_used, _ta, _res)
     _entry["tried"] = _tried
+    if _w_before:
+        _entry["world"] = _w_before.strip("（）")     # 轨迹里带上"抓之前世界模型告诉我什么"
+    # ---- 问题 4：把这次失败**记下来**，供下一轮"忽略 robots / 再来一次"用 ----
+    # 三个条件都算"没抓成"：整条链都失败、结果校验没过、或拿到了 error 字段。
+    _fetch_ok = False
+    try:
+        _jbf = json.loads(_res)
+        _fetch_ok = bool(str(_jbf.get("content") or "").strip()) and not _jbf.get("error")
+    except Exception:      # noqa: silent-ok — 不是 JSON 就算没抓成（反正后面也会如实报错）
+        _fetch_ok = False
+    if not _fetch_ok or _suspect_note:
+        _scrape_remember_fail(_ta.get("url") or "", _used or _tn, _res)
+    else:
+        _LAST_SCRAPE.update({"url": "", "error": "", "at": 0.0, "tool": "", "robots": False})
+    # ---- 世界层：抓完把这次看到的东西记进世界模型（比 → 记快照 → 更新站点表）----
+    # 只对**单页**做：批量抓取的结果在下面按 items 展开，那时的正文在这里还拿不到。
+    _w_change_note = ""
+    if not _ta.get("urls"):
+        try:
+            _jbw = json.loads(_res)
+            _w_change_note = _world_after_fetch(_ta.get("url") or _jbw.get("url") or "",
+                                                str(_jbw.get("content") or ""),
+                                                _jbw.get("status"))
+        except Exception as e:      # noqa: silent-ok — 不是 JSON（非抓取结果）就跳过世界层
+            LOG.debug("世界层记录跳过（结果不是 JSON）：%s", e)
     # `raw_head` 改成**用户实际看到的那段正文**：抓取路径下用户看的是页面正文，
     # 外层 `{"url":…,"status":…,"content":…}` 只是壳。历史隔离要按"用户看到的东西"比对，
     # 否则围栏里的正文匹配不上 raw_head，"抓取结果进历史"这条隔离会直接漏掉（实测踩到）。
@@ -3320,6 +4589,14 @@ def _scrape_direct(user_input, tool_trace):
         if _err:
             return "⚠️ 抓取失败：%s" % _err, tool_trace
         if _jd.get("items"):                       # 批量抓取：逐项给正文 + 解读
+            if _transform_requested(user_input):
+                # 用户要的是"抓完再加工"（汇总/表格）→ 把全部正文交给模型去做那件事
+                _allc = "\n\n".join("【%s】\n%s" % (_it.get("url"), (_it.get("content") or "")[:2500])
+                                    for _it in _jd["items"] if not _it.get("error"))
+                _t = _apply_transform(user_input, _allc, "以上网页")
+                if _t:
+                    return ("🌐 批量抓取完成（%d 个网页）\n\n%s"
+                            % (len(_jd["items"]), _t)), tool_trace
             _lines = []
             for _idx, _it in enumerate(_jd["items"]):
                 _h = "**%s** · HTTP %s" % (_it.get("url"), _it.get("status"))
@@ -3333,6 +4610,16 @@ def _scrape_direct(user_input, tool_trace):
                     if _e:
                         _lines.append("📖 **解读**\n\n" + _e)
             return "🌐 批量抓取完成\n\n" + "\n\n---\n\n".join(_lines), tool_trace
+        # 单页：用户要是说了"抓完还要加工"（提取/做成表格/汇总），**先把那件事做了** ——
+        # 这才是用户要的答案；直接把原始 JSON 糊上去等于只干了第一步。
+        if _transform_requested(user_input):
+            _t = _apply_transform(user_input, _body, _jd.get("url", ""))
+            if _t:
+                _hdr = "🌐 **%s** · HTTP %s\n\n" % (_jd.get("url", ""), _jd.get("status", ""))
+                _out = _hdr + _t
+                if _suspect_note:
+                    _out += "\n\n" + _suspect_note
+                return _out, tool_trace
         # 单页：正文 + 解读
         _ans = "🌐 **%s** · HTTP %s\n\n%s" % (
             _jd.get("url", ""), _jd.get("status", ""),
@@ -3343,6 +4630,8 @@ def _scrape_direct(user_input, tool_trace):
         if _suspect_note:
             # 校验没过的**如实报告**：内容照给（用户可能就是想看看风控页），但必须标明它可能不是目标页面
             _ans = _suspect_note + "\n\n" + _ans
+        if _w_change_note:
+            _ans += _w_change_note            # 世界层：跟上次看到的不一样 → 明确告诉用户
         return _ans, tool_trace
     except Exception:
         return (_res[:3000], tool_trace)             # 非 JSON 就原样给
@@ -3696,7 +4985,7 @@ def _diagram_direct(user_input, tool_trace):
                     % (_dres.strip()[:1000], _spec[:4000])), _trace
         return ("🎨 **图已交付**（Archify 全流程：读技能 → 读指南 → 读 schema/示例 → 校验通过 → 交付）\n\n"
                 "```\n%s\n```\n\n%s通过校验的 spec：\n\n```json\n%s\n```"
-                % (_dres.strip()[:1200], _anchored, _spec[:2500])), _trace
+                % (_dres.strip()[:1200], _anchored + _open_delivered_html(_dres), _spec[:2500])), _trace
     return ("⚠️ **画图没完成：spec 连续 %d 轮没通过 Archify 校验。**\n\n"
             "最后一次报错原文如下（可以据此人工修正，或者说「再试一次」）：\n\n```\n%s\n```\n\n"
             "说明：小焦已经把「读技能 → 读指南 → 读 schema/示例 → 出 JSON → 校验」全走完了，"
@@ -3775,12 +5064,202 @@ def _anchor_diagram_on_example(example_text, user_input, dtype, call):
         return None, ""
 
 
+def _open_delivered_html(result_text):
+    """交付成功后**自动用默认浏览器打开**生成的 HTML（问题 7）。
+
+    为什么要有：小焦画完图只回一句"图已生成：C:\\...\\xxx.html"，用户还得自己去文件夹里翻
+    —— 等于活干了一半。画完就该直接弹出来看。
+
+    两个硬要求：
+      · **放后台**（daemon 线程）：打开浏览器可能卡住，绝不能让它拖住对话返回；
+      · **失败不崩**：没有默认浏览器/没权限时，如实告诉用户路径让他手动打开。
+    返回给用户看的说明字符串。
+    """
+    try:
+        # 路径要允许**空格**：本项目目录就叫 `C:\xiaojiao\xiaojiao harness`，里面带空格。
+        # 之前用 [^\s"']*? 排除空白 → 带空格的路径一个都抠不出来（实测返回空串）。
+        # 交付结果的路径独占一行，所以按"到行尾"截才是对的。
+        _m = re.search(r"([A-Za-z]:[^\r\n]*?\.html)", str(result_text or ""), re.I)
+        if not _m:
+            return ""
+        path = _m.group(1).strip().strip('"').strip("'")
+        if not (path.lower().endswith(".html") and os.path.exists(path)):
+            return "\n\n（没找到生成的 HTML 文件，可手动打开：%s）" % path
+
+        def _do():
+            try:
+                os.startfile(path)          # Windows：交给系统默认程序
+            except Exception:
+                try:
+                    import subprocess
+                    subprocess.Popen(["cmd", "/c", "start", "", path], shell=False)
+                except Exception as e:      # noqa: silent-ok — 打开失败不能让后台线程炸掉
+                    LOG.debug("自动打开失败：%s", e)
+
+        threading.Thread(target=_do, daemon=True).start()
+        LOG.info("画图交付完成，已在后台自动打开：%s", path)
+        return "\n\n🖥️ **已自动打开**（浏览器里可交互查看）。没弹出来的话，手动打开：\n`%s`" % path
+    except Exception as e:      # noqa: silent-ok — 自动打开是锦上添花，失败了也照常把图给用户
+        LOG.debug("自动打开逻辑异常（忽略）：%s", e)
+        return ""
+
+
+def _world_rag(query, limit=4):
+    """**用户问题先过 RAG**：检索世界模型 + 已吸收的知识 → 匹对相关度 → 相关的才注入。
+
+    这是世界层重构（第二部分）里"接入 agent_run"的那一条：
+    "用户问题先过 RAG：检索世界模型 + memory_vec → 匹对用户画像 → 相关则注入"。
+
+    为什么必须**先匹对再注入**（而不是把检索到的都塞进 system）：
+    ctx 是有限的物理红线，而"探索"动作会让世界层里的知识一天天变多 ——
+    无脑全塞，第一次超限时就只能砍历史、砍工具，把别的能力挤掉。
+    而且不相关的知识注入进去只会**干扰**模型（实测过的坑：注入的记忆没做说话人框定时，
+    模型把自己当成了用户）。所以这里只放"跟这句话真有关"的少数几条。
+
+    返回可直接拼进 system 的文本（没有相关的就返回空串）。
+    """
+    try:
+        q = (query or "").strip()
+        if len(q) < 2:
+            return ""
+        wm, _p = _world_layer()
+        if wm is None:
+            return ""
+        # ---- 关键词：规则抽取（不调模型），与世界层/续写同口径 ----
+        kws = [k.lower() for k in _intent_keywords(q)]
+        if not kws:
+            return ""
+        hits = []
+        # ① 世界地图：站点名/类型/主题命中 → 告诉模型"这个站在这个话题上是什么来头"
+        try:
+            sites = wm.snapshot().get("sites") or {}
+            for dom, rec in sites.items():
+                blob = ("%s %s %s" % (dom, (rec or {}).get("type", ""),
+                                      (rec or {}).get("note", ""))).lower()
+                if any(k in blob for k in kws):
+                    hits.append("网站：%s（类型 %s，可信度 %.1f）"
+                                % (dom, (rec or {}).get("type") or "未判定",
+                                   float((rec or {}).get("judged_trust")
+                                         or (rec or {}).get("trust") or 0.5)))
+        except Exception as e:      # noqa: silent-ok — 地图读不动就不注入这一路
+            LOG.debug("世界 RAG：读站点表失败：%s", e)
+        # ② 已吸收的知识：只取**通过防火墙**的那部分（隔离区的内容绝不注入，见第三部分）
+        try:
+            ap = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "logs", "world", "absorption.jsonl")
+            if os.path.exists(ap):
+                rows = []
+                with open(ap, encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rows.append(json.loads(line))
+                        except Exception:      # noqa: silent-ok — 半截行跳过
+                            continue
+                for r in reversed(rows[-200:]):
+                    if not r.get("absorbed", True):
+                        continue                      # 没吸收的（隔离/丢弃）不进上下文
+                    blob = ("%s %s %s" % (r.get("topic") or "", r.get("title") or "",
+                                          (r.get("text") or r.get("clean_text") or "")[:400])).lower()
+                    if any(k in blob for k in kws):
+                        src = r.get("domain") or r.get("url") or "未知来源"
+                        txt = (r.get("text") or r.get("clean_text") or "").strip()[:220]
+                        conf = r.get("score") or r.get("confidence")
+                        hits.append("已知（来源 %s%s）：%s"
+                                    % (src, ("，可信度 %.2f" % conf) if isinstance(conf, (int, float))
+                                       else "", txt))
+                    if len(hits) >= limit:
+                        break
+        except Exception as e:      # noqa: silent-ok — 吸收流水读不动就不注入
+            LOG.debug("世界 RAG：读吸收记录失败：%s", e)
+        if not hits:
+            return ""
+        LOG.info("世界 RAG：命中 %d 条（关键词 %s）", len(hits), kws[:4])
+        return ("\n\n【世界层检索到的相关背景（小焦自己在互联网上看到的，"
+                "可信度低于用户亲口说的话）】\n" + "\n".join("- " + h for h in hits[:limit]) + "\n")
+    except Exception as e:      # noqa: silent-ok — 世界 RAG 是增强，坏了不能挡住回答
+        LOG.debug("世界 RAG 失败（忽略）：%s", e)
+        return ""
+
+
+def _new_degen_detector():
+    """拿一个带状态的退化检测器（拿不到就返回 None —— 复读检测缺席不能挡住推流）。
+
+    为什么单独抽一个函数：**每一条流各要一个检测器**（它是有状态的、命中即锁存）。
+    共用一个的话，第一轮流命中之后就永久锁存，后面所有轮都会被判成复读 ——
+    那不是"更严格"，那是坏掉。
+    """
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core.health import degeneration as _D
+        return _D.DegenerationDetector()
+    except Exception as e:      # noqa: silent-ok — 检测器拿不到就退化成"不检测"，绝不中断推流
+        LOG.debug("退化检测器不可用（忽略）：%s", e)
+        return None
+
+
+def _degeneration_net(text, where=""):
+    """**最后一道网**：任何要交给用户的文本，出门前都过一遍复读解毒。
+
+    【为什么健康门之外还要有这一层（问题 1 的教训）】
+    健康门（`_health_gate`）挂在 `agent_run` 的出口上，可 `agent_run` 有**十几条 return**：
+    命中"要看工具原文"提前返回、超长输入切片提前返回、工具总结直接返回、表格类结果原样返回……
+    任何一条绕过它，复读就会原样送到用户眼前 —— 用户实测就是这样：
+    整张表格被"预算"刷满几十行，而健康系统那边**明明报了 repeat 症状**，
+    只是那条路根本没经过它。
+
+    所以这里换一个更笨、但**不可能漏**的做法：不去数"有哪些路径"，
+    而是在**唯一真正的出口**（两个聊天接口 + 工具总结）加一道纯文本的网。
+    它只依赖 `core/health/degeneration.py`（不依赖模型、不依赖会话、不依赖健康层是否起来了），
+    代价是几毫秒，收益是"无论谁写的、从哪条路出来的，刷屏都走不到用户面前"。
+
+    返回 (处理后的文本, 说明)；没触发就原样返回 (text, "")。
+    """
+    try:
+        s = text if isinstance(text, str) else ""
+        if len(s) < 60:
+            return text, ""
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core.health import degeneration as _D
+        t2, hit, cut = _D.truncate_repeat(s)
+        if hit is None or cut <= 0:
+            return text, ""
+        t2, cut2 = _D.repair_tail(t2)
+        LOG.warning("复读解毒（%s）：%s → 砍掉 %d 字，保留 %d 字｜%s",
+                    where or "出口", hit.kind, cut + cut2, len(t2), hit)
+        if not t2.strip() or (len(t2.strip()) < 40 and len(s) >= 200):
+            # 整段都是复读 → 不能给空，也不能给一个没用的碎片（"| 第1项 | 预算 | 预算"），
+            # 如实说明发生了什么。用户要能看懂"刚才那轮模型坏了"，而不是对着一片空白猜。
+            keep = ("\n\n（复读之前还剩下这么一点，原样附上：`%s`）" % t2.strip()) if t2.strip() else ""
+            return ("⚠️ 这一轮的回答**整段陷入了复读**（%s），已经没有可用的正文。"
+                    "重新问一次通常就好了；如果反复出现，说明当前火种在这个上下文长度下不稳定。%s"
+                    % (hit.kind, keep)), "已整段替换"
+        return t2, "已截断 %d 字" % (cut + cut2)
+    except Exception as e:      # noqa: silent-ok — 解毒失败必须放行原文本（不能因为它把回答搞丢）
+        LOG.debug("复读解毒异常（忽略，原样返回）：%s", e)
+        return text, ""
+
+
 def _summarize_tool(user_input, result, tool):
-    """让大脑基于工具结果给一句简短总结。"""
+    """让大脑基于工具结果给一句简短总结。
+
+    **工具总结也是输出路径**（问题 1 的清点项之一）：它是模型生成的正文，
+    一样会复读。以前这条路直接把模型的话返回出去，谁都没管 ——
+    所以这里也过一遍解毒网（`_degeneration_net`）。
+    """
     prompt = ("你用 %s 工具执行了用户请求，结果如下：\n%s\n\n"
               "请用一句简短中文告诉用户完成了什么（例如：已在 XXX 创建了 YYY）。不要重复结果内容，不要科普。" % (tool, result[:1200]))
     s = _llm_ask_raw(prompt)
-    return s or ("已完成（%s）。" % tool)
+    if not s:
+        return "已完成（%s）。" % tool
+    s2, _note = _degeneration_net(s, where="工具总结/%s" % tool)
+    return s2
 
 
 def _asks_asset_list(text):
@@ -3945,6 +5424,333 @@ _INTENT_HINTS = {
     # 命令类信号（想让我动手执行）
     "shell": ("执行命令", "运行命令", "跑一下命令", "命令行", "powershell", "cmd 里", "shell"),
 }
+
+# ============ 信息收集类意图（Bug 1：该调工具时反问用户）============
+# 【为什么单独一组】"整理一下最近的新闻信息"这种说法里，说话人**已经说清要什么**了：
+#   「最近」= 时间限定，「新闻」= 主题。可它原来被判成 chat → 闲聊轮不联网 →
+#   模型只好回"我无法访问实时新闻网站，你想查什么方向？" —— 用户听到的是**反问**，
+#   而他明明已经把方向说了。这类"信息收集动作词"必须能触发 query 意图。
+# 【为什么动作词和信息名词要**同时**出现】只认动词会把"帮我整理一下桌面"也变成联网搜索
+#   （那该是 shell/文件操作）；只认名词则"这条新闻写得不错"也会触发搜索。
+#   两个同时命中才算"要我去收集某类信息"——这是最不容易误判的口径。
+_INFO_COLLECT_VERBS = ("整理", "汇总", "归纳", "梳理", "盘点", "总结一下", "看看", "看一下",
+                       "了解一下", "收集", "搜集", "关注一下", "跟进", "盯一下")
+_INFO_NOUNS = ("新闻", "动态", "信息", "资讯", "消息", "热点", "行情", "进展", "近况",
+               "情况", "资料", "报道", "舆情", "榜单", "排行")
+
+
+def _asks_info_collect(text):
+    """用户是不是在要求"去收集某类信息"（动作词 + 信息名词**同时**出现）。
+
+    只有两者同时命中才认（理由见 `_INFO_COLLECT_VERBS` 上面的说明）。
+    ⚠️ 这个函数曾被我在插入 `_asks_tool_inventory` 时**误删过一次**：
+    编辑时把 `def _asks_info_collect(text):` 那一行当成了插入锚点整行替换掉，
+    函数体还在、函数名没了 —— 语法检查能过（没人调用时不报错），
+    但它有 2 处调用点，一跑就是 NameError。教训：**改文件后要 grep 确认函数名还在**，
+    光靠 `ast.parse` 是查不出"定义了但名字丢了"的。
+    """
+    s = str(text or "")
+    if not s:
+        return False
+    return any(v in s for v in _INFO_COLLECT_VERBS) and any(n in s for n in _INFO_NOUNS)
+
+
+def _recent_user_turns(history, n=5):
+    """取最近 n 条**用户**消息（跳过小焦自己的回答与占位）。
+
+    为什么只要用户说的：融合的目的就是"这句在接哪句"，
+    而"哪句"只可能是用户自己提出过的请求；拿小焦的回答去融合会把话题带偏。
+
+    ⚠️ role 有**两套写法**，必须都认：
+        · 会话历史里存的是中文角色 —— `用户` / `小焦`（`append_msg("用户", …)`）；
+        · OpenAI 风格的 messages 用 `user` / `assistant`。
+    第一版我只判了 `role == "user"`，于是在**真实会话**里一条都取不到 →
+    融合永远拿到空上文 → 第 2 轮照样反问（端到端实测当场抓到；
+    单元测试里我按 OpenAI 风格造数据，所以反而是绿的 —— 这就是"测数据比真实数据干净"的坑）。
+    """
+    _USER_ROLES = ("user", "用户", "human")
+    out = []
+    for m in reversed(list(history or [])):
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("role") or "").strip().lower() not in _USER_ROLES:
+            continue
+        c = str(m.get("content") or "").strip()
+        if not c or c == "⏳__pending__":
+            continue
+        out.append(c)
+        if len(out) >= max(1, int(n)):
+            break
+    return list(reversed(out))
+
+
+# ---------------- 回指词表：这些词说明"这句离不开上文" ----------------
+# 分成三类，因为处理方式不同：
+#   · 继续类：整句就是"接着上次"（继续/接着/然后呢）→ 直接**借用**上文请求
+#   · 追加类：要更多的同类东西（再来一个/换一个/还有吗）→ **复用上文动作**
+#   · 补全类：句子里有明确动词/目标，只是"完整度"不够（我要全部的/换成 baidu）→ **补全目标**
+_CONTINUE_WORDS = ("继续", "接着", "然后呢", "还有呢", "往下", "接着说", "继续说",
+                   "go on", "continue")
+_MORE_WORDS = ("再来一个", "再来一次", "再一个", "换一个", "换一部", "换首", "换一个吧",
+               "还有吗", "还有没有", "再给一个", "重新来一个", "另一个", "别的呢",
+               "再推荐一个", "多来几个")
+_ALL_WORDS = ("全部", "所有", "全都要", "都要", "全给我", "所有的", "全都", "全列",
+              "一个不落", "一个不少", "全部列出来")
+# 目标替换：把上一条请求里的目标换成本句给的新目标
+_RETARGET_RE = re.compile(r"(?:换成|改成|改为|换到|换成那个|换成这个)\s*([^\s，。！？；,]+)")
+# 指代目标：这些词本身不携带信息，必须从上文取目标
+_ANAPHORA = ("这个", "那个", "它", "上面那个", "刚才那个", "刚才说的", "上面说的",
+             "这东西", "这东西的", "它呢")
+
+
+def _topic_of(text):
+    """从一句话里抽"话题名词"（融合时用来拼出完整请求）。
+
+    为什么用规则而不是模型：融合必须**确定性**且便宜 —— 它每轮都跑，
+    交给模型既慢又可能把话题理解错，而这里只需认出"在聊什么名词"。
+    抽法：去掉动作词/功能字/时间词后剩下的 2~6 字中文名词（取最长的一段）。
+    """
+    s = str(text or "")
+    # 量词/冠词也要剥掉："推荐一部电影" 的话题是「电影」而不是「一部电影」——
+    # 带着量词去补全会造出"我要全部的一部电影"这种别扭句子（测出来的）。
+    for w in ("帮我看看", "看一下", "看看", "帮我", "给我", "我要", "我想", "推荐",
+              "整理", "汇总", "查一下", "搜一下", "抓一下", "有哪些", "有什么", "哪些",
+              "一部", "一个", "一条", "一份", "一张", "一首", "一篇", "一本", "一段",
+              "再", "一下", "的", "了", "吗", "呢", "啊", "吧"):
+        s = s.replace(w, " ")
+    segs = re.findall(r"[\u4e00-\u9fa5]{2,6}", s)
+    if not segs:
+        return ""
+    # 取最长的一段（"最近的新闻" → "新闻"），并只保留末尾 2~4 字（"最近新闻"→"新闻"）
+    segs.sort(key=len, reverse=True)
+    cand = segs[0][-4:]
+    # 时间词不配当话题（"最近有什么新闻" 的话题该是"新闻"）
+    for tw in ("最近", "最新", "近期", "今天", "今日", "本周", "这周"):
+        if cand == tw:
+            cand = segs[1][-4:] if len(segs) > 1 else ""
+    return cand
+
+
+def _asks_all_of_it(text):
+    """这句是不是"要全部"（配合上下文才成立）。"""
+    s = str(text or "")
+    return any(w in s for w in _ALL_WORDS)
+
+
+def merge_context(user_text, history, n=5):
+    """**上下文融合**：把"孤立的这一句"补成"完整的一句"，再交给意图识别。
+
+    【为什么必须有它 —— 用户实测的核心缺陷】
+        小焦把每句话当新对话。实测：
+            用户："帮我看看有哪些工具" → 列出工具
+            用户："我要全部的"        → 反问"你要全部什么？"
+        根因不是历史没进 prompt（历史进了），而是**意图判定阶段是孤立的**：
+        `_detect_intent(user_input)` 只看当前这一句，
+        "我要全部的"孤立看确实没有信息（没有动词、没有对象），于是判成 chat，
+        模型也只好反问。人不会这样：人先知道"上文在聊工具"，再看"这句在指全部"。
+
+    【判据为什么这么设计】
+        只在**句子里出现回指**时才融合（回指词表见上面三类）。
+        没有回指就不动它 —— 否则每句话都被"上文的上下文"污染，
+        用户换个话题时会被上一轮的话题带跑（那是比不连续更糟的错）。
+        融合结果一律带上 `merged` 字段与理由，日志里能回答"为什么把它当成接续"。
+
+    返回 dict：
+        text      融合后的完整请求（没融合就是原文）
+        merged    bool
+        kind      "none" | "continue" | "more" | "all" | "retarget"
+        topic     融合用到的上文话题（没有则空）
+        why       人话理由
+        need_clarify  True = 融合不出来，**应当反问**（无上文 / 上文有歧义）
+    """
+    cur = str(user_text or "").strip()
+    base = {"text": cur, "merged": False, "kind": "none", "topic": "",
+            "why": "", "need_clarify": False}
+    if not cur:
+        return base
+    prevs = _recent_user_turns(history, n=n)
+    prev = prevs[-1] if prevs else ""
+
+    # ---------- 1. 继续类：整句就是"接着上次" ----------
+    if any(w in cur for w in _CONTINUE_WORDS) and len(cur) <= 12:
+        if not prev:
+            return dict(base, kind="continue", need_clarify=True,
+                        why="用户说「继续」但上面没有可继续的内容")
+        topic = _topic_of(prev)
+        # 把上一条请求**原样**当成本轮请求（继续做同一件事）
+        return {"text": prev, "merged": True, "kind": "continue", "topic": topic,
+                "why": "「%s」是接着上一条请求「%s」" % (cur, prev[:24]),
+                "need_clarify": False, "original": cur}
+
+    # ---------- 2. 追加类：还要更多同类 ----------
+    if any(w in cur for w in _MORE_WORDS) and len(cur) <= 14:
+        if not prev:
+            return dict(base, kind="more", need_clarify=True,
+                        why="用户要「再来一个」但上面没有可延续的请求")
+        topic = _topic_of(prev)
+        # 复用上文的**动作 + 话题**，并明确要求"换一个不同的"
+        merged = "%s（换一个不同的%s，不要重复上一个）" % (prev, topic)
+        return {"text": merged, "merged": True, "kind": "more", "topic": topic,
+                "why": "「%s」延续上一条请求「%s」" % (cur, prev[:24]),
+                "need_clarify": False, "original": cur}
+
+    # ---------- 3. 补全类 A：要"全部" ----------
+    if _asks_all_of_it(cur) and len(cur) <= 18:
+        if not prev:
+            return dict(base, kind="all", need_clarify=True,
+                        why="用户要「全部」但上面没有可以「要全部」的对象")
+        topic = _topic_of(prev)
+        if not topic:
+            return dict(base, kind="all", need_clarify=True,
+                        why="上文没有可用于补全的话题名词")
+        merged = "我要全部的%s" % topic
+        return {"text": merged, "merged": True, "kind": "all", "topic": topic,
+                "why": "「%s」补全为「%s」（上文在聊%s）" % (cur, merged, topic),
+                "need_clarify": False, "original": cur}
+
+    # ---------- 4. 补全类 B：换目标（"换成 baidu"） ----------
+    m = _RETARGET_RE.search(cur)
+    if m:
+        new_target = m.group(1).strip()
+        if not prev:
+            return dict(base, kind="retarget", need_clarify=True,
+                        why="用户要「换成 %s」但上面没有可替换目标的请求" % new_target)
+        # 从上一条请求里找出旧目标并替换：把"抓一下 example.com"变成"抓一下 baidu"
+        merged = prev
+        # 常见目标形态：域名 / 引号内 / URL
+        old = (re.findall(r"https?://[^\s，。！？；]+", prev)
+               or re.findall(r"[A-Za-z0-9\-]+\.[A-Za-z]{2,}", prev)
+               or re.findall(r"「([^」]{1,20})」", prev))
+        if old:
+            merged = prev.replace(old[0], new_target)
+        else:
+            merged = "%s（这次的目标是：%s）" % (prev, new_target)
+        return {"text": merged, "merged": True, "kind": "retarget", "topic": new_target,
+                "why": "「%s」把上一条请求「%s」的目标换成「%s」" % (cur, prev[:24], new_target),
+                "need_clarify": False, "original": cur}
+
+    # ---------- 5. 补全类 C：句子里只有指代词 ----------
+    if len(cur) <= 16 and any(w in cur for w in _ANAPHORA):
+        if not prev:
+            return dict(base, kind="anaphora", need_clarify=True,
+                        why="用户用了指代词「%s」但上面没有可指的内容"
+                            % next((w for w in _ANAPHORA if w in cur), "它"))
+        topic = _topic_of(prev)
+        merged = cur
+        for w in _ANAPHORA:
+            if w in merged:
+                merged = merged.replace(w, topic or "刚才那个")
+        return {"text": merged, "merged": True, "kind": "anaphora", "topic": topic,
+                "why": "「%s」里的指代词补成「%s」（上文在聊%s）" % (cur, topic, topic),
+                "need_clarify": False, "original": cur}
+
+    # ---------- 6. 无回指：**不动它**（见上面的判据说明） ----------
+    return base
+
+
+def _tool_inventory_question(text, ctx=None):
+    """这一轮是不是在问"工具清单"（含**经上下文融合后**的"我要全部的"）。
+
+    spec 的验收用例：说"帮我看看有哪些工具" → 小焦列工具 → 用户说"我要全部的"
+    → **直接列出全部工具**（不是反问）。
+    所以这里除了原来的问法，还要认"要全部 + 上文在聊工具"这一种。
+    """
+    if _asks_tool_inventory(text):
+        return True
+    # 无上文也可以：**这一句自己**就说了对象是"工具/插件/能力"
+    # （"我要全部的工具" → 直接列；"我要全部的" → 才需要上下文，见下面那条）。
+    _t = str(text or "")
+    if _asks_all_of_it(_t) and any(k in _t for k in ("工具", "插件", "能力")):
+        return True
+    if not ctx:
+        return False
+    if ctx.get("merged") and ctx.get("kind") == "all":
+        topic = str(ctx.get("topic") or "")
+        if topic and any(k in topic for k in ("工具", "插件", "能力")):
+            return True
+    return False
+
+
+def _clarify_question(user_text):
+    """融合不出来时该问什么（**通用反问**，不是某个 case 的硬编码）。
+
+    什么时候会走到这里（见 `merge_context` 的 `need_clarify`）：
+      · 无上文却说"我要全部的/再来一个/继续/换成 X" —— 载体没有可接的内容；
+      · 上文有指代词但抽不出话题名词。
+    为什么必须**反问**而不是猜：猜错的代价比问一句大得多 ——
+    用户说"我要全部的"，系统要是猜成"全部新闻"，他会觉得"这 AI 根本没听懂还硬答"。
+    这正是用户实测抱怨的那种体验，所以宁可问一句。
+    """
+    s = str(user_text or "").strip()
+    if _asks_all_of_it(s):
+        return "你说的「全部」是指什么的全部？把范围告诉我（比如：全部工具／全部新闻／全部文件）。"
+    if any(w in s for w in _MORE_WORDS):
+        return "想让我再来一个什么？先说一句你想要的类型我就接着给。"
+    if any(w in s for w in _CONTINUE_WORDS):
+        return "想让我继续做哪件事？上面还没开始过任务，你说一下我马上做。"
+    if _RETARGET_RE.search(s):
+        return "要换成什么的目标？你前面还没给过要替换的请求，直接说这次要哪个就行。"
+    return "这句我需要一点上下文才好动手 —— 你具体想让我做什么？"
+
+
+def _asks_tool_inventory(text):
+    """用户在问"你有哪些工具"吗？
+
+    【为什么要专门认这一句 —— 实测出来的真问题】
+        问"你有哪些工具？把能用的都列出来"时，实测结果：模型只回了 **13 个字**，
+        而且顺手调了 `list_files`（去列目录了）—— 它把"列工具"理解成了"列文件"。
+        这不是提示词没写清，而是**把清单类问题交给了模型**：
+        77 个工具名是载体自己就知道的事实，让 4B 模型凭 system 里那份目录背诵，
+        必然背漏、背错，还可能顺手调一个不相干的工具。
+    """
+    s = str(text or "")
+    if not s:
+        return False
+    return any(k in s for k in ("有哪些工具", "有什么工具", "能用的工具", "工具列表",
+                                "有哪些插件", "有什么插件", "会哪些工具", "支持哪些工具",
+                                "工具都有哪些", "列出工具"))
+
+
+def _tool_inventory_answer():
+    """载体**直接**回答"我有哪些工具"（列出全部，一个不落）。
+
+    【为什么由载体回答而不是让模型答（这条是无限 4 的验收项）】
+        spec 的验收是"说『你有哪些工具』→ **列出全部**"。
+        "全部"是硬要求，而模型是概率性的 —— 让它背诵必然不全。
+        这个问题的答案**完全在载体手里**（`all_tool_names()` + 一句话说明），
+        所以由载体生成、直接返回，模型连调都不用调：
+        既保证"一个不少"，又省掉一次模型往返，还避免它顺手调错工具。
+        这正是"载体优先"的一个具体例子：**确定性的问题不要交给概率性的部件**。
+    """
+    try:
+        names = [n for n in all_tool_names() if n]
+    except Exception:      # noqa: silent-ok — 取不到工具表就如实说取不到，不编
+        return "抱歉，我这边工具表没读出来，没法给你完整清单。"
+    if not names:
+        return "我这边当前没有装载任何工具。"
+    plugin = [n for n in names if n.startswith("archify_")]
+    core = [n for n in names if not n.startswith("archify_")]
+    lines = ["我一共 **%d 个**工具，一个都没砍、没有暂缓，全都能用：" % len(names), ""]
+    lines.append("**内置能力（%d 个）**" % len(core))
+    for n in core:
+        lines.append("- `%s`" % n)
+    if plugin:
+        lines += ["", "**画图工作流 archify（%d 个，按顺序联动）**" % len(plugin)]
+        for n in plugin:
+            lines.append("- `%s`" % n)
+    lines += ["", "需要哪个直接说名字就行 —— 点名的那一刻我就把它装上。"]
+    return "\n".join(lines)
+
+
+
+    """用户是不是在要求"去收集某类信息"（动作词 + 信息名词同时出现）。
+
+    只有两者同时命中才认（理由见 `_INFO_COLLECT_VERBS` 上面的说明）。
+    """
+    s = str(text or "")
+    if not s:
+        return False
+    return any(v in s for v in _INFO_COLLECT_VERBS) and any(n in s for n in _INFO_NOUNS)
 # 闲聊只认**明确的寒暄/身份/道谢**这类；认不出来的一律走 chat 兜底（见 `_detect_intent`）。
 # 这条判据现在只用来决定"要不要加『闲聊别调工具』那句话"，不再决定给几个工具。
 _CHAT_HINTS = ("你好", "您好", "hi", "hello", "嗨", "哈喽", "在吗", "在么", "早上好", "中午好",
@@ -3979,6 +5785,35 @@ _DIAGRAM_SYSTEM_HINT = (
     "\n[本轮模式] 画图：严格按 Archify 工作流走 —— archify_read_skill → archify_guide → "
     "archify_read_schema → archify_read_example → archify_validate → archify_deliver → "
     "archify_visual_check；不要联网搜索，不要用别的画图方式。\n")
+# 只读、无害的工具：闲聊轮里模型"顺手查一下"是合理的（查记忆/搜一下/看目录）。
+# 反过来，这张表之外的工具在闲聊轮**一律不许**由 `plan_tool` 凭空产生 ——
+# 尤其是 run_command 这类"会动系统"的：见 `plan_tool` 里的说明（实测它会为"你好"编出
+# `Get-Process` 这种真会执行的命令，属于必须拦住的编造）。
+_CHAT_SAFE_TOOLS = frozenset(("read_memory", "web_search", "search_web", "get",
+                              "make_request", "fetch", "stealthy_fetch",
+                              "read_file", "list_files"))
+
+# "用户明确要我动手"的信号词。为什么要单独一张表：
+#   `_detect_intent` 认不出来的句子都兜底成 chat，所以"chat 意图"里混着**真任务**
+#   （"写个文件到桌面"就是 chat）。要靠这张表把"真任务"从"闲聊"里分出来，
+#   否则 `plan_tool` 的闲聊闸门会把正常动手请求一起拒掉。
+_ACTION_HINTS = ("写", "建", "创建", "新建", "保存", "改成", "修改", "替换", "追加",
+                 "跑", "执行", "运行", "调用", "打开", "启动", "下载", "安装", "上传",
+                 "查", "搜", "抓", "爬", "读一下", "看下", "列出", "列出文件", "列出目录",
+                 "删", "移除", "复制", "移动", "重命名", "压缩", "解压",
+                 "run", "exec", "create", "write", "save", "open", "download")
+
+
+def _asks_action(text):
+    """用户是不是**明确要我动手**（而不是随口聊）。见 `_ACTION_HINTS` 的说明。
+
+    判据故意粗（只要出现动作词就算）：这里的作用是"别把真任务误当成闲聊"，
+    放行的代价只是"多问模型一次"，拦错的代价是"用户要我干活我不干" —— 后者严重得多。
+    """
+    low = str(text or "").lower()
+    return any(h in low for h in _ACTION_HINTS)
+
+
 # 每条消息的外壳（"role"/"content" 的键名、引号、括号、逗号）大约值多少 token。
 # 实测（第 1 步）：不把它算进去，估算比真实请求少几百 token → 历史裁了仍然超限。
 _MSG_OVERHEAD = 12
@@ -4064,6 +5899,14 @@ def _detect_intent(user_input):
 
     **兜底是 chat，不是 full**（第 1 步）：full 以前等于"全部 77 个工具"，一轮就把 ctx 挤爆；
     而现在 chat 只发 3 个工具，完整工具目录仍在 system 里 —— 模型要求哪个，下一轮就装哪个。
+
+    【为什么这么设计】意图决定"这一轮装哪些工具、带哪几条规则"。
+    如果交给模型判意图，就等于**为了一次分类再花一次请求**，而且判错时用户还要多等一轮；
+    这里是纯规则的字符串判据，零成本、可复现、可单测（`tools/test_mind.py` 逐条钉住）。
+
+    【去掉它会怎样】回到"每轮都把全部工具和整份规则发出去"：
+    光固定开销就顶穿本地 ctx（实测工具 schema 13891 token + system ~5700），
+    连"你好"都可能 400；而且工具越多模型越容易摸错（实测画图时跑去 read_memory）。
     """
     q = (user_input or "").strip()
     if not q:
@@ -4079,12 +5922,77 @@ def _detect_intent(user_input):
     low = q.lower()
     if any(h in low for h in _INTENT_HINTS["query"]):
         return "query"
+    if _asks_info_collect(q):
+        # Bug 1 的修法：把"整理/汇总/看一下 + 新闻/动态/信息"当成**明确的检索请求**。
+        # 之前这里掉进 chat → 闲聊轮不联网 → 模型只能反问用户"你想查什么方向"，
+        # 而用户已经把方向说清了（"最近"+"新闻"）。这是最伤体验的一种失败：
+        # 用户觉得"我说得这么清楚它还要问"。
+        return "query"
     if any(h in low for h in _INTENT_HINTS["shell"]):
+        return "shell"
+    if _mentions_shell_command(q):
+        # 中文叙述句里"夹着一条命令"（"跑一下 ipconfig"）——
+        # 见 `_mentions_shell_command` 的说明：这种说法最自然，但原来会掉进 chat，
+        # 于是这一轮**不装 run_command**，模型只能用文字描述它本来能跑的命令。
         return "shell"
     if _is_chitchat(q):
         return "chat"                    # 明确的寒暄 → 最省的 chat
     # 兜底走最省上下文的 chat；工具目录仍在 system 里，模型要求哪个下轮加载
     return "chat"
+
+
+def _mentions_shell_command(text):
+    """中文叙述句里**夹着一条命令**吗（"跑一下 ipconfig" / "执行 ping 127.0.0.1"）？
+
+    【为什么需要它 —— 实测定性出来的真缺口】
+        `_looks_like_shell_command()` 的两条判据（①首词必须是命令动词 ②含中文就否决）
+        合起来会把最常见的中文说法漏掉。实测：
+            跑一下 ipconfig      → chat   ❌（应为 shell）
+            执行 ping 127.0.0.1  → chat   ❌
+            运行 dir             → chat   ❌
+            运行 rm -rf /tmp/x   → chat   ❌
+        而 `ipconfig / ping / dir / rm` **都在 `_SHELL_VERBS` 里** ——
+        也就是说"命令表认得它、判据却没看它"。
+        后果不是"多问一句"，而是：这一轮不装 `run_command`，
+        模型只能**用文字描述**它本来可以执行的命令（用户会说"你怎么不帮我跑"）。
+
+    【判据为什么这么保守】
+        先找句子里**第一个命令动词**（命令必须在动词之后），
+        再看动词**后面剩下的是什么**：只允许
+        ASCII 字母数字、常见开关/路径符号、以及中文里的连接词。
+        只要后面还有中文实词（"ipconfig 是什么""ping 什么意思"），就**不当命令** ——
+        那是提问，不是在让我执行。宁可漏（走 chat 也能在下一轮按需加载），不可误判成 shell。
+    """
+    q = (text or "").strip()
+    if not q or len(q) > 400 or "\n" in q:
+        return False
+    if re.search(r"(是什么|什么是|怎么|如何|为什么|教我|解释|区别|什么意思)", q):
+        return False
+    toks = re.split(r"\s+", q)
+    for i, tok in enumerate(toks):
+        verb = tok.strip().lower().lstrip("@")
+        if verb.endswith(".exe"):
+            verb = verb[:-4]
+        if verb not in _SHELL_VERBS:
+            continue
+        rest = " ".join(toks[i + 1:]).strip()
+        if not rest:
+            return True                       # "跑一下 ipconfig"：动词后没参数也算
+        # 参数部分只允许 ASCII（数字/字母/开关/路径/**空格**），且不能再有中文实词。
+        # ⚠️ 那个 `\s` 不能漏：第一版把它漏了，于是 `-rf /tmp/x` 因为**中间有一个空格**
+        #    就 fullmatch 失败 → "运行 rm -rf /tmp/x" 掉回 chat。
+        #    教训：写"允许哪些字符"的白名单时，空格/换行这类不可见字符最容易漏，
+        #    而漏掉的后果是**静默不匹配**（不报错，只是判据永远不生效）。
+        if re.fullmatch(r"[A-Za-z0-9\-_./:\\*?=\[\]~$@%+,;|&<>\"'\s]+", rest):
+            return True
+        return False
+    # 中文删除动词：`_SHELL_VERBS` 是英文命令表，中文说法要靠这里兜。
+    # 为什么必须兜住"删除"：它走 shell 不是为了执行，而是为了让**删除红线**有机会拦下 ——
+    # 判成 chat 的话这一轮不装 run_command，模型只能用文字建议用户自己去删，
+    # 载体层的硬拦截就**根本没有出场机会**（这是安全路径，不能靠概率）。
+    if re.search(r"(删除|删掉|删了|删去|移除文件|清空目录)", q):
+        return True
+    return False
 
 
 def _tool_index(only=None, plugins=None):
@@ -4164,6 +6072,15 @@ def _plan_tools(intent, system_text, current_text, max_ctx=None):
     那是**错的**。工具一个都没删、没停用、没缩减，`plugins/` 目录 77 个一个不少；
     只是**这一轮**不发那么多 schema，完整工具目录始终随 system 下发，模型点名哪个，
     下一轮就按意图装载哪个。所以日志改成中性表述。
+
+    【为什么这么设计】工具 schema 是"固定开销"里最大的一块（全部 77 个约 1.4 万 token，
+    而本地 ctx 只有 19224）—— 每轮全发必然顶穿。但这个函数的取舍**只动"这一轮发多少"**，
+    绝不动"系统有多少"：意图决定默认装哪一小撮，点名决定下一轮装哪个。
+    于是"能力不封顶"和"单次不超"这两条看似矛盾的要求能同时成立。
+
+    【去掉它会怎样】要么每轮全发（闲聊轮也塞 1.4 万 token 的工具表，直接 400），
+    要么真的去砍工具（用户会发现"它突然不会某件事了"，而且日志里还写着'额度不足'）——
+    前者是撞墙，后者是削能力，两条路都不能走。
     """
     max_ctx = int(max_ctx or _max_context_tokens())
     names = _intent_tool_names(intent)
@@ -4242,6 +6159,16 @@ def _fit_context(system_text, history, current_text, max_ctx=None, min_rounds=2,
     `reserve`：本轮**除 messages 之外的固定开销**（最关键的是 function-calling 的 tools
     schema —— 63 个工具的 JSON 有几千 token！上一版漏算它，所以裁剪后**仍然超限**）。
     返回 (保留的历史列表, 说明文本)。
+
+    【为什么这么设计】单次请求的 token 是**物理上限**（本地 8G 显存，扩不了 ctx）。
+    上限动不了，就只能在"装配什么进去"上做取舍，而取舍优先级必须是死的：
+    system（人格/铁律）与本轮问题**永远不能丢**（丢了就不是小焦、也不在回答这个问题），
+    能丢的只有"更老的历史"。说明文本按 `system=a + tools=b + … = 合计 f / 上限 g` 输出，
+    就是为了让"为什么超"一眼可查，而不是让用户面对一个语焉不详的 400。
+
+    【去掉它会怎样】要么发出去被服务端拒（用户看到报错），
+    要么在别处偷偷"砍内容"—— 后者更糟：能力被削了却不报错，
+    表现为"它最近变笨了"，而没有任何日志能解释原因。
     """
     max_ctx = int(max_ctx or _max_context_tokens())
     try:
@@ -4280,7 +6207,522 @@ def _fit_context(system_text, history, current_text, max_ctx=None, min_rounds=2,
 
 
 # ================== 智能体 ==================
-def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
+# ================== 第 3 部分 · 健康系统接入：监测 → 诊断 → 治疗 → 病历 → 预防 ==================
+# 【设计理念】模型会退化，像人一样。
+#   人脑会退化：疲劳、生病、精神失常；模型也会退化：复读、逻辑混乱、幻觉、答非所问、
+#   突然暴躁、突然消极、乱调工具、前后矛盾。
+#   **这不是"模型坏了"，是"模型生病了"。** 不能等它病入膏肓才治 ——
+#   那时整轮回答已经废了、还可能被写进长期记忆。要在症状出现的那一刻就介入。
+# 【接入点】每次生成完成后跑一遍：monitor.check → diagnose → heal → records。
+#   一级治疗**静默**（用户看不出治过）；二级及以上把提示写进回答里（用户看得见）。
+# 【为什么必须接在这里（agent_run 的出口）】这是"模型说完了、但还没交给用户"的唯一时刻。
+#   往前一步（生成中）只能拿到片段，往后一步（返回给前端）就已经落盘了 ——
+#   错开这个时刻，治疗只能改屏幕上的字，改不了历史和记忆里的内容。
+# 【去掉它会怎样】`core/health` 就只是一堆没人调用的函数：病历永远是空的，
+#   预防建议无从谈起，模型复读了也没人管 —— 退化会一轮轮累积进长期记忆。
+_HEALTH_LAYER = {"monitor": None, "diagnose": None, "healer": None, "records": None,
+                 "tried": False, "in_gate": False}
+# 急诊状态：置位后**拒绝继续生成**，并把原因强通知给用户，等人工介入。
+# 为什么不是"把进程杀掉"：一个自我了断的服务连"告诉你它为什么停"的机会都没有 ——
+# 那等于把"急诊"做成"猝死"。急诊的正确语义是**停止服务 + 保留现场 + 强通知 + 等人工**，
+# 而不是让用户对着一片空白猜发生了什么。
+_HEALTH_EMERGENCY = {"on": False, "reason": "", "at": 0.0}
+_HEALTH_NOTICE = {"text": "", "level": 0, "at": 0.0}
+
+
+def _health_layer():
+    """惰性构建健康系统四件套（含**宿主回调**）。拿不到就返回 None —— 健康层缺席不影响对话。"""
+    if _HEALTH_LAYER["tried"] and _HEALTH_LAYER["monitor"] is not None:
+        return _HEALTH_LAYER
+    _HEALTH_LAYER["tried"] = True
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core.health.monitor import HealthMonitor
+        from core.health.diagnose import HealthDiagnose
+        from core.health.heal import HealthHealer
+        from core.health.records import HealthRecords
+        _HEALTH_LAYER["monitor"] = HealthMonitor()
+        _HEALTH_LAYER["diagnose"] = HealthDiagnose()
+        _HEALTH_LAYER["records"] = HealthRecords()
+        _HEALTH_LAYER["healer"] = HealthHealer(hooks=_health_hooks(),
+                                                diagnose=_HEALTH_LAYER["diagnose"],
+                                                records=_HEALTH_LAYER["records"],
+                                                monitor=_HEALTH_LAYER["monitor"])
+        LOG.info("健康系统已接入：监测 18 类症状 → 诊断四级 → 治疗四级 → 病历 logs/health/")
+        return _HEALTH_LAYER
+    except Exception as e:      # noqa: silent-ok — 健康层起不来不能挡住对话（但必须留痕）
+        LOG.warning("健康系统不可用（已跳过，对话照常）：%s", e)
+        return _HEALTH_LAYER
+
+
+def _health_hooks():
+    """把载体的真实能力挂给治疗层。
+
+    治疗层只负责"决定该做什么"（分级、给说法、记病历），**具体怎么做由载体提供** ——
+    这是"载体优先"的又一次分工：换掉治疗策略不用改载体，换掉载体也不用改策略。
+    每个 hook 都返回能表达失败的值（False/""），治疗层据实记录，**不允许假装成功**。
+    """
+    def _h_retry(question, system="", why=""):
+        """换角度重来一次。**硬限：治疗层已经限制成最多一次**，这里再加一道递归闸。"""
+        if _HEALTH_LAYER["in_gate"]:
+            LOG.info("健康治疗：重试请求发生在治疗过程中，已忽略（防递归）")
+            return ""
+        prompt = ("上一次的回答没有通过质量校验（%s）。请**换一种说法**重新回答下面的问题："
+                  "不要重复上一次的表述，不要解释，直接给结论。\n\n%s" % (why or "质量不佳", question))
+        try:
+            return llm_chat([{"role": "user", "content": prompt}]) or ""
+        except Exception as e:      # noqa: silent-ok — 重试失败就如实返回空，让治疗层降级
+            LOG.warning("健康治疗：换角度重试失败：%s", e)
+            return ""
+
+    def _h_reset_context(session=None):
+        """清空当前会话上下文（**长期记忆保留**）。
+
+        关键分寸：只清"这一轮对话的短期上下文"，**不动向量库里的长期记忆** ——
+        向量库是"我是谁、用户是谁、我们聊过什么"的地方，清它等于让用户重新自我介绍一遍。
+        清的是"最近几十轮的具体措辞"—— 那正是把模型带进退化循环的东西。
+        """
+        try:
+            d = _sessions()
+            sid = (session or {}).get("sid") or get_current_session()[0].get("id")
+            for s in d["sessions"]:
+                if s.get("id") != sid:
+                    continue
+                msgs = list(s.get("messages") or [])
+                keep = [m for m in msgs if m.get("role") == "用户"][-1:]
+                if len(msgs) <= len(keep):
+                    return True                     # 本来就没多少上下文，算成功
+                s["messages"] = keep
+                _save_sessions(d)
+                LOG.warning("健康治疗（二级）：已清空会话 %s 的上下文（%d 条 → %d 条），"
+                            "长期记忆（向量库）保留不动", sid, len(msgs), len(keep))
+                return True
+        except Exception as e:      # noqa: silent-ok — 清不掉就如实返回 False
+            LOG.warning("健康治疗：清上下文失败：%s", e)
+        return False
+
+    def _h_reload_kv(session=None):
+        """重置模型状态（重载 KV Cache）。
+
+        如实说明本架构下的语义：llama-server 每个请求独立处理，**KV cache 不跨请求保留** ——
+        所以"重载 KV"在这里等价于"丢弃上一轮的上下文"，而那件事已经由 `reset_context` 做了。
+        这里返回 True 是**如实的**（状态确实已经重置），detail 里会写明为什么没有额外的动作；
+        假装发一个不存在的 API 请求才是自欺。
+        """
+        LOG.info("健康治疗（二级）：模型状态重置 —— 本架构每请求独立，KV 不跨轮保留，"
+                 "等价动作（丢弃会话上下文）已由 reset_context 完成")
+        return True
+
+    def _h_switch_brain(reason=""):
+        """切备用火种（变形金刚：换火种不换小焦）。
+
+        【缺陷 1 的修法：加安全闸 + 加回切 + 全程留痕】
+        真端到端实测抓到的严重后果：红线拦截被误判成模型退化 → 三级治疗调到这里 →
+        原来"拿到候选就切"，**把一个本来好好的本地大脑切成了不可用目标** →
+        小焦随后"大脑没有应答"，长文场景三次全不过。
+        一次错误的治疗，造成的破坏比它想治的病大得多。所以这里立三道闸：
+          ① **先 ping 目标**，探测通过才切（不可用就干脆不切，保持现状）；
+          ② 切完 **10 秒内复核**，新火种不响应 → **自动切回原火种**（治疗不许把系统搞坏）；
+          ③ 每一次切换（含被否决、含回切）都写进 `logs/carrier/brain_switch.jsonl`，
+             带原因与探测结果 —— 事后必须能回答"是谁、为什么、把火种换到哪去了"。
+        """
+        import json as _json
+        entry = {"ts": time.time(), "iso": time.strftime("%Y-%m-%d %H:%M:%S"),
+                 "by": "health.level3", "reason": str(reason)[:200],
+                 "from": "", "to": "", "ping_ok": False, "verify_ok": False, "result": ""}
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "logs", "carrier", "brain_switch.jsonl")
+
+        def _record():
+            try:
+                os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+            except Exception as e:      # noqa: silent-ok — 记不上流水也绝不能影响切换本身
+                LOG.debug("切换流水写入失败（忽略）：%s", e)
+
+        try:
+            root = os.path.dirname(os.path.abspath(__file__))
+            if root not in sys.path:
+                sys.path.insert(0, root)
+            from core.carrier import BrainRegistry
+            reg = BrainRegistry()
+            names = list(reg.names() or [])
+            cur = reg.current()
+            orig = cur.name if cur else ""
+            entry["from"] = orig
+            if len(names) < 2:
+                entry["result"] = "no_alternative"
+                LOG.warning("健康治疗（三级）：只有 %d 个火种可用，没有备用火种可切", len(names))
+                _record()
+                return False
+            # ---- 闸①：按优先级逐个探测，**第一个真能用的**才切 ----
+            target = None
+            tried = []
+            for nm in names:
+                if nm == orig:
+                    continue
+                b = reg.get(nm)
+                if b is None:
+                    continue
+                try:
+                    pb = b.probe(timeout=4)
+                except Exception as e:      # noqa: silent-ok — 探测异常当作不可用
+                    pb = {"ok": False, "error": str(e)[:80]}
+                tried.append({"name": nm, "ok": bool(pb.get("ok")),
+                              "error": str(pb.get("error") or "")[:80]})
+                if pb.get("ok"):
+                    target = b
+                    break
+            entry["probed"] = tried
+            if target is None:
+                entry["result"] = "no_healthy_target"
+                LOG.warning("健康治疗（三级）：所有备用火种都探测不通过 %s → **不切**（保持现状）",
+                            tried)
+                _record()
+                return False
+            entry["to"] = target.name
+            entry["ping_ok"] = True
+            # ---- 切 ----
+            ok = reg.switch(target.name)
+            try:
+                reg.apply_to_app(target)
+            except Exception as e:      # noqa: silent-ok — 应用不上要如实记，不能假装成功
+                LOG.warning("健康治疗：火种切换后应用到 app 失败：%s", e)
+            LOG.warning("健康治疗（三级）：已切到备用火种 %s（%s）", target.name, reason)
+            # ---- 闸②：10 秒内复核新火种，不响应就自动切回 ----
+            deadline = time.time() + 10.0
+            verified = False
+            while time.time() < deadline:
+                try:
+                    if target.probe(timeout=4).get("ok"):
+                        verified = True
+                        break
+                except Exception:      # noqa: silent-ok — 探测失败就是没通过，继续等到超时
+                    pass
+                time.sleep(1.0)
+            entry["verify_ok"] = verified
+            if not verified:
+                LOG.error("健康治疗（三级）：新火种 %s 10 秒内无响应 → **自动切回** %s",
+                          target.name, orig or "（无原火种）")
+                entry["result"] = "rolled_back"
+                if orig:
+                    try:
+                        reg.switch(orig)
+                        reg.apply_to_app(reg.get(orig))
+                        entry["rolled_back_to"] = orig
+                    except Exception as e:      # noqa: silent-ok — 回切失败必须留痕
+                        entry["rollback_error"] = str(e)[:120]
+                        LOG.error("健康治疗：回切 %s 失败：%s", orig, e)
+                _record()
+                return False
+            entry["result"] = "switched"
+            _record()
+            return bool(ok)
+        except Exception as e:      # noqa: silent-ok — 切不了就如实返回 False，绝不假装成功
+            LOG.warning("健康治疗：切备用火种失败：%s", e)
+            entry["result"] = "error"
+            entry["error"] = str(e)[:150]
+            _record()
+            return False
+
+    def _h_rollback(session=None):
+        """回滚到上一个稳定状态：丢掉出问题的那一轮回答（保留用户的问题）。
+
+        为什么是"丢回答"而不是"恢复某个备份文件"：会话文件是**唯一**的状态载体，
+        为它维护多份快照，代价是每轮都要写一遍完整历史（大文件、慢、还可能写坏）。
+        而真正需要回滚的对象只有一样 —— 那一条病态的回答。丢掉它，状态就回到了
+        "用户刚问完、还没有坏回答"的那个稳定点，这也正是"上一个稳定会话状态"的含义。
+        """
+        try:
+            d = _sessions()
+            sid = (session or {}).get("sid") or get_current_session()[0].get("id")
+            for s in d["sessions"]:
+                if s.get("id") != sid:
+                    continue
+                msgs = list(s.get("messages") or [])
+                while msgs and msgs[-1].get("role") == "小焦":
+                    msgs.pop()
+                s["messages"] = msgs
+                _save_sessions(d)
+                LOG.warning("健康治疗（三级）：已回滚会话 %s 的最后一条回答", sid)
+                return True
+        except Exception as e:      # noqa: silent-ok — 回滚失败如实返回 False
+            LOG.warning("健康治疗：回滚失败：%s", e)
+        return False
+
+    def _h_pause_task(reason=""):
+        """暂停当前任务并标记"待恢复"（写进病历目录，界面/启动脚本读得到）。"""
+        try:
+            p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "logs", "health", "paused_tasks.jsonl")
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"ts": time.time(),
+                                    "iso": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                    "reason": str(reason)[:200], "state": "待恢复"},
+                                   ensure_ascii=False) + "\n")
+            return True
+        except Exception as e:      # noqa: silent-ok — 记不上就当没暂停（不能假装成功）
+            LOG.warning("健康治疗：暂停任务标记失败：%s", e)
+            return False
+
+    def _h_shutdown(reason=""):
+        """急诊：**停止服务**（拒绝继续生成）+ 保留现场 + 强通知，等人工介入。
+
+        为什么不是 os._exit / 杀进程：见 `_HEALTH_EMERGENCY` 的注释 ——
+        能说话的停服比猝死有用得多。用户看到的是明确的"急诊"提示 + 原因 + 建议。
+        """
+        _HEALTH_EMERGENCY.update({"on": True, "reason": str(reason)[:300], "at": time.time()})
+        LOG.error("健康急诊：已停止服务（拒绝继续生成），原因：%s", str(reason)[:200])
+        return True
+
+    def _h_snapshot(reason=""):
+        """保留现场：把当时的会话 + 症状 + 资源状态落成一个快照文件，供事后复盘。"""
+        try:
+            d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "health")
+            os.makedirs(d, exist_ok=True)
+            p = os.path.join(d, "snapshot_%s.json" % time.strftime("%Y%m%d_%H%M%S"))
+            snap = {"ts": time.time(), "iso": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "reason": str(reason)[:300],
+                    "model": MODEL_NAME, "brain_engine": BRAIN_ENGINE,
+                    "last_llm_error": _LAST_LLM_ERROR,
+                    "used_local_fallback": dict(_USED_LOCAL_FALLBACK),
+                    "inflight": _inflight_all(),
+                    "symptoms": [], "session_tail": []}
+            try:
+                H = _health_layer()
+                if H["monitor"] is not None:
+                    snap["symptoms"] = [s.to_dict() if hasattr(s, "to_dict") else str(s)
+                                        for s in (H["monitor"].last() or [])]
+            except Exception as e:      # noqa: silent-ok — 症状取不到也要留下其余现场
+                snap["symptoms_error"] = repr(e)
+            try:
+                snap["session_tail"] = current_messages()[-6:]
+            except Exception as e:      # noqa: silent-ok — 同上
+                snap["session_error"] = repr(e)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(snap, f, ensure_ascii=False, indent=2)
+            LOG.error("健康急诊：已保留现场 → %s", p)
+            return p
+        except Exception as e:      # noqa: silent-ok — 快照失败也要让急诊流程继续
+            LOG.warning("健康治疗：保留现场失败：%s", e)
+            return ""
+
+    def _h_notify(level=1, text=""):
+        """强通知：写流水 + 记 ERROR 日志 + 留给界面（急诊时必须让用户看见）。"""
+        try:
+            p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "logs", "health", "notify.jsonl")
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"ts": time.time(), "level": int(level or 1),
+                                    "text": str(text)[:500]}, ensure_ascii=False) + "\n")
+        except Exception as e:      # noqa: silent-ok — 写不进去也要把日志打出来
+            LOG.debug("健康通知落盘失败（忽略）：%s", e)
+        _HEALTH_NOTICE.update({"text": str(text)[:500], "level": int(level or 1),
+                               "at": time.time()})
+        LOG.error("健康通知（%s 级）：%s", level, str(text)[:200])
+        return True
+
+    return {"retry": _h_retry, "reset_context": _h_reset_context, "reload_kv": _h_reload_kv,
+            "switch_brain": _h_switch_brain, "rollback": _h_rollback,
+            "pause_task": _h_pause_task, "shutdown": _h_shutdown,
+            "snapshot": _h_snapshot, "notify": _h_notify}
+
+
+def _health_gate(user_input, answer, tool_trace, elapsed_ms=None, session_extra=None):
+    """生成完成后跑一遍：监测 → 诊断 → 治疗。返回 (处理后回答, 给用户看的提示或空串)。
+
+    **永远不抛异常**，最差返回原样的回答 —— 健康系统是"锦上添花"，绝不能变成新的故障点。
+    """
+    H = _health_layer()
+    if H["monitor"] is None:
+        return answer, ""
+    if _HEALTH_LAYER["in_gate"]:
+        return answer, ""          # 防递归：治疗里触发的重试不再走一遍健康门
+    _HEALTH_LAYER["in_gate"] = True
+    try:
+        try:
+            _cfg_h = __import__("core.health", fromlist=["cfg"]).cfg()
+        except Exception:      # noqa: silent-ok — 配置拿不到就按默认（默认开）
+            _cfg_h = {"enabled": True, "auto_heal": True}
+        if _cfg_h.get("enabled") is False:
+            return answer, ""
+        ctx = {
+            "question": user_input,
+            "tool_trace": tool_trace or [],
+            "elapsed_ms": elapsed_ms,
+            "expectations": _intent_keywords(user_input),
+            "history": [],
+        }
+        try:
+            _hist = current_messages()
+            ctx["history"] = _hist[-6:]
+            ctx["turns"] = len(_hist)
+            ctx["prev_answers"] = [m.get("content") for m in _hist[-4:]
+                                   if m.get("role") == "小焦"][-2:]
+        except Exception as e:      # noqa: silent-ok — 历史取不到就少两个判据，不影响主流程
+            LOG.debug("健康检查取历史失败（忽略）：%s", e)
+        symptoms = H["monitor"].check(answer, ctx) or []
+        if not symptoms:
+            return answer, ""
+        _sid = ""
+        try:
+            _sid = get_current_session()[0].get("id")
+        except Exception:      # noqa: silent-ok — 没会话 id 就少一层隔离能力，如实留空
+            pass
+        sess = {"sid": _sid, "turns": ctx.get("turns"), "model": MODEL_NAME,
+                "input_chars": len(user_input or ""), "elapsed_ms": elapsed_ms,
+                "streak": H["monitor"].streaks()}
+        sess.update(session_extra or {})
+        diag = H["diagnose"].diagnose(symptoms, sess) or {}
+        severity = diag.get("severity") or "LIGHT"
+        sess["cause"] = diag.get("cause")
+        LOG.warning("健康监测：检出 %d 个症状 %s → 诊断 %s（判因 %s）：%s",
+                    len(symptoms), [getattr(s, "code", "?") for s in symptoms],
+                    severity, diag.get("cause"), diag.get("reason"))
+        res = H["healer"].heal(severity, sess, symptoms, output=answer, question=user_input)
+        # 一级：静默换掉回答，界面上看不出治过
+        if res.level == 1 and isinstance(res.output, str) and res.output.strip():
+            if res.output != answer:
+                LOG.info("健康治疗（一级·静默）：回答 %d 字 → %d 字（%s）",
+                         len(answer), len(res.output), res.action)
+            answer = res.output
+        elif res.level >= 2 and isinstance(res.output, str) and res.output.strip():
+            answer = res.output
+        # ---- 问题 1 的关键补丁：**不管治到第几级，出门前一律再解一次毒** ----
+        # 实测教训：判到 MEDIUM（一轮里 ≥3 个症状就会）走的是二级路径（清上下文 + 重试），
+        # 那条路径以前会把病态原文原样交回来 —— 于是"诊断出来了、用户还是看到一屏复读"。
+        # 这里不依赖任何一级/二级/三级的内部实现是否周全：文本出门前统一过网。
+        answer, _net_note = _degeneration_net(answer, where="健康门/%s" % severity)
+        if _net_note:
+            res.detail["output_net"] = _net_note
+        # 二级及以上：把提示**写进回答**（用户看得见），这是"界面提示"的落地方式 ——
+        # 走回答正文而不是额外弹窗，是为了让提示能跟着回答一起被存进历史（刷新后还在）。
+        note = ""
+        if res.level >= 2 and res.note:
+            note = "\n\n---\n\n🩺 " + str(res.note)
+        elif res.level >= 3:
+            note = ("\n\n---\n\n🩺 小焦现在状态不太好，需要休息一下。"
+                    "原因：%s。建议：%s" % (diag.get("reason") or severity,
+                                          diag.get("advice") or "先做简单的任务，或等一会儿再试。"))
+        if res.level >= 4:
+            note += ("\n\n⛔ **急诊：小焦已暂停服务**，现场（日志与状态快照）已保留，"
+                     "需要你手动介入处理。处理完刷新页面即可恢复。")
+        return answer, note
+    except Exception as e:      # noqa: silent-ok — 健康门自己出问题，绝不能影响正常回答
+        LOG.warning("健康门异常（已跳过，回答照常返回）：%s", e)
+        return answer, ""
+    finally:
+        _HEALTH_LAYER["in_gate"] = False
+
+
+def _intent_keywords(text):
+    """给"答非所问"判据用的期望关键词（规则抽取，不调模型）。
+
+    只用中英文**实词片段**，去掉指令词 —— 与续写的关键词抽取同口径。
+
+    【真端到端实测抓到的误报，写下来免得再犯】
+    用户那句话是「你仔细查肯定不够12万的」——**本身没有明确的主题词**。
+    第一版把句子里所有 2~6 字的中文片段都当成"期望要点"，于是抽出 9 个碎片
+    （仔细查 / 肯定不够 / …）。模型给了一个**完全合理**的回答（一张解释 12 万怎么算的表），
+    却只命中 2/9 → 判"答非所问" → 连中 3 轮 → 升级成 MEDIUM → **清空了用户的会话上下文**
+    并在回答末尾给用户加了一句"刚才的回答质量不佳，我已重新组织"。
+    一个正常回答被判病，还顺手把用户的上下文清了 —— 这比漏判坏得多。
+    所以这里改成"只有拿到**足够可信**的主题词才给期望，否则一个都不给"：
+      · 去掉口语/指令/判断类词（否则"肯定不够"这种也算主题）；
+      · 只保留长度 ≥3 的片段；
+      · 少于 2 个就返回空 —— 空表示"这句话没有可判的主题"，
+        监测层会自然退回它自己的字符覆盖法（对模糊提问基本不会误报）。
+    """
+    try:
+        t = re.sub(r"\d+", "", text or "")
+        for w in _INTENT_STOPWORDS:
+            t = t.replace(w, " ")
+        kws = re.findall(r"[\u4e00-\u9fff]{2,6}|[A-Za-z]{4,}", t)
+        out = []
+        for k in kws:
+            if len(k) < 3:          # 2 字片段太容易是"仔细/肯定"这类非主题词
+                continue
+            if k not in out:
+                out.append(k)
+        return out if len(out) >= 2 else []
+    except Exception:      # noqa: silent-ok — 抽不出来就不做"答非所问"判据
+        return []
+
+
+# 「答非所问」要用的主题词黑名单：口语、指令、判断、程度词 —— 它们不是"用户在问什么"。
+# 为什么必须显式列出来：中文里"仔细查""肯定不够"这种词组在字符层面跟主题词没区别，
+# 不排除掉就会把**模糊提问**变成一堆假期望要点（实测就是这么误报的）。
+_INTENT_STOPWORDS = (
+    "帮我", "请你", "请", "麻烦", "给我", "告诉我", "一下", "一个", "一些", "一点",
+    "怎么样", "怎么", "如何", "为什么", "是什么", "什么地方", "什么", "多少", "几个",
+    "可以", "能否", "能不能", "有没有", "是不是", "对不对", "好吗", "行吗",
+    "仔细", "认真", "肯定", "一定", "绝对", "当然", "应该", "可能", "大概", "差不多",
+    "不够", "够了", "够了没", "需要", "想要", "我要", "我想", "我要你", "看看", "说说",
+    "讲讲", "介绍", "解释", "说明", "告诉", "觉得", "认为", "知道", "了解",
+    "这个", "那个", "这些", "那些", "这里", "那里", "现在", "今天", "明天", "刚才",
+    "你好", "您好", "小焦", "的", "了", "吗", "呢", "吧", "啊", "呀", "哦", "嗯",
+)
+
+
+def _health_emergency_text():
+    """急诊状态下返回给用户的说明（拒绝继续生成，但不装死）。"""
+    return ("⛔ **小焦处于急诊状态，已暂停回答。**\n\n"
+            "原因：%s\n\n"
+            "现场（日志与状态快照）已经保留在 `logs/health/` 下。"
+            "建议：检查模型服务是否正常、内存/显存是否吃紧；处理完重新打开页面即可恢复。\n\n"
+            "（急诊是**载体层**的自我保护：与其继续产出不可信的回答，不如停下来等你。"
+            "要强制恢复，把 `logs/health/emergency.json` 里 `on` 置为 false 并重启小焦。）"
+            % (_HEALTH_EMERGENCY.get("reason") or "模型状态异常"))
+
+
+def _note_tool_path(tool_trace, path=""):
+    """把"这一轮走了工具直通"广播到协同网络（并落盘事件流水）。
+
+    【为什么需要它 —— 接入验收实测发现的真缺口】
+        `agent_run` 里有几条**规则直通**（③a 句子里甩了网址 → `_scrape_direct`；
+        ③a-2 重试抓取；等等）。它们拿到答案后**直接 return**，跳过了主流程末尾的
+        `memory.retrieved` / `metacognition.checked` 发布点。
+        实测对比：普通问答一轮发布 3 个事件，而"抓一下 example.com"一轮**发布 0 个** ——
+        也就是说**带工具的轮次在协同网络里完全隐形**，而恰恰是这些轮次最需要被观测
+        （工具调用、抓取成败、后面接不接总结）。补这一个发布点就补上了。
+    """
+    try:
+        from core import central as _c
+        _tools = [t.get("tool") for t in (tool_trace or []) if isinstance(t, dict)]
+        _c.set_state("tools", last_tools=_tools[-4:], path=path)
+        _c.publish("tool.invoked", {"tools": _tools[-4:], "path": path})
+    except Exception:      # noqa: silent-ok — 总线不在也不能影响这条直通的结果
+        pass
+
+
+def mind_done(mind, answer, truncated=False, skipped=False):
+    """思维流 · **短路轮次的收尾**：把这一轮的状态落盘。
+
+    ① 为什么要有这个函数：`agent_run` 里有几处"载体自己就能答、不经过模型"的短路
+      （工具清单直答 / 上下文融不出来就反问 / 取回刚才那条工具原文 / 超长输入改写）。
+      这些短路各自 `return`，如果顺手直接返回，本轮 `begin()` 起的
+      `turn_count` / `current_topic` / `recent_thoughts` 就**全部丢掉** ——
+      下一轮读到的还是上一轮的旧状态，等于"这一轮对思维流不存在"。
+      验收实测：先说"帮我看看有哪些工具"（走短路、没存盘），紧接着"我要全部的"
+      就被记成"（还没定）"，话题断线。
+    ② 去掉会怎样：状态只能靠"没走短路的轮次"推进。用户连问三句工具类问题，
+      思维流要到第三句才接上话题 —— "连续"变成时有时无，而"时有时无"等于没有。
+    """
+    try:
+        if mind and mind.get("st") is not None:
+            from core import mind_stream as _msx
+            _msx.finish(mind.get("sid") or "", mind.get("st"), answer or "",
+                        truncated=truncated, skipped=skipped)
+    except Exception as e:      # noqa: silent-ok — 存不上只影响下一轮的连续性，绝不能影响回答
+        LOG.debug("思维流短路存盘失败（忽略）：%s", e)
+
+
+def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=None):
     """全部问题统一走这条流程：记忆 → 联网检索 → 大脑(小焦模型/外接LLM) → 记忆自学习。
 
     `on_chunk(text, n, total_chars)`：只在"用户要长文"时会被回调（第 3 步的 SSE 推流用）。
@@ -4290,11 +6732,116 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
 
     注：不再代理给 DSH 桥接（那会造成 小焦→桥接→小焦 的死循环）。
     DSH 兼容的正确方式是：DSH harness 连小焦的 /v1 当模型，DSH 的插件在 DSH 里自己跑。
+
+    【为什么这么设计】这是**载体编排**的唯一入口：模型只负责"处理当前这一小块"，
+    其余判断（检索到什么、装哪些工具、要不要继续写、结果对不对、要不要治疗、记不记）
+    全由载体在这一层做。凡是"该不该做 / 做几步 / 做完算不算数"的决定都在这里，
+    模型不参与 —— 这是"模型可替换、换火种不换小焦"能成立的唯一原因。
+
+    【去掉它会怎样】每个调用点（网页 SSE、API、自主任务）会各写一套
+    "检索→调用→校验→落盘"，于是工具开关、上下文预算、健康监测、记忆写入这些
+    横切关注点必然被漏掉一些、而且**漏得不一致**（网页有、API 没有）——
+    这类"同一件事两套行为"的 bug 最难查，用户会感到"换个入口它就不一样了"。
     """
     # ===== 原有的 agent_run 逻辑 =====
+    _round_begin()                            # Bug 2：开一份干净的本轮工具去重表（详见 _round_begin）
+    _t_round = time.time()                    # 这一轮从进来到出去花了多久（健康系统的"响应超时"判据）
+    # 自主性：上报"用户有交互"，idle 类后台任务靠它判断"用户闲下来了没"
+    try:
+        from core.autonomy import touch as _auto_touch
+        _auto_touch()
+    except Exception:      # noqa: silent-ok — 自主性缺席不影响对话
+        pass
+    # 健康急诊：已经停机了就不再生成（但要**如实告诉用户**为什么，不装死）
+    if _HEALTH_EMERGENCY.get("on"):
+        return _health_emergency_text(), False, [], False, []
     _USED_LOCAL_FALLBACK.update({"on": False, "model": "", "reason": ""})   # 每次提问复位兜底标签
     _CTX["user_input"] = user_input          # 工具层要用（判断模型是否只给了碎片检索词）
     history = current_messages()
+
+    # ================== 上下文融合（对话不连续的核心修复） ==================
+    # 【为什么必须放在**这里**（意图识别之前、历史读到之后）】
+    #   用户实测：小焦把每句话当新对话。
+    #       "帮我看看有哪些工具" → 列出工具
+    #       "我要全部的"        → 反问"你要全部什么？"
+    #   根因不是"历史没进 prompt"（历史进了），而是**意图判定阶段是孤立的**：
+    #   下面的 `_detect_intent(user_input)` 只看当前这一句，而"我要全部的"
+    #   孤立看确实没有信息（没有动词、没有对象）→ 判成 chat → 模型只能反问。
+    #   人不会这样：人先知道"上文在聊工具"，再看"这句指全部"。
+    #   所以这里先做一次**融合**，产出一句"完整的话"（`user_input_ctx`），
+    #   后面的意图识别、工具清单短路、联网检索全部改用融合后的这句。
+    # 【只读不改】`user_input` 本身**不动** —— 它还要用于写历史、算预算、进记忆，
+    #   那些地方需要的是"用户真正说了什么"，而不是载体补全后的版本。
+    _ctx_fuse = {"text": user_input, "merged": False, "kind": "none", "topic": "",
+                 "why": "", "need_clarify": False}
+    try:
+        _ctx_fuse = merge_context(user_input, history)
+        if _ctx_fuse.get("merged"):
+            LOG.info("上下文融合（%s）：%r → %r ｜ %s", _ctx_fuse.get("kind"),
+                     user_input[:24], str(_ctx_fuse.get("text"))[:40],
+                     _ctx_fuse.get("why"))
+    except Exception as e:      # noqa: silent-ok — 融合失败就用原句，绝不能因此答不了
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 6650, e)
+    user_input_ctx = str(_ctx_fuse.get("text") or user_input)
+
+    # ================== 思维流 · **先起状态**（必须在任何短路之前） ==================
+    # 【为什么提到这么靠前 —— 验收实测踩到的】
+    #   原来我把 `begin()` 放在工具清单短路**之后**，于是"帮我看看有哪些工具"这种
+    #   会走短路的轮次**不产生任何思维流日志**、状态也不更新 ——
+    #   验收测试 2（三句连起来聊工具）第一句就被记为"（还没定）"，话题断了。
+    #   状态维护必须覆盖**每一轮**（包括短路的那些），否则思维流是"时有时无"的。
+    _mind = {"st": None, "block": {"text": "", "tokens": 0, "used": False, "temp": TEMPERATURE},
+             "sid": ""}
+    try:
+        from core import mind_stream as _ms
+        try:
+            _mind["sid"] = str(get_current_session()[0].get("id") or "")
+        except Exception:      # noqa: silent-ok — 拿不到会话 id 就不持久化，仍可用状态
+            _mind["sid"] = ""
+        # 【为什么喂 `user_input_ctx`（融合后的）而不是原句】"我要全部的"这种回指句
+        #   本身看不出话题，融合后才是"我要全部的工具"。思维流要记的是**用户想说什么**，
+        #   不是**用户嘴上是哪几个字** —— 喂原句会让回指轮次的话题断成"（还没定）"。
+        _st, _blk = _ms.begin(_mind["sid"], user_input_ctx, intent=_detect_intent(user_input_ctx))
+        _mind["st"], _mind["block"] = _st, _blk
+        # 每轮都留一行：话题/轮数/注入量/温度（验收测试 2、5、6 都靠它取证）
+        LOG.info("思维流：%s ｜ 注入 %d token ｜ 温度 %.1f",
+                 _ms.state.summary(_st), _blk.get("tokens"), _blk.get("temp"))
+    except Exception as e:      # noqa: silent-ok — 状态是锦上添花，绝不能因此答不了
+        LOG.debug("思维流接入失败（忽略）：%s", e)
+
+    # ---- 工具清单类问题：**载体直接答**（无限 4 的验收项：说"你有哪些工具"要列出全部）----
+    # 为什么放在最前面、且直接返回：见 `_tool_inventory_answer` 的说明 ——
+    # 77 个工具名是载体自己就知道的**确定性事实**，交给概率性的模型去背诵必然列不全，
+    # 实测它还会顺手调 list_files（把"列工具"当成"列文件"）并只回 13 个字。
+    # 这一条短路既保证"一个不少"，又省掉一次模型往返。
+    # ⚠️ 返回值必须是 `agent_run` 的**五元组契约**
+    #    (answer, online, info, needs_confirm, tool_trace)：
+    #    `api_chat` 一行 `answer, online, info, needs_confirm, tool_trace = agent_run(...)`
+    #    直接解包，我第一版返回了裸字符串 → 服务端 500（自测当场抓到）。
+    #    其中 info 必须是可迭代的 (title, url, content) 三元组序列（`api_chat` 会展开它），
+    #    所以这里给 `[]` 而不是 None；online 给 True（载体答出来了，不是"大脑没应答"）。
+    # 判据用 `_tool_inventory_question`：它额外认"要全部 + 上文在聊工具"这一种
+    # （即"我要全部的"接在"有哪些工具"之后 —— 这正是用户实测的那条链）。
+    try:
+        if _tool_inventory_question(user_input, _ctx_fuse):
+            LOG.info("工具清单类问题：载体直接列全部（不经过模型）｜融合=%s",
+                     _ctx_fuse.get("kind"))
+            _ans = _tool_inventory_answer()
+            mind_done(_mind, _ans)          # 短路也要收尾，否则这一轮对思维流不存在
+            return _ans, True, [], False, []
+        # ---- 融合不出来 → **如实反问**（见 `_clarify_question` 的说明）----
+        # 放在工具清单短路**之后**：否则"我要全部的工具"（自己就带对象）会被误答。
+        if _ctx_fuse.get("need_clarify"):
+            LOG.info("上下文融合不出来 → 反问用户：%s", _ctx_fuse.get("why"))
+            _ans = _clarify_question(user_input)
+            mind_done(_mind, _ans)          # 反问也是一轮交流，同样要记进思维流
+            return _ans, True, [], False, []
+    except Exception as e:      # noqa: silent-ok — 短路失败就走正常流程，绝不能因此答不了
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 6444, e)
+
+    # ================== 思维流（状态已在上面起好，这里只做说明） ==================
+    # 状态与注入块在 `agent_run` 开头就准备好了（见"思维流 · 先起状态"那段注释），
+    # 原因是短路轮次（工具清单直答等）也必须被状态覆盖，否则思维流会"时有时无"。
 
     # ---- 第 5 步：要"刚才那条工具结果的原文" → 从**会话缓存**取回（工具结果隔离的配套）----
     # 历史里只留了摘要（防串台），可用户有时候就是想再看一眼那条原始 JSON/HTML。
@@ -4305,12 +6852,13 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
             _txt = str(_rec.get("text") or "")
             LOG.info("从会话缓存取回工具原文：%s（%d 字，%s 前）",
                      _rec.get("tool"), len(_txt), _rec.get("time"))
-            return ("📄 **刚才 `%s` 的完整原始结果**（共 %d 字%s，从会话缓存取回，未重抓）\n\n"
+            _ans = ("📄 **刚才 `%s` 的完整原始结果**（共 %d 字%s，从会话缓存取回，未重抓）\n\n"
                     "```\n%s\n```"
                     % (_rec.get("tool") or "?", len(_txt),
                        ("，HTTP %s" % _rec["status"]) if _rec.get("status") else "",
-                       _txt[:20000]),
-                    True, [], False,
+                       _txt[:20000]))
+            mind_done(_mind, _ans)
+            return (_ans, True, [], False,
                     [{"tool": _rec.get("tool") or "?", "args": _rec.get("args"),
                       "result": "从会话缓存取回原始结果（%d 字）" % len(_txt), "cached": True}])
 
@@ -4321,6 +6869,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
         _long_in = _process_long_input(user_input, on_progress=on_progress)
         if _long_in:
             _remember_turn(user_input, _long_in, None)
+            mind_done(_mind, _long_in)
             return _long_in, True, [], False, []
 
     # 1. 相关记忆（受操控文件 capabilities 控制）
@@ -4333,6 +6882,10 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
     #     真实缺陷防复发：走这条路就不会出现"1999 年数据 / 受影响软件 n/a / 5 条只总结 1 条"。
     answer = None
     tool_trace = []
+    # 检索阶段留下的轨迹（内置检索 web_search）。**必须单独存一份**：
+    # 后面 `answer, tool_trace = llm_chat_tools(...)` 是**整体替换** tool_trace 的
+    # （它只回自己那几次工具调用），直接 append 进去会被悄悄冲掉 —— 实测就是这么丢的。
+    _pre_trace = []
     if CAP.get("run_tools", True):
         _vq = detect_vulnerability_query(user_input)
         if _vq:
@@ -4437,6 +6990,11 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
                                                     "result": _r[:200]}]
             if _r.startswith("〔待确认〕"):
                 answer = _r                       # 危险命令：把确认原文直接给用户
+            elif _carrier_block(_r):
+                # 缺陷 2：红线拦截 → 直接给载体原文，**不能说"已执行"**
+                #（这句话以前会写成"💻 已执行：del a.txt"，与事实完全相反）
+                LOG.warning("删除禁区（shell 直通）：拦下并直接回复载体原文")
+                answer = _carrier_block_answer("delete", _r)
             else:
                 answer = "💻 **已执行**：`%s`\n\n```\n%s\n```" % (_sh, _r.strip()[:1500])
 
@@ -4444,6 +7002,18 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
     if answer is None and CAP.get("run_tools", True) and _looks_like_url(user_input) \
             and not _asks_diagram(user_input):
         answer, tool_trace = _scrape_direct(user_input, tool_trace)
+        _note_tool_path(tool_trace, path='url_direct')
+    # ③a-2 问题 4：**"忽略 robots 抓一次"这类"重来一次"必须真去抓**。
+    #      真实缺陷：这句话里没有网址，`_detect_scrape_intent` 判不出抓取意图 →
+    #      交给模型 → 模型凭上下文碎片**编**了一段 JSON + 一张跟目标无关的漏洞表。
+    #      判据放在**模型之前**：宁可多抓一次，也不能让模型替我们"回忆"网页内容。
+    if answer is None and CAP.get("run_tools", True) and not _asks_diagram(user_input):
+        _rt = _scrape_retry_intent(user_input)
+        if _rt:
+            LOG.info("识别为『重试/授权忽略 robots』→ 强制调 %s 抓 %s（问题 4 直通）",
+                     _rt[0], _rt[1].get("url"))
+            answer, tool_trace = _scrape_direct(user_input, tool_trace, force_intent=_rt)
+            _note_tool_path(tool_trace, path='scrape_retry')
     _is_diagram = _asks_diagram(user_input)
     if CAP.get("web_search", True) and answer is None:
         if _is_diagram:
@@ -4453,9 +7023,37 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
         elif _named:
             LOG.info("用户点名了工具 %s，跳过自动检索（直接走工具）", _named[:3])
         else:
-            _q, _qhint = resolve_search_query(user_input)
+            # **闲聊轮不联网检索** —— 问题 5 的实测主因。
+            # 实测："你好，用一句话介绍一下你自己" 这种纯聊天，载体照样去搜了一遍，还因为
+            # "跑题（覆盖率 33%）"**换写法重试**了一次 → 白花约 2.7 秒：
+            #   直连 1.05s ／ 走小焦 3.86s = **3.68 倍**（用户要求 ≤3 倍）。
+            # 而 `_CHAT_SYSTEM_HINT` 里早就写着"闲聊：不要调用工具、不要联网搜索" ——
+            # 提示词要求模型别搜，载体自己更该守这条规矩。
+            # ⚠️ 这里必须用**融合后**的 `user_input_ctx`（不是原始 `user_input`）：
+            #    "我要全部的"孤立看是 chat → 会走"闲聊不联网"分支；
+            #    融合成"我要全部的工具"之后才判得出真实意图（见 `merge_context` 的说明）。
+            _pre_intent = _detect_intent(user_input_ctx)
+            if _pre_intent == "chat":
+                LOG.info("闲聊轮不联网检索（省时间；需要联网时会自动走 query 意图）")
+                _q, _qhint = "", ""
+            else:
+                _q, _qhint = resolve_search_query(user_input_ctx)
             if _q:
                 info = web_search(_q, num=5)
+                # **把内置检索也记进工具轨迹**（本轮实测的体验缺口）：
+                # 它走的是"提醒词前先检索"这条老路，不是工具调用，于是 tool_trace 是空的 ——
+                # 用户在界面上**看不到"小焦搜过了"**，只能凭空相信这段内容是搜来的。
+                # 用户实测"搜索 Scrapling 最新文章"时正是如此：答案是对的（4222 字真实汇总），
+                # 但轨迹为空，看起来就像模型自己编的。搜了就要留痕，这是"感知无限"的前提。
+                try:
+                    _pre_trace.append(_trace_entry(
+                        "web_search", {"query": _q},
+                        "检索到 %d 条\n%s" % (len(info), "\n".join(
+                            "%d. %s：%s" % (i, (x[0] or "")[:60], (x[2] or "")[:160])
+                            for i, x in enumerate(info[:5], 1)))))
+                    tool_trace = list(tool_trace or []) + [_pre_trace[-1]]
+                except Exception as e:      # noqa: silent-ok — 记轨迹失败不能影响检索结果
+                    LOG.debug("内置检索记轨迹失败（忽略）(%s:%d): %s", __file__, 4560, e)
             elif _qhint:
                 LOG.info("跳过自动检索：%s", _qhint)
     web_text = "\n".join((f"{t}：{c}" if len(t)==3 else f"{t}：{c}") for t, c in [ (x[0],x[2]) for x in info[:4] ]) if info else ""
@@ -4487,12 +7085,40 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
         tool_guidance = "\n[工具用法] 写文件/建网站/代码用 write_file(路径用 Windows 绝对路径, 会自动建目录); 查信息/运行命令用 run_command(PowerShell 语法, 不能用并字连接命令要用分号; 不要用 run_command 去写文件)。\n"
         skills = "\n\n[技能插件] " + "\n\n".join(c for _, c in PLUGIN_SKILLS) if PLUGIN_SKILLS else ""
         # ---- 第 1 步：先按意图决定"这一轮加载什么"，system 与 tools 必须一致 ----
-        intent = _detect_intent(user_input)
+        # ⚠️ 用**融合后**的 `user_input_ctx`：意图是"用户想干什么"，
+        #    而"我要全部的"只有在知道上文在聊工具之后才判得对（对话不连续的核心修复）。
+        intent = _detect_intent(user_input_ctx)
         if lean:
             # 语音精简模式: 短提示, 不背工具/技能, 生成快
             messages = [{"role": "system", "content": (SYSTEM_PROMPT[:240] + "\n[语音对话] 请简短、口语化、直接回答，一两句话；不要调用工具、不要长篇大论、不要列表。")}]
         else:
             sys_text = system_for_intent(intent, user_input=user_input)
+            # ================== 极限补刀（模块 10）· 真正接入 ==================
+            # 【为什么必须在这里接 —— 接入验收发现的真问题】
+            #   `core/boost/` 七个模块各自写好了、自测全绿（195/195），
+            #   但 `agent_run` **一次都没调用过它们** —— 也就是说这七项全是**离线能力**，
+            #   用户对话时一项都不会被触发。自测全绿只证明"函数是对的"，
+            #   **不证明"接入过"**。这里补上接入：每轮按问题类型挑**一种**补刀，
+            #   把它的提示词拼进 system（模型因此"被带着"用对方法）。
+            #   为什么只挑一种：七种同时塞进 system 会互相干扰、也吃 token（无限 6 有限额）；
+            #   命不中就什么都不加（和 `reasoning.pick` 的"选不出来别硬塞"同一条原则）。
+            try:
+                from core import boost as _boost
+                _bd = _boost.dispatch(user_input_ctx)
+                if _bd.get("kind") and _bd.get("kind") != "none":
+                    sys_text += "\n\n" + _bd["text"]
+                    LOG.info("极限补刀接入：%s ｜ %s", _bd.get("kind"), _bd.get("evidence"))
+                    # 协同网络：把"这次用了哪项补刀"广播出去（模块之间不直接调用）
+                    try:
+                        from core import central as _central
+                        _central.set_state("boost", kind=_bd.get("kind"),
+                                           evidence=_bd.get("evidence"))
+                        _central.publish("boost.used", {"kind": _bd.get("kind"),
+                                                        "evidence": _bd.get("evidence")})
+                    except Exception:      # noqa: silent-ok — 总线不在也不能影响回答
+                        pass
+            except Exception as e:      # noqa: silent-ok — 补刀失败就用原提示词，绝不能答不了
+                LOG.debug("极限补刀接入失败（忽略）：%s", e)
             if intent != "chat":
                 # 闲聊轮不需要工具用法与技能文档 —— 按需加载，system 才能压到 1000 token 以内
                 sys_text += path_ctx + tool_guidance + skills
@@ -4505,6 +7131,51 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
             _mem_inject = _retrieve_memory(user_input)
             if _mem_inject:
                 sys_text += _MEMORY_INSTRUCTION + "【相关记忆】\n" + _mem_inject + "\n"
+            # ---- 第二部分 · 世界层 RAG：小焦**自己**在网上看到的相关背景 ----
+            # "用户问题先过 RAG：检索世界模型 + memory_vec → 匹对用户画像 → 相关则注入"。
+            # 放在记忆之后：顺序体现优先级 —— 用户亲口说的是第一手，网上的背景是第二手。
+            _world_inject = _world_rag(user_input)
+            if _world_inject:
+                sys_text += _world_inject
+            # ================== 元认知（模块 8）· 真正接入 ==================
+            # 【为什么必须在这里接】`core/metacognition/` 写好了、自测 143/143，
+            #   但 `agent_run` 从没调用过 —— "它得知道自己不知道"这件事**从未真正生效**。
+            #   这里做两件事：
+            #     ① **答前**查边界档案：这类问题历史上我是不是老答错/老没把握？
+            #        是 → 明确要求"先查资料/走工具，别硬答"（小模型最危险的不是不会，是不知道自己不会）；
+            #     ② **答后**记一条边界样本（自评 + 结果），档案越用越准。
+            try:
+                from core.metacognition import boundary as _mb
+                _mbd = _mb.should_use_tool(user_input_ctx)
+                if _mbd.get("use_tool"):
+                    sys_text += ("\n\n【元认知】这类问题我过去答得不好（%s），"
+                                 "**先用工具查清再回答**；查不到就如实说查不到，"
+                                 "绝对不要凭印象编。" % (_mbd.get("why") or "")[:60])
+                    LOG.info("元认知接入：本类问题建议走工具（%s）", (_mbd.get("why") or "")[:60])
+                else:
+                    # 没有历史样本时也给一条通用纪律（"不确定要认"），
+                    # 这是"绝假记忆"在生成侧的同一条原则。
+                    sys_text += ("\n\n【元认知】没把握的事要**明确说不确定**"
+                                 "（「我需要查一下」或「我不确定」），不要用肯定语气编答案。")
+                try:
+                    from core import central as _central2
+                    _central2.set_state("metacognition", use_tool=bool(_mbd.get("use_tool")),
+                                        samples=_mbd.get("samples") or 0)
+                    _central2.publish("metacognition.checked",
+                                      {"use_tool": bool(_mbd.get("use_tool")),
+                                       "samples": _mbd.get("samples") or 0})
+                except Exception:      # noqa: silent-ok — 总线不在也不影响回答
+                    pass
+            except Exception as e:      # noqa: silent-ok — 元认知拿不到就照常答，绝不能拦路
+                LOG.debug("元认知接入失败（忽略）：%s", e)
+            # ---- 思维流注入（≤500 token）：放在**最后**，因为它是"最近的一段思绪"，
+            #      越靠近生成越容易被模型当成"我现在正想的"。----
+            try:
+                _mb = (_mind or {}).get("block") or {}
+                if _mb.get("used") and _mb.get("text"):
+                    sys_text += "\n\n" + _mb["text"]
+            except Exception:      # noqa: silent-ok — 注入失败就用原提示词
+                pass
             messages = [{"role": "system", "content": sys_text}]
         # ---- 第 1 步：**先把"本轮"拼完整，再算 token** ----
         # 真实缺陷（第 1 步实测）：以前先裁剪、后拼"相关记忆/联网资料/小脑经验"，于是这些注入内容
@@ -4543,17 +7214,25 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
         _long = None
         if _continuation_cfg()["enabled"] and _needs_continuation(user_input):
             _long = _generate_long(user_input, messages[0].get("content", ""),
-                                   on_chunk=on_chunk)
+                                   on_chunk=on_chunk, on_delta=on_delta)
         if _long is not None:
             answer = _long
         elif CAP.get("run_tools", True):
             # 工具子集已由上面的 _plan_tools() 按意图 + 预算定好；画图轮再给足时间预算（多步链路）
             _budget = 240 if intent == "diagram" else 0
+            # 温度自适应（思维流）：按意图给 —— 事实类 0.2（要准）、闲聊 0.8（要多样）、
+            # 其余 0.5。为什么要按轮改：同一个固定温度下，闲聊永远一个腔调
+            # （用户实测"连说两次回答几乎一样"），而事实题温度高又会算错/编数字。
+            try:
+                _temp_now = float((_mind or {}).get("block", {}).get("temp") or TEMPERATURE)
+            except Exception:      # noqa: silent-ok — 取不到就用全局默认
+                _temp_now = TEMPERATURE
             try:
                 answer, tool_trace = llm_chat_tools(
                     messages, lean=lean, max_rounds=_workflow_needs_more_rounds(user_input),
                     tools_subset=_subset, budget_s=_budget,
-                    workflow=("diagram" if intent == "diagram" else ""))
+                    workflow=("diagram" if intent == "diagram" else ""),
+                    temperature=_temp_now)
             except Exception as e:
                 # **真实缺陷（用户实测：画架构图返回"大脑没有应答"）**：本地 4B 模型偶尔会吐一个
                 # **参数不是合法 JSON 的工具调用**，llama-server 直接回 HTTP 500
@@ -4589,7 +7268,13 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
                 tname, targs = _map_tool(tname, targs)
                 result = _tool_result_str(run_tool(tname, targs, force=True))
                 tool_trace.append(_trace_entry(tname, targs, result))
-                answer = _summarize_tool(user_input, result, tname)
+                if _carrier_block(result):
+                    # 缺陷 2：这条兜底路径以前也会让模型总结 → 编出"已完成"
+                    LOG.warning("载体拦截（%s/plan 兜底）：直接回复载体原文", tname)
+                    answer = _carrier_block_answer(
+                        "delete" if "删除" in str(result) else "other", result)
+                else:
+                    answer = _summarize_tool(user_input, result, tname)
 
     # ②c 兜底：**画图意图但图没真的交付** → 载体自己把 archify 工作流走完（第 5 步）
     #     真实缺陷（本轮实测）：本地 4B 模型被要求画架构图时，直接画一屏 ASCII 框图就交差，
@@ -4630,8 +7315,12 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 1427, e)
 
-    # 4c. 【第 2 步】把这一轮对话永久写进向量库 + 回填"模型是否真用上了检索到的记忆"
-    #     为什么写回要放在这一轮结束时：只有答案出来了才知道记忆有没有被用上；
+    # 4b-bis. 把检索阶段留下的轨迹合回来（llm_chat_tools 会整体替换 tool_trace，见上面 _pre_trace）
+    if _pre_trace:
+        _have = {id(x) for x in (tool_trace or [])}
+        tool_trace = [x for x in _pre_trace if id(x) not in _have] + list(tool_trace or [])
+
+    # 4c. 【第 2 步】把这一轮对话永久写进向量库 + 回填"模型是否真用上了检索到的记忆"    #     为什么写回要放在这一轮结束时：只有答案出来了才知道记忆有没有被用上；
     #     这条回填就是验收里"使用率 ≥70%"的唯一依据，必须如实记，不能自己给自己打高分。
     if answer and not lean:
         _remember_turn(user_input, answer, tool_trace)
@@ -4650,10 +7339,65 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
     # 5. 落地上下文（顺手剥掉模型偶尔吐出的 <think> 思维标签，别让标签进聊天记录）
     if answer:
         answer = _strip_think(answer)
+        # ---- 第 3 部分 · 健康系统：生成完成后监测 → 诊断 → 治疗 ----
+        # 位置很关键：**在"回答定稿"之后、"交给用户/落盘"之前**。
+        # 只有这一刻，治好的内容才能同时影响"用户看到的"和"历史记下的" ——
+        # 放到返回之后再治，历史里留的仍然是那份病态回答，下一轮又会被当上下文喂回去。
+        answer, _h_note = _health_gate(user_input, answer, tool_trace,
+                                       elapsed_ms=int((time.time() - _t_round) * 1000))
+        if _h_note:
+            answer += _h_note
         _fb = llm_fallback_note()                # 云端挂了、本地顶上 → 回答里如实标注
         if _fb and not any(k in answer for k in ("本地大脑", "本地兜底")):
             answer += _fb
         needs_confirm = PENDING is not None and answer.startswith("〔待确认〕")
+        # ---- 预防层：定期体检（连续 50 轮清上下文 / 空闲整理 / 凌晨自检）----
+        # 放在最后、且**不 await 任何东西**：预防是"日常保健"，绝不能拖慢或影响这一轮回答。
+        try:
+            H = _health_layer()
+            if H["healer"] is not None:
+                try:
+                    _turns = len(current_messages())
+                except Exception:      # noqa: silent-ok — 轮数取不到就不做预防判断
+                    _turns = 0
+                H["healer"].preventive({"sid": get_current_session()[0].get("id"),
+                                        "turns": _turns, "model": MODEL_NAME})
+        except Exception as e:      # noqa: silent-ok — 预防失败不能影响回答
+            LOG.debug("预防层跳过（忽略）：%s", e)
+        # ================== 思维流 · 收尾：把"我刚才想了什么"存下来 ==================
+        # 这是"连续性"的另一半：只有"读上一轮状态"而没有"写这一轮状态"，
+        # 下一轮读到的永远是旧的 —— 状态就变成一潭死水。
+        # `unsaid`（没说出口的话）在"回答被截断/收了短"时才有内容，见 update.after_assistant。
+        try:
+            from core import mind_stream as _ms2
+            _trunc = False
+            try:
+                _trunc = bool(str(answer or "").rstrip().endswith(("…", "...", "，", ","))
+                              and len(str(answer or "")) < 80)
+            except Exception:      # noqa: silent-ok — 判不出截断就当没截断
+                _trunc = False
+            _ms2.finish((_mind or {}).get("sid") or "", (_mind or {}).get("st"),
+                        answer, truncated=_trunc)
+        except Exception as e:      # noqa: silent-ok — 存不上只影响下一轮连续性
+            LOG.debug("思维流存盘失败（忽略）：%s", e)
+        # ================== 元认知 · 答后记一条边界样本 ==================
+        # 【为什么要记】`core/metacognition/boundary.py` 的档案靠"同类问题连续低把握/自评A却答错"
+        #   来累积判断力（下次遇到同类问题就直接走工具）。**没记录就等于永远没有判断力** ——
+        #   这是"越用越大"在元认知这一项上的落点。
+        #   这里只记"事实"：问了什么、有没有用工具（用工具=承认了不确定）、回答里有没有不确定性措辞。
+        try:
+            from core.metacognition import boundary as _mb2
+            _uncertain = any(w in str(answer or "") for w in
+                             ("不确定", "不清楚", "我查一下", "需要查", "无法确认", "说不准"))
+            _rating = "C" if _uncertain else ("B" if not tool_trace else "A")
+            _mb2.record(user_input_ctx, _rating,
+                        correct=None if _uncertain else True,
+                        note="用了工具" if tool_trace else "直接回答",
+                        source="agent_run")
+            LOG.info("元认知记边界：rating=%s 用了工具=%s 含不确定措辞=%s",
+                     _rating, bool(tool_trace), _uncertain)
+        except Exception as e:      # noqa: silent-ok — 记录失败绝不能影响已经答好的内容
+            LOG.debug("元认知记录失败（忽略）：%s", e)
         return answer, True, info, needs_confirm, tool_trace
 
     # 6. 无任何可用大脑（本地大模型未连接）时的降级（只给一句简洁提示，不瞎输出联网内容）
@@ -4665,6 +7409,55 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None):
 
 
 app = Flask(__name__)
+
+
+# ================== 协同网络（阶段 B）· 真正接入 ==================
+# 【为什么要装订阅者】`core/central/` 写了中央状态与事件总线、自测 44/44，
+#   但**没有任何模块订阅过** —— 也就是说"模块 A 发布 → 模块 B 收到"这条链
+#   在真实运行里从未发生过。总线装好了却没人用，等于没有协同。
+#   这里装两个真实订阅者（不是演示用）：
+#     · 记忆写入 → 同步到中央状态（推理/元认知要能读到"刚才检索到了什么"）
+#     · 补刀选型 → 记进中央状态，供健康系统与报告复盘
+#   订阅者**抛异常必须被总线吞掉**（见 central.publish 的说明），所以这里也放心接。
+def _install_bus_subscribers():
+    """装上真实订阅者；重复调用只装一次（幂等）。返回装上的订阅数。"""
+    try:
+        from core import central as _c
+    except Exception as e:      # noqa: silent-ok — 总线不在就跳过，绝不影响启动
+        LOG.debug("协同网络不可用（忽略）：%s", e)
+        return 0
+    if _install_bus_subscribers.__dict__.get("done"):
+        return 0
+
+    def _on_memory(ev):
+        """记忆检索事件 → 写进中央状态（别的模块能读到本轮检索到了什么）。"""
+        p = ev.get("payload") or {}
+        _c.set_state("memory", hits=p.get("hits"), tokens=p.get("tokens"),
+                     query=(p.get("query") or "")[:40])
+
+    def _on_boost(ev):
+        """补刀选型事件 → 写进中央状态（供健康系统/报告复盘）。"""
+        p = ev.get("payload") or {}
+        _c.set_state("boost_last", kind=p.get("kind"), evidence=p.get("evidence"))
+
+    try:
+        _c.subscribe("memory.retrieved", _on_memory, owner="app.memory_state")
+        _c.subscribe("boost.used", _on_boost, owner="app.boost_state")
+        _c.open_persist(True)          # 落盘事件流水，便于事后复盘"协同到底发生过没"
+        _install_bus_subscribers.done = True
+        LOG.info("协同网络已接入：订阅 memory.retrieved / boost.used（事件将落盘）")
+    except Exception as e:      # noqa: silent-ok — 装不上订阅者不影响任何业务
+        LOG.debug("订阅者安装失败（忽略）：%s", e)
+    return len(_c.subscribers())
+
+
+try:
+    _install_bus_subscribers()
+except Exception as _e:      # noqa: silent-ok — 初始化失败绝不能拦住应用启动
+    try:
+        LOG.debug("协同网络初始化失败（忽略）：%s", _e)
+    except Exception:      # noqa: silent-ok — 连日志都拿不到时静默
+        pass
 
 
 # ================== 聊天接口限流（安全第一批·任务4） ==================
@@ -4766,6 +7559,35 @@ def health():
     只能去戳首页或 /api/xxx，前者重、后者要令牌。启动脚本、监控、外部探活统一用这个。
     """
     return jsonify({"ok": True, "version": APP_VERSION})
+
+
+@app.route("/api/central")
+def api_central():
+    """协同网络的只读快照：中央状态 + 事件总线统计 + 最近事件。
+
+    【为什么要有它 —— 接入验收发现的真问题】
+        `core/central/` 装了中央状态与事件总线、自测 44/44，`agent_run` 里也真的
+        发布/订阅了（事件落盘到 `logs/central/events.jsonl`），**但外界看不到** ——
+        没有接口能确认"模块 A 发布 → 模块 B 收到"这件事在运行期真的发生过。
+        一个"只有内部知道"的子系统，等于无法验收；所以补这个只读入口。
+    【为什么免鉴权】它只回状态摘要和事件主题，**不含任何用户内容、不含密钥**
+        （`snapshot()` 里只有模块名、计数、时间戳）。和 /health 同理，
+        监控/自检要能直接读。若以后要加内容，必须移出豁免名单。
+    """
+    try:
+        from core import central as _c
+        snap = _c.snapshot()
+        return jsonify({
+            "ok": True,
+            "modules_available": snap.get("modules_available"),
+            "modules_total": snap.get("modules_total"),
+            "modules": {k: bool(v.get("available")) for k, v in (snap.get("modules") or {}).items()},
+            "state": snap.get("state") or {},
+            "bus": snap.get("bus") or {},
+            "recent_events": snap.get("recent_events") or [],
+        })
+    except Exception as e:      # noqa: silent-ok — 协同网络不可用时如实报，不编造状态
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, e)}), 500
 
 
 @app.after_request
@@ -5315,14 +8137,37 @@ def api_ws_open():
 
 @app.route("/api/chat/pending")
 def api_chat_pending():
-    """当前会话最后一条小焦消息是否仍在生成(pending)；刷新后前端据此续显"正在回答"。"""
+    """当前会话最后一条小焦消息是否**真的**还在生成。
+
+    ---- Bug 5：判据从"有没有占位符"改成"这个会话有没有在跑" ----
+    真实缺陷（用户实测）：回答完了，切走再切回来，界面卡在"正在回答…"。
+    根因之一就在这里：以前只看最后一条消息里有没有 `⏳__pending__` 就算"还在生成"。
+    可那个占位符是**发起时**写下的、由回填改成真实回答 —— 一旦这一次请求因为任何原因
+    没回填成功（切会话、进程重启、客户端断开），占位符就**永久留在会话里**，
+    于是刷新/切回来永远显示"正在回答"，用户以为小焦卡死了。
+    现在：`_INFLIGHT` 里没有这个会话，就说明**没有人在生成** ——
+    那这条占位符是"孤儿"，按"上一轮中断了"如实告诉用户（并把占位符就地清理掉），绝不假装还在生成。
+    """
     try:
+        sid = get_current_session()[0].get("id")
         msgs = current_messages()
         last = msgs[-1] if msgs else {}
         bot = last if last.get("role") == "小焦" else None
-        pending = bool(bot and "__pending__" in str(bot.get("content", "")))
+        stale = bool(bot and "__pending__" in str(bot.get("content", "")))
+        # 问题 2：`live` 用的是**带心跳**的判据（20 秒没心跳 = 这一轮已经死了），
+        # 并且排除"用户已经放弃"的轮（abandon 过的不该再让界面转圈）
+        _inflight_reap()
+        live = _inflight_generating(sid)
+        pending = bool(stale and live)
+        if stale and not live:
+            # 就地清理孤儿占位符（否则每次切回来都要重新判一次，而且下一轮历史里还带着它）
+            fixed = _INTERRUPTED_NOTE
+            if replace_pending_msg(sid, fixed):
+                LOG.info("清理孤儿占位符（会话 %s 没有正在进行的生成）→ 标记为已中断", sid)
+            return jsonify({"pending": False, "content": fixed, "interrupted": True})
         return jsonify({"pending": pending, "content": "" if pending else (bot or {}).get("content", "")})
     except Exception as e:
+        LOG.debug("pending 查询失败（忽略）：%s", e)
         return jsonify({"pending": False, "content": ""})
 
 
@@ -5350,13 +8195,49 @@ def api_session_new():
 
 @app.route("/api/session/<sid>")
 def api_session(sid):
+    """打开某个会话：**顺手把"孤儿占位符"清理掉**（Bug 5 的第二道防线）。
+
+    为什么要在"打开会话"这个动作里清理：前端切回来时是拿这个接口的数据全量渲染的，
+    只要这里给出的内容还是 `⏳__pending__`，界面就会渲染成"正在回答…"卡住。
+    清理的判据同样看 `_INFLIGHT`：这个会话没在跑 → 占位符就是孤儿 → 如实标成"已中断"。
+    """
     d = _sessions()
     for s in d["sessions"]:
         if s["id"] == sid:
             d["current"] = sid
+            _clean_stale_pending(s)
             _save_sessions(d)
-            return jsonify({"id": sid, "title": s.get("title"), "messages": s.get("messages", [])})
+            return jsonify({"id": sid, "title": s.get("title"), "messages": s.get("messages", []),
+                            # 界面口径（活着 且 用户没放弃）；`alive` 是载体自己的真相，一并给出便于排查
+                            "generating": _inflight_generating(sid),
+                            "alive": _inflight_has(sid),
+                            "generating_idle_s": _inflight_idle(sid)})
     return jsonify({"error": "会话不存在"}), 404
+
+
+def _clean_stale_pending(sess):
+    """把会话里那些"没有人在生成却还挂着"的占位符标成已中断。返回清理条数。
+
+    问题 2 的修正：判据从"在不在册"改成"心跳还新不新"（`_inflight_has` 内含心跳判定）。
+    在册但 20 秒没心跳 = 那一轮的生成器已经没了，答案永远不会来 —— 再等下去就是白等。
+    """
+    try:
+        if not sess.get("id"):
+            return 0
+        _inflight_reap()                  # 顺手把死掉的在册项清掉（幂等，代价可忽略）
+        if _inflight_has(sess.get("id")):
+            return 0                      # 真有人在生成（心跳是新的）→ 不动它        n = 0
+        for m in sess.get("messages", []):
+            if m.get("role") == "小焦" and "__pending__" in str(m.get("content", "")):
+                m["content"] = _INTERRUPTED_NOTE
+                n += 1
+        if n:
+            LOG.info("清理孤儿占位符：会话 %s 有 %d 条占位符没有对应的生成（标记为已中断）",
+                     sess.get("id"), n)
+        return n
+    except Exception as e:      # noqa: silent-ok — 清理失败不该让"打开会话"失败
+        LOG.debug("清理孤儿占位符失败（忽略）：%s", e)
+        return 0
 
 
 @app.route("/api/session/delete", methods=["POST"])
@@ -5661,6 +8542,12 @@ def api_chat():
     lean = bool((request.get_json(force=True, silent=True) or {}).get("lean", False))
     answer, online, info, needs_confirm, tool_trace = agent_run(user_input, lean=lean)
     answer = _strip_think(answer)                  # 双保险：任何路径的 <think> 都不许进正文/会话
+    # ---- 问题 1：**唯一出口的复读解毒网** ----
+    # `agent_run` 有十几条 return（看工具原文、超长切片、工具总结…），任何一条都可能绕过健康门。
+    # 与其去数"有哪些路径"，不如在所有回答唯一必经的地方（这两个聊天接口）统一过网。
+    answer, _net = _degeneration_net(answer, where="/api/chat")
+    if _net:
+        LOG.warning("出口解毒（/api/chat）：%s", _net)
     # 把占位小焦消息更新为真实回答（含最后那句提示）
     answer_final = answer
     if not answer_final:
@@ -5736,25 +8623,91 @@ def api_chat_stream():
             _sid = get_current_session()[0].get("id")
         except Exception:      # noqa: silent-ok — 取不到就当没有，回填自然跳过
             _sid = ""
-        buf = []
+        # Bug 5：登记"这个会话正在生成"（唯一可信的判据，前端/接口据此判断要不要显示"正在回答"）
+        _inflight_begin(_sid)
+        # 问题 2：**心跳线程** —— 让活着的轮自己证明自己活着（详见 _INFLIGHT_HEARTBEAT_S 的说明）。
+        # 它必须在 begun 之后、生成之前就起来：中途才起的话，"刚开始生成的那几秒"没人证明，
+        # 恰好撞上切会话就会被误判成死掉。
+        _hb_stop = threading.Event()
+
+        def _heartbeat():
+            while not _hb_stop.wait(_INFLIGHT_HEARTBEAT_S):
+                _inflight_tick(_sid)          # 只刷时间戳，不改字数
+
         try:
+            threading.Thread(target=_heartbeat, daemon=True,
+                             name="xj-inflight-hb-%s" % (_sid or "?")).start()
+        except Exception as e:      # noqa: silent-ok — 起不了心跳就退化成"靠注销"，不能挡住生成
+            LOG.debug("心跳线程启动失败（忽略）：%s", e)
+        buf = []
+        # Bug 5：额外维护一份**流出过的全文**（delta + chunk 都在里面），
+        # 专门用于"客户端断开时把已生成部分落盘"——`buf` 只装 chunk（长文路径），
+        # 普通回答走的是 delta，两者必须都收，否则断流时会把已生成的内容全丢掉。
+        flow = []
+        _finished = [False]
+        # ---- 问题 1：**推流源头**的复读闸门（不是等输出完再查）----
+        # 用户明确要求："检测要在流式过程中实时跑，不能等完成"。
+        # 为什么不能只靠出口解毒网：出口那道网是在**生成结束之后**才跑的 ——
+        # 那时几百行刷屏**已经推给前端了**，用户先看到满屏垃圾、再被 done 覆盖，
+        # 体验上跟没修一样。所以必须在这里、每一小片进门的时候就判：
+        #   命中 → 立刻停止转发（后面的片一律不再推），并置位让收尾走解毒网。
+        # 代价只是每 10 片跑一次纯文本检测（实测 0.003s/万字），换来"垃圾不出门"。
+        _src_det = _new_degen_detector()
+        _src_hit = [None]
+
+        try:
+            # 问题 2：**第一件事就把会话 id 告诉前端**。
+            # 为什么不能等收尾的 meta：前端要知道"我现在这一轮落在哪个会话"才可能在切走时
+            # 去等这一轮真的结束（`stopGeneration` 靠它）。等 meta 的话，
+            # "生成中途切走"这个**最需要它的时刻**恰好还没有 id —— 保险在最需要的时候失效。
+            #
+            # 【为什么必须放在 try 里面（本轮实测抓到的真 bug）】
+            # 第一版把这个 yield 放在了 try 之前 —— 那么"客户端在这一个 yield 处断开"时，
+            # GeneratorExit 会在**进入 try 之前**抛出，`finally` 里那句注销根本轮不到执行，
+            # 这一轮就永久留在在册表里 → 界面永远"正在回答"。**保险本身成了新的漏点。**
+            # 只要 yield 在 try 之内，任何时刻断开都一定走到 finally。
+            if _sid:
+                yield _sse({"type": "session", "session_id": _sid})
             import queue
             q = queue.Queue()
 
             def _on_chunk(text, n, total):
                 buf.append(text)
+                flow.append(text)
+                _inflight_tick(_sid, sum(len(x) for x in flow))
+                if _src_hit[0] is not None:
+                    return                 # 已经判定复读 → 后面的内容不再往前端推
+                if _src_det is not None and _src_det.feed(text):
+                    _src_hit[0] = _src_det.hit
+                    LOG.warning("流式源头检测到复读（%s），停止继续推送正文", _src_det.hit)
+                    return
                 q.put(_sse({"type": "chunk", "text": text, "n": n, "chars": total}))
 
             def _on_progress(done, total):
                 # 只报"还在处理"，**不报第几片**（无限 5：界面不出现技术痕迹）
                 q.put(_sse({"type": "progress"}))
 
+            _streamed = [0]
+
+            def _on_delta(text):
+                # 真·流式：模型每吐一小片就立刻推给前端 —— 用户看到的是连续流出
+                _streamed[0] += len(text or "")
+                flow.append(text)
+                _inflight_tick(_sid, sum(len(x) for x in flow))
+                if _src_hit[0] is not None:
+                    return                 # 同上：判定为复读之后，一个字都不再推
+                if _src_det is not None and _src_det.feed(text):
+                    _src_hit[0] = _src_det.hit
+                    LOG.warning("流式源头检测到复读（%s），停止继续推送正文", _src_det.hit)
+                    return
+                q.put(_sse({"type": "delta", "text": text}))
+
             holder = {}
 
             def _work():
                 try:
                     holder["r"] = agent_run(user_input, on_chunk=_on_chunk,
-                                            on_progress=_on_progress)
+                                            on_progress=_on_progress, on_delta=_on_delta)
                 except Exception as e:
                     holder["err"] = str(e)
                 finally:
@@ -5775,6 +8728,21 @@ def api_chat_stream():
             if not answer:
                 answer = ("🤖 大脑没有应答，这一问没答上。请确认模型配置正确、端口可达。"
                           + llm_error_suffix())
+            # ---- 问题 1：唯一出口的复读解毒网（流式这条同样要过）----
+            # 注意顺序：**必须在推 delta 之前**解毒。反过来的话，前端已经收到了那几百行刷屏，
+            # 即使最后用 done.answer 覆盖，用户也会先看到满屏垃圾闪一下 —— 体验上跟没修一样。
+            answer, _net = _degeneration_net(answer, where="/api/chat/stream")
+            if _net:
+                LOG.warning("出口解毒（流式）：%s", _net)
+            # **普通问答也要"流出来"，不能一大块蹦**（用户实测第 2 项）。
+            # 长文续写那条路已经在生成时逐 delta 推过了（_streamed > 0），这里不用再推；
+            # 而普通回答是"模型整段返回后才拿到"的（工具循环没法逐 token 推），
+            # 所以按小片推给前端 —— 前端逐片追加，视觉上就是连续流出，而不是"啪"一整块出现。
+            if _streamed[0] == 0 and answer:
+                _step = 24
+                for _i in range(0, len(answer), _step):
+                    yield _sse({"type": "delta", "text": answer[_i:_i + _step]})
+                    time.sleep(0.012)
             # 把占位消息换成真实回答 + 记录本次交互（与 /api/chat 一致）
             # 第 5 步：同样只往历史里写**摘要**（工具原始内容不进历史，防串台）
             try:
@@ -5792,14 +8760,162 @@ def api_chat_stream():
                         "session_id": _sid or get_current_session()[0].get("id"), "log_id": log_id,
                         "needs_confirm": needs_confirm,
                         "sources": [{"title": t, "content": c, "url": u} for t, u, c in info]})
+            # Bug 4：`done` 之后**紧跟一个显式结束哨兵**。
+            # 为什么要有 `[DONE]`：前端靠"流自然结束"也能收尾，但中间经过反向代理/浏览器缓冲时，
+            # 流的结束时机不确定，"停止"按钮就可能多挂一会儿。给一个显式哨兵，
+            # 前端一收到就立刻收尾（摘按钮、对齐正文），不必等连接关闭。
+            _finished[0] = True
             yield _sse({"type": "done", "answer": answer})
+            yield "data: [DONE]\n\n"
         except Exception as e:
             LOG.warning("流式对话异常：%s", e)
             yield _sse({"type": "error", "error": str(e)})
+        finally:
+            # ---- Bug 5 第三道防线：**无论怎么结束，都要把这一轮"关掉"** ----
+            # 正常结束 / 报错 / 客户端提前断开（切会话、关页面 → GeneratorExit 从这里冒出来），
+            # 三条路都必须：① 注销 _INFLIGHT（否则"正在回答"永远为真）；
+            #              ② 停掉心跳（否则死轮会被心跳一直"证明活着"）；
+            #              ③ 若没正常结束，把已经生成的那部分落盘。
+            _hb_stop.set()
+            _inflight_end(_sid)
+            if not _finished[0]:
+                try:
+                    _flush_partial_answer(_sid, "".join(flow) or "".join(buf))
+                except Exception as e:      # noqa: silent-ok — 落盘失败也不能让请求挂掉
+                    LOG.debug("断流落盘失败（忽略）：%s", e)
+                    try:
+                        replace_pending_msg(_sid, _INTERRUPTED_NOTE)
+                    except Exception:       # noqa: silent-ok — 同上
+                        pass
 
     return Response(_gen(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                              "Connection": "keep-alive"})
+
+
+@app.route("/api/world")
+def api_world():
+    """世界层对用户可见：**它今天在互联网上做了什么**（探索/吸收/隔离/黑名单）。
+
+    用户要求"用户能看到：今天探索 30 个站，吸收 12 条，隔离 18 条"——
+    这个接口就是那句话的数据来源。拿不到任何数据时如实说"还没跑过"，
+    绝不编一个好看的数字（世界层最不该做的事就是假装自己很活跃）。
+    """
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core.world.explorer import get_explorer
+        from core.world.firewall import PollutionFirewall
+        from core.world.verifier import WorldVerifier
+        ex = get_explorer()
+        fw = PollutionFirewall(model=ex.model, state_dir=ex.state_dir)
+        vf = WorldVerifier(model=ex.model, state_dir=ex.state_dir)
+        return jsonify({"ok": True, "explorer": ex.status(), "firewall": fw.stats(),
+                        "report": fw.report(days=1), "verify_report": vf.report(days=7),
+                        "sites": list((ex.model.snapshot().get("sites") or {}).keys())[:40],
+                        "topics": [t.get("name") for t in (ex.model.topics(top=10) or [])],
+                        "profile": ex.model.user_profile()})
+    except Exception as e:
+        LOG.warning("世界层状态查询失败：%s", e)
+        return jsonify({"ok": False, "error": str(e)[:200],
+                        "note": "世界层还没跑起来（或数据目录为空）——如实报告，不编数字"})
+
+
+@app.route("/api/world/firewall", methods=["GET", "POST"])
+def api_world_firewall():
+    """污染防火墙：**用户可操作**的那几件事（释放隔离 / 驳回记忆 / 黑白名单 / 开关探索）。
+
+    POST body: {"action": "release"|"reject"|"blacklist_add"|"blacklist_remove"|"enable"|"disable",
+                "qid"|"domain"|"on": ...}
+    为什么要有这些接口：免疫系统不能是只进不出的黑箱 ——
+    用户必须能把"误杀的"放出来、把"混进来的"退回去。没有这几个动作，
+    隔离区就是单向牢房，误杀等于永久损失。
+    """
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from core.world.firewall import PollutionFirewall
+        from core.world.explorer import get_explorer
+        ex = get_explorer()
+        fw = PollutionFirewall(model=ex.model, state_dir=ex.state_dir)
+        if request.method == "GET":
+            return jsonify({"ok": True, "stats": fw.stats(), "blacklist": fw.blacklist()})
+        d = request.get_json(force=True, silent=True) or {}
+        act = str(d.get("action") or "").strip()
+        if act == "release":
+            return jsonify({"ok": True, "result": fw.release(d.get("qid"))})
+        if act == "reject":
+            return jsonify({"ok": True, "result": fw.reject(d.get("text") or d.get("mid") or "")})
+        if act == "blacklist_add":
+            return jsonify({"ok": True, "result": fw.blacklist_add(d.get("domain") or "",
+                                                                  reason=d.get("reason") or "用户手动加入")})
+        if act == "blacklist_remove":
+            return jsonify({"ok": True, "result": fw.blacklist_remove(d.get("domain") or "")})
+        if act in ("enable", "disable"):
+            on = (act == "enable")
+            try:
+                ex.cfg["explore_enabled"] = on
+            except Exception:      # noqa: silent-ok — 配置改不动也要如实说
+                pass
+            return jsonify({"ok": True, "explore_enabled": on,
+                            "note": "自主探索已%s（配置项 xiaojiao_control.json 的 world.explore_enabled）"
+                                    % ("打开" if on else "关闭")})
+        return jsonify({"ok": False, "error": "未知操作：%s" % act,
+                        "allowed": ["release", "reject", "blacklist_add", "blacklist_remove",
+                                    "enable", "disable"]}), 400
+    except Exception as e:
+        LOG.warning("防火墙操作失败：%s", e)
+        return jsonify({"ok": False, "error": str(e)[:200]}), 500
+
+
+@app.route("/api/chat/abandon", methods=["POST"])
+def api_chat_abandon():
+    """前端说「这一轮我不要了，别让它卡着我的界面」——**强制**清掉生成标记。
+
+    问题 2 的第二道保险（用户要求："加超时：切回来 3 秒内没数据就认为生成已死，清标志"）。
+    前端在切会话时先 abort 连接，然后最多等 3 秒；3 秒还没等到后端把标记撤掉，
+    就调这里**强制撤**。为什么需要这一步：客户端断开与后端生成器被关闭之间没有硬保证，
+    偶尔会差一拍 —— 就这一拍，界面能卡到用户刷新为止（"时好时坏"就是这么来的）。
+
+    分寸（很重要）：**只撤标记，不动正常的占位符**。
+    万一这一轮其实还活着（只是慢），我们去清它的占位符就等于**把答案弄丢**
+    —— 那比多转一会儿圈坏得多。所以只有"心跳已经断了"的轮才会连占位符一起标成中断。
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+    sid = (payload.get("session_id") or "").strip()
+    if not sid:
+        try:
+            sid = get_current_session()[0].get("id")
+        except Exception:      # noqa: silent-ok — 取不到就只做一个空操作
+            sid = ""
+    idle = _inflight_idle(sid)
+    alive = _inflight_has(sid, max_idle=3)      # 前端口径：3 秒没动静就算死
+    cleaned = 0
+    # 【顺序很关键（本轮实测抓到的真 bug）】先判"活着吗"、再决定要不要清占位符、
+    # **最后**才撤标记。第一版把 `_inflight_end` 写在了前面 —— 于是下面那句
+    # `_clean_stale_pending` 去问"有人在生成吗"，答案永远是"没有"（刚被自己撤掉了），
+    # 结果把一个**还活着**的轮的占位符清成了"中断了"，那一轮的答案就再也回填不进去。
+    # 撤标记是为了让界面别转圈，清占位符才是"判定这一轮死了" —— 两件事不能混。
+    if not alive:
+        try:
+            d = _sessions()
+            for s in d["sessions"]:
+                if s.get("id") == sid:
+                    cleaned = _clean_stale_pending(s)
+                    _save_sessions(d)
+                    break
+        except Exception as e:      # noqa: silent-ok — 清理失败也不算错，标记照样处理
+            LOG.debug("abandon 清理占位符失败（忽略）：%s", e)
+        _inflight_end(sid)          # 确实死了 → 连在册状态一起清掉
+    else:
+        # 还活着 → **只让它从界面消失，不动在册状态**（它结束时要回填已生成的内容）
+        _inflight_abandon(sid)
+    LOG.info("前端放弃本轮生成：会话=%s 撤标记=%s 空闲=%.1fs 清理占位符=%d",
+             sid, "是", (idle if idle is not None else -1), cleaned)
+    return jsonify({"ok": True, "session_id": sid, "was_alive": bool(alive),
+                    "idle_s": idle, "cleaned": cleaned})
 
 
 @app.route("/api/chat/stop", methods=["POST"])
@@ -6010,16 +9126,39 @@ def _get_models():
 
 
 def _save_control(brain=None, models=None):
+    """保存控制文件（`xiaojiao_control.json`）—— 配置的**唯一写入口**。
+
+    【为什么必须只有一个写入口】配置分散在多处写，就会出现"这里改了、那里还是旧值"。
+    真实缺陷（本轮修过）：界面把 API Key 填进 `models[]`，而运行时读的是
+    `brain.api.api_key` —— 两处不同步，表现为**用户填了 Key 却不生效**。
+    所以保存时在这里统一对齐（`_sync_api_key`），之后无论谁读都一致。
+
+    【为什么要合并而不是覆盖】保存"通用设置"时若不带上 models，
+    就会把用户自己加的外接模型清空（`models=None` 的语义是"没传"，
+    不是"清空"）—— 用户会发现自己加的模型**莫名其妙消失了**。
+
+    【去掉它会怎样】每个保存点各自拼一份 dict 写文件：
+    迟早出现"切换大脑把 Key 抹掉""改主题丢掉外接模型"这类**静默数据丢失**，
+    而且因为是静默的，用户只会觉得"配置不生效"，排查起来毫无线索。
+    """
     # 关键: models 若没显式传, 就**合并**当前与传入的, 绝不因"保存通用设置"而清空用户加的外接模型
     existing = _get_models()
     merged = models if models is not None else existing
     # 若来自 brain 切换等只传部分, 仍保留全部现有 models
+    _b = brain if brain else dict(CONTROL.get("brain", {}))
+    _ms = merged if merged else existing
+    # ---- Key 同步（真缺陷）：界面填的 Key 在 models[]、运行时读 brain.api.api_key ----
+    # 保存是**唯一的写入口**，就在这里把两处对齐，之后无论谁读都不会再出现"填了没生效"。
+    try:
+        _sync_api_key(_b, _ms)
+    except Exception as e:      # noqa: silent-ok — 同步失败绝不能挡住保存本身
+        LOG.warning("保存时 Key 同步失败（忽略）：%s", e)
     saved = {"model_name": MODEL_NAME,
-             "brain": brain if brain else dict(CONTROL.get("brain", {})),
+             "brain": _b,
              # 同样只存纯人设（原因见 /api/tools_toggle）
              "role": strip_search_rules(CONTROL.get("role") or SYSTEM_PROMPT),
              "capabilities": CAP, "behavior": BEH,
-             "models": (merged if merged else existing),
+             "models": _ms,
              "dsh": CONTROL.get("dsh", {})}
     json.dump(saved, open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "xiaojiao_control.json"), "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
@@ -6448,7 +9587,19 @@ def _sse(content):
 # ================== Web 界面（商标：小焦） ==================
 HTML = r"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>小焦 · XiaoJiao</title><style>
+<title>小焦 · XiaoJiao</title>
+<!-- ================= 数学公式（KaTeX）=================
+  【为什么是 KaTeX 而不是 MathJax】KaTeX 是同步渲染、没有"先显示源码再闪成公式"的过程，
+  体积也小一半；小焦的回答是**边流式边渲染**的，异步排版库会造成公式反复重排。
+  【为什么用 CDN 而不是把字体一起塞进仓库】KaTeX 的 CSS 之外还有 60 多个字体文件（约 1MB），
+  打进仓库会让"clone 即用"变成一个几 MB 的下载。CDN 拿不到时的行为是**如实降级**：
+  公式原样显示 LaTeX 源码（即现在的表现），不会报错、不会白屏。
+  【为什么 defer】不阻塞首屏；页面加载完再补渲染一遍，避免"脚本比消息晚到"那一小段窗口。 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+        onload="window._katexReady=true;try{document.querySelectorAll('#feed .b').forEach(mathify)}catch(e){}"></script>
+<style>
   *{margin:0;padding:0;box-sizing:border-box}
   body{font-family:'Segoe UI',system-ui,sans-serif;background:#0e1116;color:#e8ebf3;height:100vh;display:flex;flex-direction:column;overflow:hidden}
   *{scrollbar-color:#2a3140 #11141c}
@@ -6516,10 +9667,38 @@ HTML = r"""<!DOCTYPE html>
   .b pre.code::-webkit-scrollbar{height:6px;width:6px}
   .b pre.code::-webkit-scrollbar-thumb{background:#30363d;border-radius:4px}
   .b pre.code::-webkit-scrollbar-track{background:transparent}
-  .b pre.code code{font-family:Consolas,'Courier New',monospace;font-size:13px;line-height:1.7;white-space:pre;color:#c9d1d9;background:none;padding:0;border-radius:0;border:none;box-shadow:none;text-shadow:none}
+  .b pre.code code{font-family:Consolas,'Courier New',monospace;font-size:13px;line-height:1.7;white-space:pre;color:#c9d1d9;background:none;padding:0;margin:0;border-radius:0;border:none;box-shadow:none;text-shadow:none}
   .b pre.code,.b pre.code *,.b table,.b table *{text-shadow:none;box-shadow:none}
-  /* 行内 code（正文里的小代码）才需要浅底 */
-  .b code{background:#242b39;padding:1px 6px;border-radius:4px;font-family:Consolas,monospace;font-size:13px;color:#e6edf3}
+  /* ================= 行内 code（正文里的小代码）：对齐 GitHub 的观感 =================
+     【用户实测的缺陷】回复里 `image_recognition` 这种行内代码"带边框、样式奇怪"，
+     不是标准的"灰底等宽字"。原来那条规则是
+       `.b code{background:#242b39;padding:1px 6px;border-radius:4px;font-size:13px}`
+     四个毛病，每个都能单独让它看起来不对：
+
+     ① **字号写死 13px**：气泡正文是 15px，用户在设置里调大字号时正文会跟着变大、
+        代码却还是 13px —— 两种字号并排，代码那块像贴上去的补丁。
+        改成 `.85em`：**跟着正文走**，正文多大它就按比例多大。
+     ② **上下内边距只有 1px**：灰底的上下边几乎贴住字形，底框被压成又扁又紧的一条，
+        看起来就像"描了个边"（用户说的"带边框"多半就是这个观感）。
+        改成 `.2em .4em`（GitHub 的取值）：灰底比字形大一圈，才叫"底色"而不是"框"。
+     ③ **不透明纯灰 #242b39**：底是 #151a24 的近黑气泡，实心灰会浮成一块方块。
+        改成半透明灰 `rgba(110,118,129,.35)`：叠在气泡底色上，观感是"这几个字被标了一下"。
+     ④ **没有显式 border 归零**：只要哪天有人给 `code` 加了边框，行内代码就会和"代码块"
+        的观感混起来，用户第一反应是"这块是不是能复制" —— 显式写 `border:none` 把它钉死。
+
+     另外两条：
+       · `border-radius` 4px → 6px（GitHub 取值，圆角太小仍显生硬）。
+       · `line-height:inherit`：行内元素设 line-height 会把含代码那行的行高拉矮，
+         一列文字里突然有一行矮一截，非常显眼。继承父级才对齐。
+       · 选择器就用 `.b code`：代码块里的 code 由上面那条 `.b pre.code code` 兜住 ——
+         它的优先级 (0,1,2) 比 `.b code` (0,1,1) 高，且把背景/内边距/边框/圆角/字号全部归零，
+         所以"改行内样式顺手把代码块也改花"这件事不会发生。
+         **不要用 `.b :not(pre) > code`**（我第一版就是这么写的，实测整条规则一条都没生效）：
+         `>` 要求 code 的**父元素**是 `.b` 的后代，而正文里的 code 父元素**就是 `.b` 本身** ——
+         自己不是自己的后代，选择器全灭，样式悄悄退回浏览器默认（等宽、无底、无圆角）。 */
+  .b code{background:rgba(110,118,129,.35);border:none;border-radius:6px;
+    padding:.2em .4em;margin:0 .1em;font-family:Consolas,'Courier New',ui-monospace,monospace;
+    font-size:.85em;line-height:inherit;color:#e6edf3;white-space:break-spaces;vertical-align:baseline}
   .codebox{border:none;border-radius:10px;margin:12px 0;overflow:hidden;background:#0d1117;box-shadow:none}
   .codehead{display:flex;align-items:center;gap:8px;background:#0d1117;padding:10px 12px 0}
   .lang{padding:2px 8px;font-size:11px;font-weight:600;color:#6e7681;text-transform:uppercase;letter-spacing:.5px;background:transparent}
@@ -6922,8 +10101,79 @@ HTML = r"""<!DOCTYPE html>
 
 <script>
 const feed=document.getElementById('feed'),inp=document.getElementById('inp');
+// ---- Bug 5：本标签页的"生成状态"（全局，因为切会话时要能把它整个收掉）----
+// active：正在生成；ctrl：当前这轮的 AbortController（切会话/点停止要真的断流）；
+// sid：这一轮提问落在哪个会话（切回来时用它判断"这条是不是我这轮在跑"）；
+// seq：轮次序号 —— 收尾时用它确认"我清理的还是我自己那一轮"，避免晚到的旧流把新一轮的标志清掉。
+const GEN={active:false,ctrl:null,sid:null,seq:0};
+// 切会话/新建会话/离开页面时，把**旧的那一轮**干净地收掉。
+// 为什么必须主动 abort：只"不再读流"的话，服务端那一侧还在继续生成、继续往会话里写 ——
+// 于是切走再切回来，看到的还是那一轮的内容（用户以为卡住了）。断开连接，服务端才会走
+// "客户端断开"分支：注销生成状态 + 把已生成的部分落盘。
+//
+// ---- 问题 2：**必须等后端确认这一轮真结束了再往下走** ----
+// 真实缺陷（用户实测：回答完切走再切回，有时卡在"正在回答…"）：
+// abort() 只是"我这边不读了"，服务端什么时候发现断连、什么时候注销标记**没有硬保证**。
+// 于是出现竞态：赶上了 → 一切正常；没赶上 → 后端还认为在生成，
+// 切回来时占位符被保留、界面就一直转圈（这就是"时好时坏"）。
+// 修法两步，缺一不可：
+//   ① 等后端把标记撤掉（最多 3 秒，每 150ms 问一次"这个会话还在生成吗"）；
+//   ② 3 秒还没撤 → 调 /api/chat/abandon **强制撤**（用户要求的口径："3 秒没数据就认为生成已死"）。
+async function stopGeneration(){
+  const sid=GEN.sid;
+  try{if(GEN.ctrl)GEN.ctrl.abort();}catch(e){}
+  GEN.active=false;GEN.ctrl=null;
+  try{
+    document.querySelectorAll('#feed .think').forEach(function(e){e.remove();});
+    document.querySelectorAll('#feed .icon-btn').forEach(function(e){
+      if((''+e.textContent).indexOf('停止')>=0)e.remove();});
+  }catch(e){}
+  if(!sid)return;                       // 没记下会话 id（还没开跑）→ 没有要等的
+  const t0=Date.now();
+  for(;;){
+    try{
+      const d=await (await fetch('/api/session/'+sid)).json();
+      if(!d.generating)return;          // 后端确认这一轮结束了 → 可以安全渲染
+    }catch(e){}
+    if(Date.now()-t0>3000){             // 3 秒还没结束 → 按"生成已死"处理，强制清标志
+      try{await fetch('/api/chat/abandon',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({session_id:sid})});}catch(e){}
+      return;
+    }
+    await new Promise(function(r){setTimeout(r,150);});
+  }
+}
 const S=document.getElementById('settings');
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+// ================= 数学公式渲染（KaTeX）=================
+// 【为什么不改 renderMd、而是"渲染完再扫一遍"】
+//   renderMd 是**分块**处理的（先切空行、再按标题/引用/表格分派）。公式里会出现
+//   `*` `_` `\` 这些和 Markdown 抢语义的字符（`$a_1 * b$` 里的 `*` 会被当成强调，
+//   `$x_i$` 里的下划线会被当成斜体），在分块阶段处理公式要同时改三处解析器、且容易互相打架。
+//   现在这一步只做一件事：**在已成型的 DOM 上按文本节点找公式**。
+//   代价是多一趟 DOM 扫描（只在文本里真的有 `$` 时才扫），换来的是渲染链路一行没动。
+// 【为什么要跳过 pre/code】代码块里的 `$` 是**代码**（`echo $PATH`、`$x = 1`），不是公式。
+//   auto-render 的 ignoredTags 就是干这个的 —— 不跳过的话，一段 shell 代码会被吃成公式。
+// 【为什么 throwOnError 给 false】模型偶尔会写出不完整的 LaTeX。宁可把那一小段显示成
+//   红色原文（用户看得出"这里公式错了"），也不能让一个公式的解析错误**炸掉整条消息**。
+function mathify(el){
+  try{
+    if(!el||!window.renderMathInElement)return;      // KaTeX 没加载上 → 如实留着原文
+    if(!el.textContent||el.textContent.indexOf('$')<0)return;   // 没有 $ 就没必要扫
+    window.renderMathInElement(el,{
+      delimiters:[
+        {left:'$$',right:'$$',display:true},
+        {left:'\\[',right:'\\]',display:true},
+        {left:'\\(',right:'\\)',display:false},
+        {left:'$',right:'$',display:false}
+      ],
+      ignoredTags:['script','noscript','style','textarea','pre','code','option'],
+      ignoredClasses:['codebox'],
+      throwOnError:false,
+      errorColor:'#ff7b72'
+    });
+  }catch(e){}      // 公式渲染失败绝不能连累消息本身
+}
 function inline(t){t=t.replace(/\*\*([^\n*]+)\*\*/g,'<strong>$1</strong>')
   .replace(/(^|\n)#{1,6}\s+([^\n]+)/g,'<h3>$2</h3>')
   .replace(/`([^`\n]+)`/g,'<code>$1</code>')
@@ -7048,7 +10298,12 @@ async function resumeChat(){try{const p=await (await fetch('/api/chat/pending'))
   if(!p.pending){return;}
   const m=document.createElement('div');m.className='m bot';m.innerHTML='<div class="b"><span class="spin"></span> 正在回答（可先干别的，恢复中）…</div>';feed.appendChild(m);feed.scrollTop=feed.scrollHeight;
   const iv=setInterval(async()=>{try{const u=await (await fetch('/api/chat/pending')).json();
-    if(!u.pending){clearInterval(iv);const b=m.querySelector('.b');b.innerHTML=u.content?renderMd(u.content):'（回答完成）';feed.scrollTop=feed.scrollHeight;}}catch(e){}},2500);
+    if(!u.pending){clearInterval(iv);GEN.active=false;const b=m.querySelector('.b');
+      // 问题 2：收尾时也**不许把占位符当内容渲染**（那就是"卡在正在回答"的观感来源）
+      const txt=(''+(u.content||''));
+      b.innerHTML=(txt&&txt.indexOf('__pending__')<0)?renderMd(txt):'⏹ 这条回答中断了（没写完）—— 想接着要，直接重说一次就行';
+      mathify(b);
+      feed.scrollTop=feed.scrollHeight;}}catch(e){}},2500);
   }catch(e){}}
 
 
@@ -7235,9 +10490,24 @@ function renderBlocks(seg){
     const line=(b||'').trim();
     // --- / *** / ___ 分割线
     if(/^([-*_])\1{2,}\s*$/.test(line)){html+='<hr style="border:none;border-top:1px solid #2a3140;margin:12px 0">';return;}
-    // #/#/### 标题
-    const hm=b.match(/^(#{1,3})\s+(.+)/);
-    if(hm){html+='<div class="mdh">'+esc(hm[2])+'</div>';return;}
+    // #/##/### 标题
+    // 【真实 bug（用户实测："标题结构全在，但内容全空"）—— 根因就在这里】
+    //   原来的写法是 `const hm=b.match(/^(#{1,3})\s+(.+)/)` 然后**整块 return**：
+    //   `.+` 不跨行，所以它只匹配到标题那一行；而 `b` 是**整块**（空行之间的一切）——
+    //   于是"标题 + 紧随其后的正文"被整块当成标题，**后面的内容全被丢掉**。
+    //   实测对比（`logs/_dbg_iso.py`）：
+    //     "## 已知条件\n- 红球：3 个"        → 可见只有 "已知条件"（内容消失）
+    //     "## 已知条件\n\n- 红球：3 个"      → 可见 "已知条件 | · 红球：3 个 | …"（正常）
+    //   模型写 Markdown 时**经常不空行**（"### 第一步\n从 5 个球中任取 2 个："），
+    //   所以这个 bug 在真实回答里高频出现，表现就是"标题都在、下面全空"。
+    //   修法：标题只取**第一行**，**剩下的行继续按块渲染**（标题下的内容一个字都不能丢）。
+    const hm=b.match(/^(#{1,3})[ \t]+([^\n]*)(?:\n([\s\S]*))?$/);
+    if(hm){
+      html+='<div class="mdh">'+esc((hm[2]||'').trim())+'</div>';
+      const rest=(hm[3]||'').trim();
+      if(rest){html+='<br>'+renderBlocks(rest);}   // ← 这一行就是修复本体
+      return;
+    }
     // > 引用块(多行)
     const qm=b.match(/^((?:\s*>.*\n?)+)/);
     if(qm){
@@ -7257,7 +10527,16 @@ function add(role,text,src){const w=document.querySelector('#feed .welcome');if(
  if(role==='bot'&&text.indexOf('[music]')>=0){const mu=text.match(/\[music\]([^\[\]]+)\[\/music\]/);if(mu){vm+='<audio src="'+esc(mu[1])+'" controls style="width:100%;margin:4px 0"></audio>';text=text.replace(mu[0],'');}}
  const _html=(role==='bot'?renderMd(text):esc(text));
  m.innerHTML='<div class="b'+(_html.indexOf('<table')>=0?' wide':'')+'">'+_html+'</div>'+vm;
- if(role==='bot'&&((''+text).indexOf('__pending__')>=0||text==='⏳')){m.innerHTML='<div class="b"><span class="spin"></span> 正在回答…</div>';feed.appendChild(m);return;}
+ mathify(m);      // 数学公式：在**已成型的 DOM** 上扫一遍（跳过 pre/code），详见 mathify 的注释
+ // ---- Bug 5：占位符不再无条件渲染成"正在回答…" ----
+ // 真实缺陷（用户实测）：回答完切走再切回来，界面卡在"正在回答…"。
+ // 原来只要消息里带 `__pending__` 就画一个转圈 —— 可那个占位符**可能永远不会被回填**
+ // （切会话/断流/重启都会留下它），于是这个转圈能转到天荒地老，用户以为小焦卡死了。
+ // 现在：只有**本标签页真的在生成**时才画转圈；否则如实说"中断了"。
+ if(role==='bot'&&((''+text).indexOf('__pending__')>=0||text==='⏳')){
+   m.innerHTML='<div class="b">'+(GEN.active?'<span class="spin"></span> 正在回答…'
+     :'⏹ 这条回答中断了（没写完）—— 想接着要，直接重说一次就行')+'</div>';
+   feed.appendChild(m);return;}
    if(role==='bot'){const row=document.createElement('div');row.className='msgbot';
    row.innerHTML='<button onclick="copyMsg(this)">⧉ 复制</button>';m.appendChild(row);}
  feed.appendChild(m);
@@ -7268,6 +10547,14 @@ function add(role,text,src){const w=document.querySelector('#feed .welcome');if(
  feed.scrollTop=feed.scrollHeight;}
 async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
  add('user',t);
+ // ---- Bug 5：全局"本标签页正在生成"状态 + 可中断的请求 ----
+ // 为什么要全局状态：切会话/新建会话时要能把**旧的那一轮**干净地收掉
+ // （关连接、清标志、摘掉还在闪的提示），否则旧流会继续往已经不在的 DOM 上写字。
+ // 为什么用 AbortController：`fetch` 的流只有主动 abort 才会真的断；
+ // 只是"不再读它"，服务端那一边还会继续生成、继续写会话。
+ const myGen=++GEN.seq;
+ GEN.active=true;GEN.sid=null;
+ try{GEN.ctrl=new AbortController();}catch(e){GEN.ctrl=null;}
  // 会动的"思考中"提示
  const th=document.createElement('div');th.className='think';th.innerHTML='<span class="spin"></span><span class="stag">正在理解你的问题…</span>';feed.appendChild(th);feed.scrollTop=feed.scrollHeight;
  const stages=['正在理解你的问题…','🌐 正在联网搜索…','💾 正在回忆记忆…','🧠 大脑正在思考…','✍️ 正在组织回答…'];let si=0;
@@ -7275,14 +10562,28 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
  // 流式接收：一个气泡、边到边追加 —— 长文也是"一次连续输出"，用户看不到分段痕迹
  let bubble=null,body=null,buf='',meta=null;
  const stopBtn=document.createElement('button');stopBtn.className='icon-btn';stopBtn.textContent='⏹ 停止';
- stopBtn.onclick=()=>{try{fetch('/api/chat/stop',{method:'POST'});}catch(e){} stopBtn.remove();};
- const ensureBubble=()=>{if(bubble)return;clearInterval(timer);if(th.parentNode)th.remove();
+ stopBtn.onclick=()=>{try{fetch('/api/chat/stop',{method:'POST'});}catch(e){}
+   try{GEN.ctrl&&GEN.ctrl.abort();}catch(e){}          // 停 = 真的停：连流一起断
+   stopBtn.remove();};
+ const ensureBubble=()=>{if(bubble)return;if(th.parentNode)th.remove();
    bubble=document.createElement('div');bubble.className='m bot';bubble.innerHTML='<div class="b"></div>';
-   body=bubble.querySelector('.b');feed.appendChild(bubble);feed.appendChild(stopBtn);};
+   body=bubble.querySelector('.b');feed.appendChild(bubble);};
+ // **停止按钮的生命周期只由 cleanup() 管**。
+ // 真实缺陷（用户实测：输出完了"停止"还挂着，非要刷新才消失）：收尾时先 stopBtn.remove()，
+ // 紧接着又调了一次 ensureBubble()，而它里面原本也 appendChild(stopBtn) —— 刚摘掉又被挂回去，
+ // 此后没人再摘它；"空回答"那条分支更是直接 return，连 remove 都没走到。
+ // 现在：finally 里一定调 cleanup()，无论正常结束、报错还是提前 return。
+ const cleanup=()=>{try{clearInterval(timer);}catch(e){}
+   if(th.parentNode)th.remove();
+   if(stopBtn.parentNode)stopBtn.remove();
+   if(myGen===GEN.seq){GEN.active=false;GEN.ctrl=null;}};
+ const appendText=(s)=>{ensureBubble();buf+=s;body.textContent=buf;feed.scrollTop=feed.scrollHeight;};
+ feed.appendChild(stopBtn);feed.scrollTop=feed.scrollHeight;
  try{
-  const r=await fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:t})});
+  const r=await fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({message:t}),signal:(GEN.ctrl?GEN.ctrl.signal:undefined)});
   if(!r.ok||!r.body){throw new Error('HTTP '+r.status);}
-  const rd=r.body.getReader(),dec=new TextDecoder();let acc='';
+  const rd=r.body.getReader(),dec=new TextDecoder();let acc='',ended=false;
   for(;;){const s=await rd.read();if(s.done)break;
    acc+=dec.decode(s.value,{stream:true});
    let i;
@@ -7290,15 +10591,33 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
     const rawline=acc.slice(0,i);acc=acc.slice(i+2);
     const line=rawline.replace(/^data:\s*/,'');
     if(!line)continue;
+    // ---- Bug 4：显式结束哨兵 ----
+    // 收到它就**立刻**收尾：摘掉"停止"按钮、对齐正文、断开读流 ——
+    // 不再等服务端把连接关掉（中间隔了反向代理/浏览器缓冲时，那个时机是不确定的）。
+    if(line.trim()==='[DONE]'){ended=true;break;}
     let d;try{d=JSON.parse(line);}catch(e){continue;}
-    if(d.type==='chunk'){ensureBubble();buf+=d.text;body.textContent=buf;feed.scrollTop=feed.scrollHeight;}
+    if(d.type==='delta'||d.type==='chunk'){appendText(d.text||'');}   // 后端边生成边推的小片，收到就渲染
+    // 问题 2：一开流就记下"这一轮落在哪个会话" —— 切走时要靠它去等这一轮结束
+    else if(d.type==='session'){if(d.session_id)GEN.sid=d.session_id;}
     else if(d.type==='progress'){const s=th.querySelector('.stag');if(s)s.textContent='⏳ 正在处理…';}
-    else if(d.type==='meta'){meta=d;}
-    else if(d.type==='error'){ensureBubble();buf+=(buf?'\n\n':'')+'⚠️ '+d.error;body.textContent=buf;}
-    else if(d.type==='done'){meta=meta||d;if(d.answer&&!buf){buf=d.answer;}}
+    else if(d.type==='meta'){meta=d;if(d.session_id){GEN.sid=d.session_id;}}
+    else if(d.type==='error'){appendText((buf?'\n\n':'')+'⚠️ '+d.error);}
+    // done 里的 answer 是**权威全文**：流式过程中为了接缝去重可能少显示几个字，
+    // 结束时用权威全文对齐一次，保证"屏幕上看到的"和"存下来的"完全一致。
+    else if(d.type==='done'){meta=meta||d;if(d.answer){buf=d.answer;if(body)body.textContent=buf;}}
    }
+   if(ended)break;
   }
-  clearInterval(timer);if(th.parentNode)th.remove();stopBtn.remove();
+  // 主动放掉读流（不依赖 GC）；这里失败不影响任何东西
+  try{rd.cancel();}catch(e){}
+  }catch(e){
+   // 用户主动中断（切会话/点停止）不算"出错"，如实说明就行
+   if(e&&(e.name==='AbortError')){if(buf&&body){body.textContent=buf;}
+     else{add('bot','⏹ 已中断这一轮回答。');}}
+   else if(buf&&body){body.textContent=buf;}else{add('bot','⚠️ 出错了：'+e.message);}
+  }finally{
+   cleanup();     // 正常结束 / 报错 / 提前 return —— 停止按钮和"思考中"一定被摘掉
+  }
   if(!buf){add('bot','⚠️ 大脑没有应答。请确认模型配置正确、端口可达。');loadSessions();return;}
   // **真实缺陷（用户实测：看不到工具轨迹 / 回答不对劲）**：
   // 普通回答（不走续写）根本不会推 chunk 事件 —— 正文只在最后的 done 里。而气泡是在
@@ -7307,7 +10626,8 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
   ensureBubble();
   // 收尾：渲染 Markdown（表格加宽）+ 工具轨迹 + 会话/日志
   if(body){const full=renderMd(buf);if(full.indexOf('<table')>=0){body.classList.add('wide');bubble.classList.add('widem');}
-    body.innerHTML=full;}
+    body.innerHTML=full;
+    mathify(body);}      // 流式收尾这一趟也必须扫：公式经常是最后一个 chunk 才闭合的
   if(meta&&meta.tool_trace&&meta.tool_trace.length){
     try{localStorage.setItem('xj_trace',JSON.stringify(meta.tool_trace.slice(0,10)));}catch(e){}
     const tt=document.createElement('div');tt.className='tooltrace';
@@ -7316,9 +10636,6 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
   if(meta)setToolsOn(meta.tools_on);
   if(meta&&meta.needs_confirm){const m=document.createElement('div');m.className='m bot';
     m.innerHTML='<button class="icon-btn" onclick="confirmAction()">✅ 确认执行</button>';feed.appendChild(m);}
- }
- catch(e){clearInterval(timer);if(th.parentNode)th.remove();stopBtn.remove();
-   if(buf&&body){body.textContent=buf;}else{add('bot','⚠️ 出错了：'+e.message);}}
  loadSessions();
  feed.scrollTop=feed.scrollHeight;}
 // 打字机式浮现回答
@@ -7333,6 +10650,7 @@ function typeAnswer(text,src,logId,note){
       const full=renderMd(text);
       if(full.indexOf('<table')>=0){bm.classList.add('wide');m.classList.add('widem');}
       bm.innerHTML=full;
+      mathify(bm);      // 打字机路径收尾时同样扫一遍公式
       // 注：检索引用校验的徽标已按用户要求撤掉（正常聊天里太吵，见过"这条回答基本没用到
       // 检索资料"的打扰提示）。核对数据仍在 /api/chat 的 grounding 字段里，压测与
       // 「查看来源」照常使用，所以 note 参数保留但不再渲染。
@@ -7385,8 +10703,24 @@ async function delSession(ev,id){
     if(d.was_current){clearFeed();await loadHistory();}     // 删的是当前会话 → 界面跟着切过去
   }catch(e){toast('⚠️ 删除失败：'+e);}
 }
-async function newChat(){await fetch('/api/session/new',{method:'POST'});clearFeed();loadSessions();}
-async function openSession(id){const r=await fetch('/api/session/'+id);const d=await r.json();clearFeed();(d.messages||[]).forEach(h=>add(h.role==='用户'?'user':'bot',h.content));loadSessions();}
+async function newChat(){await stopGeneration();await fetch('/api/session/new',{method:'POST'});clearFeed();loadSessions();}
+// ---- Bug 5 + 问题 2：切会话 ----
+// 真实缺陷（用户实测）：回答完了，切走再切回来，界面卡在"正在回答…"，看不到实际内容。
+// 这里做四件事，缺一件都会复发：
+//   ① **先 await 把旧的那一轮收干净**（断流 + 等后端确认标记已撤 + 清"生成中"标志 + 摘掉转圈）——
+//      "等确认"这一步是问题 2 补的：不等就渲染，就是在跟服务端的注销时机赛跑（时好时坏）；
+//   ② 切回来时**从会话历史全量渲染**（d.messages 一条不落），历史是唯一权威；
+//   ③ 后端已经保证"没人在跑的占位符"会被标成"中断了"（见 /api/session/<sid>）；
+//   ④ 后端说这个会话**真的**还在生成（心跳是新的）→ 才显示"正在回答"并接着轮询。
+async function openSession(id){
+  await stopGeneration();
+  const r=await fetch('/api/session/'+id);const d=await r.json();
+  clearFeed();
+  (d.messages||[]).forEach(h=>add(h.role==='用户'?'user':'bot',h.content));
+  // 这个会话**真的**还在跑（后端心跳是新的）→ 让用户看到"正在回答"，并接着轮询
+  if(d.generating){GEN.active=true;GEN.sid=id;resumeChat();}
+  loadSessions();
+}
 function clearFeed(){document.getElementById('feed').innerHTML='';renderWelcome();}
 // 空状态：居中的欢迎卡 + 可点的示例（比一行灰字好看，也让新用户知道能干什么）
 function renderWelcome(){
