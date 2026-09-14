@@ -5742,15 +5742,13 @@ def _tool_inventory_answer():
     return "\n".join(lines)
 
 
-
-    """用户是不是在要求"去收集某类信息"（动作词 + 信息名词同时出现）。
-
-    只有两者同时命中才认（理由见 `_INFO_COLLECT_VERBS` 上面的说明）。
-    """
-    s = str(text or "")
-    if not s:
-        return False
-    return any(v in s for v in _INFO_COLLECT_VERBS) and any(n in s for n in _INFO_NOUNS)
+# ⚠️ 这里原本还挂着一份 `_asks_info_collect` 的**孤儿函数体**（没有 `def` 行，直接就是 docstring +
+#    `s = str(text or "")`）。它是"插入新函数时把 `def` 行连带吃掉"那次事故的残留：
+#    真正的函数早已在上方恢复（见那份 docstring 里记的经过），而这一份一直没人删 ——
+#    于是 `text` 成了未定义名，ruff F821 把它抓了出来。
+#    为什么 `ast.parse` 抓不到：模块级的裸字符串字面量是**合法语句**，语法检查必过；
+#    只有真的执行到 `s = str(text or "")` 那一行才会 NameError。
+#    结论：**"定义了但名字丢了"这类损坏只能靠 ruff/静态检查发现，别指望 ast.parse。**
 # 闲聊只认**明确的寒暄/身份/道谢**这类；认不出来的一律走 chat 兜底（见 `_detect_intent`）。
 # 这条判据现在只用来决定"要不要加『闲聊别调工具』那句话"，不再决定给几个工具。
 _CHAT_HINTS = ("你好", "您好", "hi", "hello", "嗨", "哈喽", "在吗", "在么", "早上好", "中午好",
@@ -6157,7 +6155,7 @@ def _fit_context(system_text, history, current_text, max_ctx=None, min_rounds=2,
     规则（硬性）：**system 与本轮问题永远保留**；历史从最老的一端开始丢，
     直到总 token ≤ max_ctx；至少保留 min_history_rounds 轮（丢到下限为止）。
     `reserve`：本轮**除 messages 之外的固定开销**（最关键的是 function-calling 的 tools
-    schema —— 63 个工具的 JSON 有几千 token！上一版漏算它，所以裁剪后**仍然超限**）。
+    schema —— 77 个工具的 JSON 有几千 token！上一版漏算它，所以裁剪后**仍然超限**）。
     返回 (保留的历史列表, 说明文本)。
 
     【为什么这么设计】单次请求的 token 是**物理上限**（本地 8G 显存，扩不了 ctx）。
@@ -8226,7 +8224,10 @@ def _clean_stale_pending(sess):
             return 0
         _inflight_reap()                  # 顺手把死掉的在册项清掉（幂等，代价可忽略）
         if _inflight_has(sess.get("id")):
-            return 0                      # 真有人在生成（心跳是新的）→ 不动它        n = 0
+            return 0                      # 真有人在生成（心跳是新的）→ 不动它
+        n = 0                             # ⚠️ 这行原来被"吃"进了上一行的注释尾巴里
+                                          #    （`...→ 不动它        n = 0`），于是 n 从未定义，
+                                          #    下面 `n += 1` 必抛 NameError。ruff F821 抓到。
         for m in sess.get("messages", []):
             if m.get("role") == "小焦" and "__pending__" in str(m.get("content", "")):
                 m["content"] = _INTERRUPTED_NOTE

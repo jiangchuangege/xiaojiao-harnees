@@ -405,9 +405,9 @@ flowchart LR
 | [06-memory-retrieval.md](six-infinity-diagrams/06-memory-retrieval.md) | 记忆检索流程图 |
 | [07-tool-on-demand.md](six-infinity-diagrams/07-tool-on-demand.md) | 工具按需加载流程图 |
 
-> ⚠️ **维护提示**：`python tools/check_mermaid.py --all` 扫的是仓库根 `*.md`、`docs/*.md`（**不递归**）
-> 和 `tests/**/*.md`，所以它**扫不到 `docs/six-infinity-diagrams/`**（那是 `docs/` 的子目录）。
-> 改动这七个文件后要显式传路径检查：
+> **维护提示**：`python tools/check_mermaid.py --all` 用 `glob('docs/**/*.md', recursive=True)` **递归**扫 `docs/`，
+> 所以 `docs/six-infinity-diagrams/` 下的图**会被扫到**（本仓库当前共 134 个图、0 问题）。
+> 需要单独复核这七个文件时可以显式传路径：
 >
 > ```powershell
 > python tools/check_mermaid.py docs/six-infinity-diagrams/*.md

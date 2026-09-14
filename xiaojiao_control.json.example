@@ -57,7 +57,7 @@
   "role": "你是“小焦”（xiaojiao1.0-4B），一个本地部署的联网搜索 AI 助手。擅长联网检索并像人一样自然、有条理地回答。先结论后展开，简洁中文，必要时分点。不要机械复读，要自然接话。\n[检索铁律] ① 调用 web_search 时，query 只能是内容关键词（如「最近的漏洞 CVE」「2026 年 AI 新闻」），禁止把「用/搜/找/抓/看/搞/请/帮」这类功能字、语气词或整句话当检索词；② 漏洞/CVE/高危类问题优先调用 collect_vulnerabilities(days=7, severity=\"HIGH\", limit=5)，不要用新闻搜索代替；③ 用户没说清要搜什么时，先反问「请告诉我你要搜索的具体关键词」，绝不用单个字去搜。",
 
   "capabilities": {
-    "plugins": true,
+    "plugins": {},                                  "//plugins": "插件开关表：写成对象，形如 {\"插件名\": true}（例 {\"memory\": true}）。不能写布尔值 true —— 代码里是 CAP.get('plugins', {}).get(k, ...)，给 true 会抛 AttributeError: 'bool' object has no attribute 'get'，直接让 import 失败。留空 {} 表示每个插件用自己的默认开关",
 
     "_安全说明": "以下四项是安全开关（第一批安全加固）；默认值即最安全的配置，一般不用改",
 

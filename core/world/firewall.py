@@ -2166,5 +2166,5 @@ def _looks_like_text(s):
 
 
 __all__ = ["CLASSES", "CLASS_CN", "DEFAULT_CFG", "HARD_CLASSES", "PollutionFirewall",
-           "SOFT_CLASSES「, 」ScreenResult「, 」check_conflict「, 」content_fingerprint",
+           "SOFT_CLASSES", "ScreenResult", "check_conflict", "content_fingerprint",
            "normalize_text", "split_segments", "strip_spans"]

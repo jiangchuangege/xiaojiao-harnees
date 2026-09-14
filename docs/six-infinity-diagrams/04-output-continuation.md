@@ -1,99 +1,209 @@
-# 输出续写合并流程图
+# 图 4 · 输出无限：多次请求 + 无缝合并
 
-> 「输出无限」的全部机关都在这一张图里：载体把一份长文拆成多次请求，再把每次的产出**无缝**接起来。
-> 对应实现：`core/continuation.py` 的 `generate_unlimited`。
+| 项 | 内容 |
+| --- | --- |
+| 适用版本 | v1.0 |
+| 最后更新 | 2026-09-14 |
+| 维护者 | 小焦项目 |
+| 文档状态 | 稳定 |
+
+**摘要**：载体把一份长文拆成多次请求，再把每次的产出无缝接成一段连续输出；
+这张图给出整条控制流、停止条件的全集，以及三道合并工序。
+
+配色与术语约定见 [01-overview.md](01-overview.md) 的「图册约定」。
+
+## 1. 图 4 · 续写与合并的控制流
 
 ```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
-    T["任务：写一篇 3000 字的产品介绍"] --> P1["parse_target_chars<br/>解析目标字数：3000 字 / 5 万字 / 两万字 / 20000 words"]
-    P1 --> P2{"needs_continuation<br/>用户明确要长文吗？<br/>默认门槛 ≥ 800 字"}
-    P2 -->|否| SHORT["短内容不触发续写<br/>走普通单次回答，用户完全无感"]
-    P2 -->|是| KW["_keywords 抽主题关键词<br/>先剥掉数字与『写一篇/关于/字』这类指令措辞"]
+    %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+    T["用户任务<br/>写一篇 3000 字的介绍"]
+    P1["parse_target_chars 解析目标字数<br/>3000 字 / 5 万字 / 两万字 / 20000 words"]
+    P2{"needs_continuation<br/>要长文吗？默认门槛 800 字"}
+    SHORT["不触发续写<br/>走普通单次回答，用户无感"]
+    KW["_keywords 抽主题关键词<br/>先剥掉数字与写一篇这类指令措辞"]
 
-    KW --> LOOP{"主循环每一轮先看：<br/>should_stop 用户叫停了吗？"}
-    LOOP -->|叫停| STOP1["停止：用户叫停<br/>已写正文全部保留"]
-    LOOP -->|继续| POOL{"缓冲池里有已生成的段吗？"}
-
-    POOL -->|有| TAKE["取出一段<br/>item = pool.pop 0"]
-    POOL -->|没有但预取线程在跑| WAIT["等它：cond.wait<br/>绝不自己重复生成同一个段号"]
-    WAIT --> TAKE
-    POOL -->|没人在跑| CLAIM["主循环认领 inflight<br/>再串行生成一段"]
-
-    CLAIM --> GEN
-    TAKE --> MERGE
-
-    subgraph PREFETCH["🔁 唯一的生成线程（预取）—— 影子正文只有它动"]
+    subgraph LOOPG["主循环"]
         direction TB
-        PF1{"pool 满了<br/>或 inflight 已被认领？"}
-        PF1 -->|是| PF_END["本轮不生成，直接返回"]
-        PF1 -->|否| PF2["认领 inflight = n<br/>upto = shadow 或 written"]
-        PF2 --> GEN["build_prompt 装上下文<br/>第 1 次：完整任务<br/>第 N 次：任务 + 已写梗概 + 上段最后 200 字"]
-        GEN --> CALL["调模型拿一段原始输出"]
-        CALL --> DONE{"输出里有【完成】？"}
-        DONE -->|有| FIN["剥掉【完成】标记<br/>收下收尾句，标记完结"]
-        DONE -->|没有| OFF{"looks_offtopic<br/>空输出 / 重新开场 / 又短又零重合？"}
-        OFF -->|是| RETRY{"还有重试次数吗？<br/>≤ max_retries = 3"}
-        RETRY -->|有| GEN
-        RETRY -->|用完| FAIL["停止：校验连续不通过<br/>如实报出来，不编内容"]
-        OFF -->|不是| OK["这一段通过"]
-        FIN --> OK
-        OK --> SHADOW["更新影子正文<br/>shadow = written + 池里全部未取走的段<br/>下一段的锚点与去重基准才准"]
-        SHADOW --> PF3["pool.append · cond.notify_all<br/>接着把池子填到 buffer_size = 3"]
+        LOOP{"should_stop<br/>用户叫停了吗？"}
+        POOL{"缓冲池里有已生成的段吗？"}
+        TAKE["取出一段"]
+        WAIT["等预取线程<br/>cond.wait 不重复生成同一段号"]
+        CLAIM["主循环认领 inflight<br/>再串行生成一段"]
     end
 
-    PF3 --> POOL
-    GEN --> OK
+    subgraph GEN["生成一段"]
+        direction TB
+        GEN1["build_prompt 装上下文<br/>提示词开头写明本次要写第 n 段<br/>另给任务 · 已写梗概 · 上段最后 200 字"]
+        GEN2["调模型拿原始输出<br/>单次上限 max_per_chunk = 2000 token"]
+        DONE{"输出里有【完成】？"}
+        RL{"已写字数达到目标 0.85 倍？"}
+        IGN["这一次不认<br/>继续写，并在提示词里说明还没到篇幅"]
+        OFF{"looks_offtopic<br/>空输出 / 重新开场 / 又短又零重合？"}
+        RETRY{"还有重试次数吗？<br/>max_retries = 3"}
+        FAIL["停止：连续校验不通过<br/>如实报出来，不编内容"]
+        OK["这一段通过"]
+    end
 
-    MERGE["合并这一段（无缝的关键）"] --> M1["overlap_len 最长重叠<br/>上段末尾 vs 本段开头，重叠 ≥ 8 字才裁<br/>裁掉模型重抄的那一句"]
-    M1 --> M2["drop_repeated_sentences 整句去重<br/>见到的整句 ≥ 12 字存进 seen_sents，重复就丢<br/>专治弱模型的整句复读"]
-    M2 --> M3{"body 还剩下内容吗？"}
-    M3 -->|全是重复| RETRY2["计一次重试<br/>连续 max_retries × 3 次就停"]
+    subgraph MERGEG["合并这一段"]
+        direction TB
+        MERGE["合并"]
+        M1["overlap_len 最长重叠<br/>重叠 ≥ 8 字才裁，窗口 800 字"]
+        M2["drop_repeated_sentences 整句去重<br/>整句 ≥ 12 字存入 seen_sents"]
+        M3{"正文还剩下内容吗？"}
+        RETRY2["计一次重试<br/>累计到 max_retries × 3 次就停"]
+        M4["cut_at_sentence 半句回退<br/>残句存进 carry 带进下一轮"]
+        COMMIT["written += 本段<br/>on_chunk 推给前端 SSE"]
+    end
+
+    STOP["停止"]
+    RESULT["返回结果<br/>text / chunks / chars / dedup_chars<br/>retries / seams / stopped / quality"]
+    PF["预取线程把池子填到 buffer_size = 3<br/>影子正文 = 已提交 + 池内全部"]
+
+    T --> P1 --> P2
+    P2 -->|否| SHORT
+    P2 -->|是| KW
+    KW --> LOOP
+    LOOP -->|叫停| STOP
+    LOOP -->|继续| POOL
+    POOL -->|有| TAKE
+    POOL -->|没有但在预取| WAIT
+    WAIT --> TAKE
+    POOL -->|没人在跑| CLAIM
+    CLAIM --> GEN1
+    TAKE --> MERGE
+    GEN1 --> GEN2 --> DONE
+    DONE -->|有| RL
+    RL -->|没到| IGN
+    IGN --> GEN1
+    RL -->|到了| OK
+    DONE -->|没有| OFF
+    OFF -->|是| RETRY
+    RETRY -->|有| GEN1
+    RETRY -->|用完| FAIL
+    OFF -->|不是| OK
+    OK --> MERGE
+    MERGE --> M1 --> M2 --> M3
+    M3 -->|全是重复| RETRY2
     RETRY2 --> LOOP
-    M3 -->|有| M4["cut_at_sentence 断句<br/>末尾半句回退到上一个句号<br/>残句存进 carry 带进下一轮"]
-    M4 --> COMMIT["written += 本段<br/>on_chunk 把这一段推给前端 SSE<br/>前端追加到同一个气泡"]
+    M3 -->|有| M4 --> COMMIT
+    COMMIT --> PF
+    PF --> LOOP
+    FAIL --> STOP
+    STOP --> RESULT
 
-    COMMIT --> S1{"模型声明【完成】？"}
-    S1 -->|是| STOP2["停止：模型声明完成"]
-    S1 -->|否| S2{"已写 + 残句 ≥ 目标字数？"}
-    S2 -->|是| STOP3["停止：达到目标长度"]
-    S2 -->|否| S3{"段号 ≥ 2000？"}
-    S3 -->|是| STOP4["停止：达到单段数上限"]
-    S3 -->|否| PF_START["起一个预取线程占住<br/>『前端正在渲染本段』这段空档"]
-    PF_START --> LOOP
-
-    STOP1 --> RESULT
-    STOP2 --> RESULT
-    STOP3 --> RESULT
-    STOP4 --> RESULT
-    FAIL --> RESULT
-    RESULT["返回 text = written + carry<br/>chunks 段号 · chars 字数 · dedup_chars 裁掉多少<br/>retries 重试次数 · seams 接缝数 · stopped 停止原因"]
-
-    classDef parse fill:#e0f2fe,stroke:#38bdf8,color:#0c4a6e;
-    classDef pf fill:#f3e8ff,stroke:#a78bfa,color:#4c1d95;
-    classDef merge fill:#ecfdf5,stroke:#34d399,color:#064e3b;
-    classDef stop fill:#fef9c3,stroke:#eab308,color:#713f12;
-    class T,P1,P2,KW parse;
-    class PF1,PF2,GEN,CALL,DONE,FIN,OFF,RETRY,OK,SHADOW,PF3,PF_END pf;
-    class MERGE,M1,M2,M3,M4,COMMIT merge;
-    class STOP1,STOP2,STOP3,STOP4,FAIL,RESULT stop;
+    style T fill:#4A90E2,color:#fff
+    style RESULT fill:#4A90E2,color:#fff
+    style GEN2 fill:#E74C3C,color:#fff
+    style FAIL fill:#E74C3C,color:#fff
+    style P2 fill:#F5A623,color:#fff
+    style DONE fill:#F5A623,color:#fff
+    style RL fill:#F5A623,color:#fff
+    style OFF fill:#F5A623,color:#fff
+    style M3 fill:#F5A623,color:#fff
+    style LOOP fill:#F5A623,color:#fff
+    style SHORT fill:#7ED321,color:#fff
+    style OK fill:#7ED321,color:#fff
+    style COMMIT fill:#7ED321,color:#fff
+    style M1 fill:#7ED321,color:#fff
+    style M2 fill:#7ED321,color:#fff
 ```
 
-**三条"不这么做就会翻车"的设计**：
+**一句话说明**：一份长文由"取段 → 生成 → 校验 → 合并 → 提交"这个循环反复产出一段，
+生成侧只有一条线程（预取线程），主循环只做合并与提交——用户看到的是一段连续文本。
 
-1. **只允许一条生成线程**。预取第 N+1 段必须知道第 N 段写了什么（要当衔接锚点，还要当去重基准）。
-   如果让预取线程和主循环同时产出，后到的那段锚点是过期的 → 接缝错位、还白烧一次模型调用。
-   第 3 步实测撞上过：段号出现 `[1,2,2]`。现在用 `inflight` 认领 + 条件变量把这件事钉死。
-2. **接缝裁剪不够，还得整句去重**。`overlap_len` 只裁得掉**接缝那一句**；4B 模型"接着写"时常见的
-   是第二、三句又把同一句话抄一遍，只裁接缝正文里照样留重复句，用户一眼就看出是拼的。
-3. **`【完成】` 必须在偏题校验之前处理**。模型说完成了就是完成了，不能让"风格校验"把它的收尾句
-   当成跑题丢掉——第 3 步单测抓到的第二只虫子。
+## 2. 代码位置索引
 
-**停止条件是五路并联**，任何时候只要命中一路就停，且**停止原因如实返回**（`stopped`）：
-用户叫停 / 模型声明【完成】/ 达到目标字数 / 单段数上限 2000 / 整体校验连续不通过。
+全部实现位于 `core/continuation.py`，宿主侧只有一层薄封装：
 
-> 实测（`logs/_step3_run.log`）：`长文续写：3 段 / 3507 字 / 去重裁掉 22 / 重试 0 /
-> 停止=达到目标长度（3000 字） / 耗时 46.5s`。
->
-> 配套阅读：[03-data-flow.md](03-data-flow.md)（它在整条链里的位置）、
-> [six-infinity.md](../six-infinity.md)（验收判据与已知局限）。
+| 节点 | 代码位置 |
+| --- | --- |
+| 入口与控制流 | `generate_unlimited`（`core/continuation.py` 第 756 行） |
+| 是否走续写 | `needs_continuation`（第 1353 行）；宿主 `_needs_continuation`（`xiaojiao_app.py` 第 2061 行）、`_generate_long`（第 2074 行） |
+| 目标字数 | `parse_target_chars`（第 120 行） |
+| 主题关键词 | `_keywords`（第 236 行） |
+| 装上下文 | `build_prompt`（第 697 行）；段号标记 `_mark`（第 709 行）；衔接锚点 `_TAIL_CTX = 200`（第 73 行） |
+| 生成与校验 | `_generate_raw`（第 812 行）、`looks_offtopic`（第 264 行）、`_gen_one`（第 988 行） |
+| 停止条件 | 用户叫停：`should_stop`；模型声明完成：`DONE_MARK`（第 72 行）+ `_DONE_MIN_RATIO = 0.85`（第 81 行）；段数上限：第 1229 行（2000 段）；参考篇幅保护：`looks_concluded`（第 691 行）、0.8 倍自然结束与 1.05 倍收口（第 1220、1226 行） |
+| 预取 | `_prefetch`（第 1005 行）；影子正文 `shadow`（第 806 行）、`inflight`（第 808 行） |
+| 合并 | `_merge`（第 1042 行）、`overlap_len`（第 145 行，`_OVERLAP_WIN = 800` / `_MIN_OVERLAP = 8`）、`drop_repeated_sentences`（第 181 行）、`drop_repeated_paragraphs`（第 202 行）、`cut_at_sentence`（第 161 行） |
+| 推流 | `on_chunk` 回调（第 1191 行）；宿主 `_on_chunk`（`xiaojiao_app.py` 第 8674 行） |
+| 收尾与定稿 | 补结尾 `CLOSING_ASK`（第 670 行）、`clean_ending`（第 652 行）、`strip_meta_ending`（第 426 行）、`balance_quotes`（第 386 行）、`unify_names`（第 564 行）、`renumber_units`（第 332 行） |
+| 返回值 | 第 1343 行的 dict：`text` / `chunks` / `chars` / `stopped` / `elapsed_s` / `dedup_chars` / `retries` / `trimmed` / `renumbered` / `quality` / `done_ignored` / `target_chars` / `seams` / `degeneration` / `ends_clean` |
+
+## 3. 停止条件的全集
+
+停止不是"目标字数一到就砍"，而是多路并联，任何时候命中一路就停，且停止原因如实写进 `stopped`：
+
+| 停止原因 | 判据位置 | 触发条件 |
+| --- | --- | --- |
+| 用户叫停 | 主循环开头 | `should_stop()` 返回 True（`/api/chat/stop` 置位 `_CONT_STOP`） |
+| 模型声明完成 | 生成段内 | 输出含 `【完成】`，且已写字数 ≥ 目标 × 0.85 |
+| 达到参考篇幅 | 主循环末尾 | 已写 + 残句 ≥ 目标 × 1.05 |
+| 内容自然结束 | 主循环末尾 | `looks_concluded` 为真且已写 ≥ 目标 × 0.8 |
+| 达到单段数上限 | 主循环末尾 | 段号 ≥ 2000 |
+| 连续校验不通过 | 生成段内 | 同一段重试 `max_retries` = 3 次仍无可用内容 |
+| 合并持续为空 | 合并分支 | 累计重试到 `max_retries` × 3 次 |
+| 连续复读收口 | 主循环 | 连续 3 段出现过复读（`_DEGEN_STREAK_MAX`） |
+| 连续跳过收口 | 主循环 | 连续 12 段都没有可用内容（`_SKIP_MAX`，防空转） |
+| 预取失败 | 预取线程 | 预取线程拿不到内容并把原因写进 `stop_reason` |
+
+模型说【完成】但篇幅不到目标 0.85 倍时，载体不认这个完成，继续让它写；只有当连续 4 次忽略之间
+几乎没长字（增量 < 目标的 5%）才认输，并在结果里标 `gave_up` 与"只写到目标篇幅的 N%"。
+
+## 4. 三道合并工序，与它们各自挡住的失败
+
+| 工序 | 挡住的失败 | 只做前一道会怎样 |
+| --- | --- | --- |
+| `overlap_len` 接缝裁剪 | 模型"接着写"时把上段末尾重抄一遍 | 只裁得掉接缝那一句，正文里的重复句仍在 |
+| `drop_repeated_sentences` 整句去重 | 第二、三句又把同一句抄一遍 | 用户一眼看出是拼的 |
+| `drop_repeated_paragraphs` 整段去重 | 段落带轻微差异（多一个空格/少一个标点）时逐句比不相等 | 成稿里残留几乎一样的整段 |
+
+配合 `cut_at_sentence` 与 `carry`，正文永远不停在半个句子上——用户实测反馈过的原话是
+"写到第八章突然就断了，像断网一样"。
+
+## 5. 为什么只允许一条生成线程
+
+预取第 N+1 段必须知道第 N 段写了什么：既要拿它当衔接锚点，也要拿它当去重基准。
+若让预取线程与主循环同时产出，后到的那一段锚点是过期的，接缝错位且白烧一次模型调用。
+
+做法是：只有一条生成线程（预取线程），它自己维护一份影子正文
+（`shadow` = 已提交正文 + 池里已生成但还没被取走的部分），一直把池子填到 `buffer_size = 3`；
+主循环只从池子里取、只做合并，从不并发生成，并用 `inflight` 认领 + `Condition` 防止两边生成同一个段号。
+第 3 步实测撞到的缺陷就是段号出现 `[1,2,2]`，修复后段号严格递增。
+
+`【完成】` 必须在偏题校验之前处理：模型说完结就是完结，不能让风格校验把它的收尾句当成跑题丢掉。
+
+## 6. 实测记录
+
+| 判据 | 实测 |
+| --- | --- |
+| 真实模型端到端 | 3 段 / 3507 字 / 去重裁掉 22 / 重试 0 / 停止=达到目标长度 / 耗时 46.5s |
+| 段号 | `[1,2,3]` 严格递增 |
+| 离线单测 | 通过 27 / 失败 0 |
+
+单次请求的输出上限 `max_per_chunk` 默认 2000 token，由 `CAP.continuation_chunk_size` 覆盖；
+`max_retries` 默认 3，由 `CAP.continuation_max_retries` 覆盖。
+
+## 7. 边界与限制
+
+| 边界 | 说明 |
+| --- | --- |
+| 单次输出上限是物理的 | 每段最多 2000 token，篇幅靠段数累加，不靠单次生成 |
+| 段号写在提示词里 | 为使续写请求可定位，`build_prompt` 在提示词开头写明"【本次要写的是第 n 段】"，正文一侧只给任务、已写梗概与上段末 200 字，并明确要求不要重抄、不要另起标题；模型仍有极小概率把段号写进正文 |
+| 【完成】不是硬判据 | 篇幅不足时会被忽略，直到"一直在长字"或"连续空转"二者之一成立 |
+| 复读无法根除 | 载体能做的是检测、截断、跳过与收口（`_DEGEN_STREAK_MAX = 3`、`_SKIP_MAX = 12`），不能保证模型不复读 |
+| 篇幅不足会如实报告 | 结果里的 `quality.gave_up` 与 `stopped` 会写明"只写到目标篇幅的 N%"，不把残篇当完稿 |
+| 段数与耗时 | 篇幅越大段数越多、耗时线性增长；段号上限 2000 是防死循环的保险 |
+
+## 8. 相关阅读
+
+- [03-data-flow.md](03-data-flow.md)：续写在整条数据流里的位置
+- [05-input-splitter.md](05-input-splitter.md)：输入侧复用同一套接缝处理
+- [six-infinity.md](../six-infinity.md)：验收判据与已知局限
+
+## 变更记录
+
+| 日期 | 版本 | 变更 |
+| --- | --- | --- |
+| 2026-09-14 | v1.0 | 重写：对齐代码 + 统一文风 |

@@ -1,67 +1,159 @@
-# 接入资产测绘数据源（IP ↔ CVE 对应表）
+# 资产测绘插件
 
-**为什么需要这一步**：NVD 只发布「CVE → 受影响软件/版本（CPE）」，**从不上报任何公网 IP**。
-所以"网络上所有含这些漏洞的 IP 地址并列表对应上"这类**资产测绘**诉求，NVD 永远答不了 ——
-得由"全网扫描数据源"来回答。小焦把这件事做成了插件 `plugins/asset_intel.py`，两个方向分开处理：
+| 项 | 值 |
+| --- | --- |
+| 适用版本 | v1.0 |
+| 最后更新 | 2026-09-14 |
+| 维护者 | 小焦项目 |
+| 文档状态 | 稳定 |
 
-| 方向 | 工具 | 需要 Key 吗 | 现在就能用吗 |
+**摘要**：接入资产测绘数据源，回答"某个 IP 命中了哪些漏洞"与"某个漏洞在哪些公网 IP 上存在"这两个方向的问题。插件文件为 `plugins/asset_intel.py`，Key 的配置方式与数据源清单见下文。
+
+## 目录
+
+1. [为什么需要单独的数据源](#1-为什么需要单独的数据源)
+2. [两个方向](#2-两个方向)
+3. [数据源状态](#3-数据源状态)
+4. [接入三步](#4-接入三步只有反查需要)
+5. [使用示例](#5-使用示例)
+6. [纪律](#6-纪律)
+7. [边界与限制](#7-边界与限制)
+8. [换用或新增数据源](#8-换用或新增数据源)
+9. [相关文档](#9-相关文档)
+
+---
+
+## 1. 为什么需要单独的数据源
+
+NVD 只发布「CVE → 受影响软件与版本（CPE）」，从不上报公网 IP。因此"全网有哪些 IP 含这些漏洞"这类资产测绘问题，NVD 本身没有答案，必须由扫描类数据源提供。本插件把这类数据源接进来，两个方向分开处理。
+
+## 2. 两个方向
+
+| 方向 | 工具 | 是否需要 Key | 是否开箱可用 |
 | --- | --- | --- | --- |
-| **给 IP → 看它命中哪些 CVE** | `asset_intel_lookup` | ❌ 不需要（Shodan InternetDB 免费接口） | ✅ 开箱即用 |
-| **给 CVE/关键词 → 查哪些 IP 受影响** | `asset_intel_search` | ✅ 需要一家数据源的 Key | 配完 Key 即用 |
+| 给 IP，查它命中哪些 CVE | `asset_intel_lookup` | 不需要（走 Shodan InternetDB 免费接口） | 是 |
+| 给 CVE 或关键词，反查受影响 IP | `asset_intel_search` | 需要一家数据源的 Key | 配置 Key 后可用 |
+| 查看数据源状态 | `asset_intel_status` | 不需要 | 是 |
 
-问小焦"**资产测绘状态**"就能打印下面这张表：
+## 3. 数据源状态
 
-| 数据源 | 状态 | 能干什么 |
+`asset_intel_status` 返回当前各数据源是否可用：
+
+| 数据源 | 状态 | 能提供什么 |
 | --- | --- | --- |
-| Shodan InternetDB | ✅ 可用（免费，无需 Key） | IP → 该地址命中的 CVE / 开放端口 / 主机名 |
-| ZoomEye | 看有没有配 Key | CVE/关键词 → 受影响 IP |
-| Shodan 搜索 | 看有没有配 Key | CVE/关键词 → 受影响 IP（`vuln:` 过滤要会员） |
-| Fofa | 看有没有配 Key | CVE/关键词 → 受影响 IP |
+| Shodan InternetDB | 可用（免费、无需 Key） | 单个 IP 命中的 CVE、开放端口、主机名 |
+| ZoomEye | 取决于是否配了 Key | CVE / 关键词 → 受影响 IP |
+| Shodan 搜索 | 取决于是否配了 Key | CVE / 关键词 → 受影响 IP（`vuln:` 过滤器通常需要会员） |
+| Fofa | 取决于是否配了 Key | CVE / 关键词 → 受影响 IP |
 
-## 三步接入（反向查询才需要）
+对 N.E.K.O. 桌面端说一句「资产测绘状态」，也会打印同一张表。
 
-1. **拿一个 Key**（任选一家，都有免费额度）：
-   - Shodan：<https://account.shodan.io/>（注册后在账号页看到 API Key）
-   - ZoomEye：<https://www.zoomeye.org/profile>
-   - Fofa：<https://fofa.info/personalData>
-2. **填进去**（两种任选）：
-   - 环境变量：`SHODAN_API_KEY` 或 `ZOOMEYE_API_KEY`，或 `FOFA_EMAIL` + `FOFA_KEY`
-   - 或写文件 `plugins/asset_intel_keys.json`（已在 `.gitignore` 里，不会进仓库）：
-     ```json
-     {"shodan": "你的Key", "zoomeye": "你的Key", "fofa_email": "you@example.com", "fofa_key": "你的Key"}
-     ```
-3. **重启小焦**，然后对它说「**资产测绘状态**」——配好的数据源会显示 ✅。
+## 4. 接入三步（只有反查需要）
 
-## 用起来长什么样
+### 4.1 获取 Key
+
+任选一家，均有免费额度：
+
+| 数据源 | 申请地址 | 需要的字段 |
+| --- | --- | --- |
+| Shodan | <https://account.shodan.io/> | API Key |
+| ZoomEye | <https://www.zoomeye.org/profile> | API Key |
+| Fofa | <https://fofa.info/personalData> | 邮箱 + API Key（两个都要） |
+
+### 4.2 填进去
+
+两种方式任选：
+
+- 环境变量：`SHODAN_API_KEY`、`ZOOMEYE_API_KEY`，或 `FOFA_EMAIL` + `FOFA_KEY`；
+- 本地 Key 文件 plugins/asset_intel_keys.json（该文件已被 `.gitignore` 忽略，不会进入仓库）：
+
+```json
+{
+  "shodan": "你的Key",
+  "zoomeye": "你的Key",
+  "fofa_email": "you@example.com",
+  "fofa_key": "你的Key"
+}
+```
+
+同名项以文件为准：代码先读环境变量，再用文件里存在的字段覆盖。
+
+### 4.3 重启并验证
+
+重启小焦，然后查询数据源状态（对话里说「资产测绘状态」，或直接调用 `asset_intel_status`），配好的数据源会显示已配置。
+
+## 5. 使用示例
+
+给 IP 查漏洞（不需要 Key）：
 
 ```text
-你：帮我查一下 1.1.1.1、8.8.8.8 这些地址命中了哪些漏洞
-小焦：🛰️ 资产测绘 · IP → 漏洞（数据源：Shodan InternetDB，免费无需 Key）
-      | IP | 主机名 | 开放端口 | 命中的 CVE |
-      | 1.1.1.1 | one.one.one.one | 53, 80, 443, … | 无 |
+用户：帮我查一下 1.1.1.1、8.8.8.8 这些地址命中了哪些漏洞
+小焦：资产测绘 · IP → 漏洞（数据源：Shodan InternetDB，免费无需 Key）
 
-你：vuln:CVE-2024-1234 这个漏洞，网段里有哪些 IP 中招？（配了 Key 之后）
-小焦：🛰️ 资产测绘 · CVE/关键词 → IP（数据源：ZoomEye，共 1234 条）
+      | IP      | 主机名          | 开放端口        | 命中的 CVE |
+      | 1.1.1.1 | one.one.one.one | 53, 80, 443, …  | 无         |
+```
+
+也可以只关心指定漏洞，把 CVE 一并给出（插件的 `cves` 参数）：
+
+```text
+用户：1.1.1.1 有没有 CVE-2024-1234
+小焦：表格中"命中的 CVE"一列会按你给的清单过滤，并给出命中该 CVE 的地址数
+```
+
+反查受影响 IP（需要 Key）：
+
+```text
+用户：vuln:CVE-2024-1234 这个漏洞，网段里有哪些 IP 中招？
+小焦：资产测绘 · CVE/关键词 → IP（数据源：ZoomEye，共 1234 条）
+
       | IP | 国家 | 端口 | 应用 | 命中的 CVE |
 ```
 
-## 纪律（跟抓取插件一致）
+查询顺序为 ZoomEye → Shodan → Fofa，命中第一家已配置的数据源即返回；`limit` 取值范围 1 到 50，默认 10。
 
-- 只查**公网 IP**：`10./127./192.168./172.16-31./169.254.` 一律拒绝并说明原因（"资产测绘"扫自己家网段没有意义）。
-- 单个 IP 查不到（HTTP 404）如实写「Shodan 没有该地址的数据」，**不编造**。
-- Key 只从环境变量或本地 Key 文件读，**绝不写进代码、不进日志、不进仓库**。
-- 任何异常都转成中文可读说明返回，不把堆栈丢给用户。
+## 6. 纪律
 
-## 想换/加数据源
+与抓取插件保持一致的四条约束：
 
-插件契约（`plugins/asset_intel.py` 里照抄即可）：
+- 只查公网 IP：`10.`、`127.`、`0.`、`192.168.`、`172.16-31.`、`169.254.` 前缀以及 `255.` 开头的地址一律拒绝并说明原因；
+- 单个 IP 查询返回 HTTP 404 时，如实写「Shodan 没有该地址的数据」，不编造结论；
+- Key 只从环境变量或本地 Key 文件读取，不写入代码、不进日志、不进结果；
+- 任何异常都转成中文可读说明返回，不把堆栈交给用户。
+
+## 7. 边界与限制
+
+| 项 | 说明 |
+| --- | --- |
+| 单次 IP 数量 | 一次查询最多处理 20 个公网 IP，超出部分不处理 |
+| 免费源能力 | InternetDB 只回答"这个 IP 有什么"，不支持按漏洞反查 |
+| Shodan 反查 | `vuln:` 过滤器在免费账号上通常不可用，此时会提示改用关键词查询 |
+| 数据时效 | 结果取决于数据源自身的扫描周期与覆盖范围，不代表实时状态 |
+| 依赖 | 需要 `requests`（已在 `requirements.txt` 中） |
+
+## 8. 换用或新增数据源
+
+插件内的数据源实现遵循与其它插件相同的契约（见 [插件开发指南](PLUGINS.md)）：
 
 ```python
 class MyProvider:
-    def get_tool_descriptions(self):   # 声明工具（name/description/parameters）
+    def get_tool_descriptions(self):        # 声明工具：name / description / parameters
         ...
-    def execute(self, tool_name, params):   # 执行并返回**字符串**（Markdown 最好看）
+
+    def execute(self, tool_name, params):   # 执行并返回字符串（Markdown 表格可读性更好）
         ...
 ```
 
-丢进 `plugins/` 重启即被加载，小焦的工具表里就有了（`/api/settings` 能看到）。
+新增数据源时，建议沿用现有约定：异常转中文、只处理公网地址、Key 从环境变量或本地 Key 文件读取。`asset_intel` 的工具名已注册在小焦的工具表里，可在 `GET /api/settings` 的 `plugins` 字段中确认它是否被加载。
+
+## 9. 相关文档
+
+- [插件开发指南](PLUGINS.md)：插件契约与注册机制
+- [工具清单](tools.md)：`asset_intel_*` 在工具表中的位置
+- [抓取插件](scrapling.md)：同源的抓取纪律与安全约束
+
+## 变更记录
+
+| 日期 | 版本 | 变更 |
+| --- | --- | --- |
+| 2026-09-14 | v1.0 | 重写：对齐代码 + 统一文风 |
