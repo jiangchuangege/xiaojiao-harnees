@@ -23,8 +23,8 @@
 **图 1 · 系统总览**
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph GUSER["🧑 使用者"]
         direction TB
         WEB["网页对话 (127.0.0.1:5000)"]
@@ -149,8 +149,8 @@ flowchart TB
 **图 2 · 一次对话的完整生命周期**
 
 ```mermaid
-sequenceDiagram
 %%{init: {"themeVariables": {"fontSize": "14px", "actorBkg": "#4A90E2", "actorBorder": "#2F6FB5", "actorTextColor": "#ffffff", "actorLineColor": "#4A90E2", "signalColor": "#4A90E2", "signalTextColor": "#1F4E79", "labelBoxBkgColor": "#EAF2FD", "labelBoxBorderColor": "#4A90E2", "labelTextColor": "#1F4E79", "loopTextColor": "#7A4B00", "noteBkgColor": "#FEF6E7", "noteBorderColor": "#F5A623", "noteTextColor": "#7A4B00", "activationBkgColor": "#EAF7E2", "activationBorderColor": "#7ED321", "sequenceNumberColor": "#ffffff"}}}%%
+sequenceDiagram
     autonumber
     participant U as 使用者
     participant W as Web 前端
@@ -187,8 +187,8 @@ sequenceDiagram
 **图 3 · 插件机制**
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph LOAD["① 装载"]
         direction TB
         D["plugins/ 目录"]
@@ -273,8 +273,8 @@ def get_plugin():
 **图 4 · 数据与状态**
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph SRC["① 配置来源"]
         direction TB
         CFG["xiaojiao_control.json<br/>（含密钥，已 gitignore）"]
@@ -323,8 +323,8 @@ flowchart LR
 **图 5 · 质量与安全**
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph CHG["① 改动"]
         direction TB
         DEV["改动"]

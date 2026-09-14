@@ -63,9 +63,16 @@ def check_sequence(lines: list[str]) -> list[str]:
         if opened and closed < opened:
             errs.append("sequenceDiagram: %s(%d) 缺少对应 end" % (kw, opened))
             break
-    for l in lines[1:]:
+    for l in lines:
         s = l.strip()
         if not s or s.startswith("%%"):
+            continue
+        # 【为什么要跳过图类型声明行，而不是写死 lines[1:]】
+        #   原来从 `lines[1:]` 开始扫，默认"第 0 行一定是 sequenceDiagram"。
+        #   但 mermaid 的 `%%{init}%%` 指令**必须在最前面**，于是第 0 行变成指令、第 1 行才是
+        #   `sequenceDiagram` —— 它就被当成"一条不像消息的行"报错了（实测踩到）。
+        #   现在按内容判断：指令行跳过、图类型声明行也跳过，位置随便。
+        if s.startswith("sequenceDiagram"):
             continue
         if s.startswith(("participant", "Note", "activate", "deactivate", "end", "opt",
                          "loop", "alt", "else", "par", "and", "rect", "critical", "break",
@@ -96,15 +103,34 @@ def check_file(path: str) -> tuple[int, int]:
             bad += 1
             continue
         head = lines[0].strip()
-        if head.startswith("sequenceDiagram"):
+        # 【为什么图类型关键字要"往下找几行"，而不是只看第一行 —— 实测踩到的真缺陷】
+        #   `%%{init: ...}%%` 是 mermaid 的**指令**，规范要求它出现在**最前面**；
+        #   而本校验原来只看"块内第一行"判类型。两者直接冲突：
+        #     · 指令写第一行 → 校验器看到 `%%{init:`，认不出类型 → **整块被跳过、等于没校验**；
+        #     · 为了让校验生效把它挪到 `flowchart` 之后 → mermaid 把 `%%{init}%%` 当成**注释**，
+        #       主题静默失效（图还是能画，但字号/换行宽度/间距全回默认值）。
+        #   实测代价：某一轮统一图时 73 个块被"挪序"以通过校验，结果这 73 个块的主题全部失效；
+        #   而这次真正的渲染失败（`style C["switch"]`）校验器又**完全没报**（它只查括号/引号配对，
+        #   不查语句级语法）—— 两个方向都错了。
+        #   现在的判据：从块内**前 6 行**里找图类型关键字，找不到才退回第一行。
+        #   这样"指令第一行 + 图类型第二行"能被正确识别，两块需求不再互斥。
+        kind_line = head
+        for cand in lines[:6]:
+            c = cand.strip()
+            if c.startswith(("sequenceDiagram", "flowchart", "graph", "stateDiagram",
+                             "classDiagram", "erDiagram", "gantt", "pie", "journey",
+                             "mindmap", "timeline")):
+                kind_line = c
+                break
+        if kind_line.startswith("sequenceDiagram"):
             errs = check_sequence(lines)
             kind = "sequence"
-        elif head.startswith(("flowchart", "graph")):
+        elif kind_line.startswith(("flowchart", "graph")):
             errs = check_flowchart(lines)
             kind = "flowchart"
         else:
             errs = []
-            kind = head.split()[0] if head else "?"
+            kind = kind_line.split()[0] if kind_line else "?"
         if errs:
             bad += 1
             print("  ❌ block#%d [%s]" % (i, kind))

@@ -15,8 +15,8 @@
 ## 1. 图 6 · 写入路径、读取路径与向量化后端
 
 ```mermaid
-flowchart TB
     %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph WRITE["写入路径：一轮对话结束时"]
         direction TB
         W1["_remember_turn<br/>正文存「用户：那句话 + 小焦：回答摘要」<br/>回答只留 ≤ 200 字摘要，代码块不入库"]

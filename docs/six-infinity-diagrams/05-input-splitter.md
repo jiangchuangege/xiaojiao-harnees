@@ -15,8 +15,8 @@
 ## 1. 图 5 · 从超长输入到一份完整结果
 
 ```mermaid
-flowchart TB
     %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     U["用户贴进来一大段<br/>可能还带一句要求"]
     ENTRY{"_needs_input_split<br/>_estimate_tokens 超过 5000 吗？"}
     NORMAL["普通输入<br/>照常走单次回答"]

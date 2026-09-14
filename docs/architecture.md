@@ -104,8 +104,8 @@
 `brain_manager.py`、`video_service/model_switch.py`（火种装卸）｜`xiaojiao_control.json`（配置）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph ENTRY["入口"]
         direction LR
         E1["浏览器页面 · 5000"]
@@ -178,8 +178,8 @@ flowchart TB
 代码位置索引：`xiaojiao_app.py` 的 `agent_run()`（6725 行起）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     A["用户输入"] --> B["上下文融合<br/>回指补全"]
     B --> C{"载体能否直接答完"}
     C -->|"工具清单 · 当前时间 · 本机 IP"| D["载体直答<br/>不经过模型"]
@@ -500,8 +500,8 @@ class XXPlugin:
 桥接的调用侧在 `xiaojiao_app.py` 的 `_detect_scrape_intent()`、`_scrape_direct()`、`_explain_content()`、`_learn_skill()`
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     A["用户：抓一下某网址"] --> B["抓取意图识别"]
     B --> C["安全闸门<br/>SSRF · robots · 同域限速 · UA"]
     C --> D["熔断<br/>连续失败 3 次暂停 30 秒"]
@@ -601,8 +601,8 @@ flowchart LR
 （温存与超时释放）、`brain_manager.py` 的 `switch_to()`、`video_service/comfy_client.py`（进度轮询）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     A["对话中：显存里是聊天大脑"] --> B["用户点生成视频"]
     B --> C["第一步：卸载大脑<br/>llama-swap 卸载 9292"]
     C --> D["第二步：启动 ComfyUI 8188<br/>加载 Wan2.1"]

@@ -67,8 +67,8 @@
 说明：本图给出各部分的先后关系；绿色为已接入对话主流程，红色为模块内已实现但主流程尚未调用。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart TB
     Q["用户提问"] --> B1["答前 查边界档案 should_use_tool"]
     B1 --> G["生成回答"]
     G --> B2["答后 记一条边界样本 record"]
@@ -97,8 +97,8 @@ flowchart TB
 说明：四个档位映射到三条路径；解析失败与"没把握"合并处理，理由是两者的代价不对称。
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart LR
     A["A 有把握"] --> D["直接答"]
     B["B 有点"] --> C1["答并附加不确定提示"]
     C["C 没把握"] --> T["走工具或查记忆"]
@@ -123,8 +123,8 @@ flowchart LR
 说明：平均一致性落入中间地带时判为矛盾，这是刻意的从严设计。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart TB
     Q["同一问题 3 个角度各答一次"] --> N{"拿到几个可用答案"}
     N -->|"少于 2 个"| UN["判 unknown 不假装检查过"]
     N -->|"2 个及以上"| AV["算两两平均一致性"]
@@ -155,8 +155,8 @@ flowchart TB
 说明：档案只累积事实，决策由 `should_use_tool()` 按四条判据从事实推出。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart TB
     R1["record 落盘一条样本"] --> F["boundary.jsonl 追加一行"]
     F --> S["stats 统计窗口内样本"]
     S --> M["summary 输出能力地图"]

@@ -147,8 +147,8 @@
 ### 图 A · 火种与载体：换模型不影响助手身份
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph MODEL["火种层 —— 模型权重，可替换零件"]
         direction LR
         M1["小参数本地模型"]
@@ -180,8 +180,8 @@ flowchart TB
 ### 图 B · 一次请求在载体中的路径
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     U["用户输入"] --> A["载体：任务理解与拆解"]
     A --> B["载体：装配上下文"]
     B --> B1["记忆检索"]

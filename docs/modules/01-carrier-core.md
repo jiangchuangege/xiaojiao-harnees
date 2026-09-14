@@ -111,8 +111,8 @@
 代码位置索引：`xiaojiao_app.py` 的 `agent_run`，以及 `_detect_intent`、`plan_tool`、`_plan_tools`、`system_for_intent`、`_validate_tool_result`、`_tool_breaker`、`run_tool`、`retriever.retrieve`、`_resolve_llm_key`。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     IN["用户请求进入 agent_run"] --> P1["① 任务理解<br/>_detect_intent"]
     P1 --> P2["② 任务拆解<br/>plan_tool"]
     P2 --> P3["③ 步骤规划<br/>_plan_tools"]
@@ -149,8 +149,8 @@ flowchart TB
 代码位置索引：`_detect_intent`、`plan_tool`、`_plan_tools`、`system_for_intent`、`_fit_context`、`_tool_breaker`、`_resolve_llm_key`、`core/central/__init__.py`。
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph S1["理解与规划段"]
         direction TB
         A1["① 任务理解"] --> A2["② 任务拆解"] --> A3["③ 步骤规划"]
@@ -179,8 +179,8 @@ flowchart LR
 代码位置索引：`agent_run`、`system_for_intent`、`_validate_tool_result`、`core/mind_stream/inject.py` 的 `temperature_for`。
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph CARRIER["载体负责：判定、装配、校验、记账"]
         direction TB
         K1["给完整工具目录与规则"]
@@ -214,8 +214,8 @@ flowchart LR
 代码位置索引：`xiaojiao_app.py` 的 `_tool_breaker`、`_tool_failed`、`_cache_tool_result`、`_cached_tool_result`。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     R["工具返回结果"] --> F{"_tool_failed 判定失败？"}
     F -->|否| OK["返回空串<br/>并把结果写入工具缓存"]
     F -->|是| N["streak 计数加一"]
@@ -241,8 +241,8 @@ flowchart TB
 代码位置索引：`core/central/__init__.py` 的 `set_state`、`get_state`、`clear_state`、`publish`、`subscribe`、`snapshot`，以及只读端点 `/api/central`。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     M1["模块 A<br/>写自己的命名空间"] --> ST["中央状态<br/>namespace 到 dict"]
     M2["模块 B<br/>写自己的命名空间"] --> ST
     ST --> R1["模块 C<br/>只读别人的命名空间"]

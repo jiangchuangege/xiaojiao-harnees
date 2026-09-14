@@ -74,8 +74,8 @@
 说明：绿色为已接入对话主流程，红色为模块内已实现但主流程尚未调用。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart TB
     P["用户提问"] --> F["pick_form 判定表达形式"]
     F --> H["form_hint 生成形式硬要求"]
     H --> S["拼进系统提示词"]
@@ -103,8 +103,8 @@ flowchart TB
 说明：用户的明确格式要求排在最前，语气判断只在前者不命中时生效。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart TB
     Q["用户文本"] --> R{"命中带数量词的要求"}
     R -->|"是"| L["判为列表"]
     R -->|"否"| W{"命中表格 列表 分步 代码 词表"}
@@ -134,8 +134,8 @@ flowchart TB
 说明：每条判据对应一类具体毛病，便于测试与人工核对；套话部分最高累计 0.6。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart TB
     T["一段回答"] --> D1["命中套话短语 每条加 0.15 上限 0.6"]
     T --> D2["闲聊却分了点 加 0.25"]
     T --> D3["用户要列表或步骤 回答里没有条目 加 0.25"]
@@ -167,8 +167,8 @@ flowchart TB
 说明：删除后若整段为空，退回原文，宁可少删也不给出空回答。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart TB
     IN["原始回答"] --> M["按八类短语表逐条替换"]
     M --> TD["收拾残缺 多余空行 行首标点 结尾悬空连词"]
     TD --> E{"结果是否为空"}

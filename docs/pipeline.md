@@ -31,8 +31,8 @@
 代码位置索引：`convert.py`、`clean_data.py`、`validator.py`、`massive_distill.py`、`distill_and_train.py`、`auto_distill_loop.py`、`train_model.py`、`xiaojiao_harness.py`、`xiaojiao_app.py`、`web_monitor.py`
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph SRC["数据源"]
         A["LCCC 语料<br/>base_train / base_test / base_valid"]
         B["convert.py<br/>去中文间空格、奇偶配对"]

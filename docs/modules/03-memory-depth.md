@@ -113,8 +113,8 @@
 载体用规则判断每一句话该进哪一层，不调用模型。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     IN["用户这一轮说的话"] --> C1{"命中事实信号<br/>日期 时间 住址 人物关系 偏好 经历"}
     C1 -->|命中| F["事实层 fact<br/>原样存 精确检索 原条目不删除"]
     C1 -->|未命中| C2{"长度不超过 24 字<br/>且命中寒暄词"}
@@ -172,8 +172,8 @@ flowchart TB
 清晰度按时间单向降低，被重新提到则回升，被反复引用则锁定。
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     HD["高清 hd<br/>0 至 7 天 保留原话"] --> SD["标清 sd<br/>7 至 30 天 摘要"]
     SD --> BL["模糊 blur<br/>30 至 180 天 关键词"]
     BL --> IM["印象 impression<br/>180 天以上 标签或一句话"]
@@ -206,8 +206,8 @@ flowchart LR
 五个机制都在载体内部完成，都不调用模型。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     W["写入 分类后进事实层或表达层"] --> M1["机制一 压缩 compress<br/>180 天以上且未锁定<br/>额外生成一条印象条目"]
     M1 --> M2["机制二 巩固 consolidate<br/>引用次数达到 3 次即锁定"]
     M2 --> M3["机制三 降级 degrade<br/>按时间下调清晰度 条目不减少"]
@@ -262,8 +262,8 @@ flowchart TB
 检索结果分四种口径返回，调用方按口径决定怎么说话。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     Q["用户提问"] --> RC{"recall<br/>向量检索 加 表面特征重合"}
     RC -->|"余弦不低于 0.66 且表面有重合<br/>且清晰度不是模糊或印象"| P["precise<br/>可以当事实说 直接给原文"]
     RC -->|"有相似条目但表面无重合<br/>或清晰度已降为模糊或印象"| FZ["fuzzy<br/>只承认记得 明确说细节不清"]
@@ -305,8 +305,8 @@ flowchart TB
 所有会改动文件的入口都汇到同一个判断，命中即拦。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     A["模型决定执行一个动作"] --> G{"走的是哪条入口"}
     G -->|命令| C1["check_command<br/>先摘数据 再判动作"]
     G -->|文件操作| C2["check_file_op<br/>delete 一律拒绝<br/>覆盖已存在文件拒绝"]

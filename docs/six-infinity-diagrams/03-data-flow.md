@@ -14,8 +14,8 @@
 ## 1. 图 3 · 五个阶段
 
 ```mermaid
-flowchart TB
     %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     U["用户输入<br/>一句话或一大段"]
 
     subgraph G1["阶段 1 · 入口分流"]

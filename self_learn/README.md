@@ -91,8 +91,8 @@
 代码位置索引：`self_learn/learn.py` 的 `cmd_log()`（第 42–56 行）、`cmd_feedback()`（第 59–68 行）、`cmd_build()`（第 85–125 行）、`cmd_reflect()`（第 136–151 行）；`xiaojiao_app.py` 的 `_learn_skill()`（第 4204–4233 行）。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     A["用户提问"] --> B["大脑推理并调用工具"]
     B --> C["记录层 logs/chat_history.jsonl"]
     B --> D["工具经验 self_learn/tool_skills.txt"]

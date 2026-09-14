@@ -139,8 +139,8 @@
 代码位置索引：`core/carrier/brain_registry.py`、`core/carrier/capability.py`、`core/carrier/__init__.py`
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph BRAINS["BrainRegistry · 火种库（我能换成谁）"]
         direction LR
         B1["本地 4B 模型"]
@@ -215,8 +215,8 @@ flowchart TB
 代码位置索引：`core/carrier/brain_registry.py` 的 `switch`、`_set_active`、`apply_to_app`
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     C["调用 switch 名称"] --> CHK{"火种存在且处于启用状态"}
     CHK -->|"否"| FAIL["返回 False<br/>写一条失败的切换流水"]
     CHK -->|"是"| POINT["把当前火种指针指向新名字<br/>这是全部副作用"]
@@ -226,9 +226,9 @@ flowchart LR
     APPLY --> NOW["宿主下一次请求即生效<br/>沿用原有的重试 熔断 超时降级"]
     NOW --> UNTOUCHED["记忆 工具 世界 会话<br/>一个都不动"]
 
-    style C["switch"] fill:#2d6cdf,color:#fff
-    style NOW fill:#5cb85c,color:#fff
-    style FAIL fill:#d9534f,color:#fff
+    style C fill:#4A90E2,color:#fff
+    style NOW fill:#7ED321,color:#fff
+    style FAIL fill:#E74C3C,color:#fff
 ```
 
 宿主的请求目标来自三个全局变量：`LLM_BASE`、`LLM_MODEL`、`LLM_KEY`。这三个名字是读源码确认过的，不是推测；写入前先检查它们是否存在，任一不存在则记录并返回 `False`，不改动任何东西。切换之所以立刻生效，是因为宿主的 `_llm_targets()` 每次请求都重新读取这三个名字。
@@ -244,8 +244,8 @@ flowchart LR
 代码位置索引：`core/carrier/brain_registry.py` 的 `fallback`、`auto_fallback`、`mark_unhealthy`、`health_check`
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     TRIG["触发条件：请求途中鉴权失败或超时<br/>或人工标记不健康"] --> MARK["mark_unhealthy<br/>不再花时间重新探测一次"]
     MARK --> PICK["fallback：在启用且健康且不在排除名单里的火种中<br/>按优先级与名字排序取第一颗"]
     PICK --> NONE{"存在候选"}
@@ -293,8 +293,8 @@ flowchart TB
 代码位置索引：`core/carrier/capability.py` 的 `scan`、`_app_tools`、`_dir_scan`、`watch`
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     CALL["scan：清点当前能力"] --> WALK["遍历插件目录<br/>后缀 py json md js mjs"]
     WALK --> FP["计算文件指纹：路径 与 时间 与 大小"]
     FP --> APPDIR{"是否默认插件目录且宿主可用"}

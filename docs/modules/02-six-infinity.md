@@ -126,8 +126,8 @@
 代码位置索引：`xiaojiao_app.py` 的 `agent_run`、`_needs_input_split`、`_needs_continuation`、`_plan_tools`、`_fit_context`，以及 `core/` 下的四个核心模块。
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     U["用户输入"] --> G{"入口分流<br/>token 是否超过 5000"}
     G -->|超长| I2["② 输入无限<br/>切片 循环 拼装"]
     G -->|正常| I1["① 记忆无限<br/>检索并注入相关记忆"]
@@ -171,8 +171,8 @@ flowchart LR
 代码位置索引：`_plan_tools(intent, system_text, current_text, max_ctx=None)` 与 `_fit_context(system_text, history, current_text, max_ctx=None, min_rounds=2, tools_tokens=0)`。装配账本落盘到 `logs/context_fit.log`。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph FIX["固定开销"]
         direction TB
         F1["system 按意图生成"]
@@ -238,8 +238,8 @@ flowchart TB
 代码位置索引：`core/memory_vec.py` 的 `add_memory` 与 `search_memory`，`core/retriever.py` 的 `retrieve`，`core/embedder.py` 的编码入口。
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     N1["第 1 轮<br/>用户说自己叫什么"] --> W["小脑把用户那句话编码成 512 维向量<br/>追加一行到向量库"]
     N1 --> N50["第 2 轮到第 50 轮<br/>另外两百句话<br/>全部落库 不占模型上下文"]
     Q["第 51 轮<br/>用户问自己叫什么"] --> R["检索 原始余弦不低于 0.6<br/>取最像的 5 条 时间衰减只参与排序"]
@@ -325,8 +325,8 @@ flowchart LR
 代码位置索引：`core/input_splitter.py` 的 `split_task`、`split_input`、`save_chunk`、`merge_outputs`、`process_long_input`，以及 `xiaojiao_app.py` 的 `_needs_input_split`、`_process_long_input`。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     IN["用户贴入长材料"] --> GATE{"_needs_input_split<br/>token 是否超过 5000"}
     GATE -->|否| N["普通单次回答 零额外开销"]
     GATE -->|是| ST["split_task 分出要求与内容<br/>split_input 按段落边界切 绝不切在句中"]
@@ -415,8 +415,8 @@ flowchart TB
 代码位置索引：`core/continuation.py` 的 `generate_unlimited`、`parse_target_chars`、`build_prompt`、`overlap_len`、`cut_at_sentence`、`drop_repeated_sentences`、`looks_offtopic`、`needs_continuation`。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     P["用户要求写一篇长文"] --> T["parse_target_chars<br/>解析目标字数"]
     T --> G["generate_unlimited<br/>每次请求不超过 2000 token"]
     G --> PF["单条预取线程维护影子正文<br/>缓冲池保持 3 段"]
@@ -513,8 +513,8 @@ flowchart TB
 代码位置索引：`xiaojiao_app.py` 的 `_detect_intent`、`_intent_tool_names`、`_plan_tools`、`_tool_index`、`all_tool_names`、`_tools_tokens`。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     A["plugins 目录里的全部工具<br/>完整结构声明为 13891 token<br/>占上限的百分之七十二"] --> B["规则：一个不删 不暂缓 不下线"]
     B --> C["_detect_intent 判本轮意图"]
     C --> D["_intent_tool_names 给出该意图的工具名<br/>永不返回空表示全部"]
@@ -616,8 +616,8 @@ flowchart TB
 代码位置索引：`xiaojiao_app.py` 的 `api_chat_stream`、`api_chat`，`core/input_splitter.py` 的 `process_long_input`，`core/continuation.py` 的 `on_chunk` 回调。
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph BG["载体内部：用户完全看不到"]
         direction TB
         X1["切片 N 片"] --> X2["循环 N 次"] --> X3["去重与合并与接缝裁剪"]
@@ -692,8 +692,8 @@ flowchart LR
 代码位置索引：`_estimate_tokens`、`_max_context_tokens`、`_fit_context`、`_plan_tools`、`_MSG_OVERHEAD`，账本落盘到 `logs/context_fit.log`。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     S["system 按意图生成"] --> B["发出之前先算总账"]
     T["tools 按意图装载"] --> B
     R["检索到的记忆 不超过 2000 token"] --> B

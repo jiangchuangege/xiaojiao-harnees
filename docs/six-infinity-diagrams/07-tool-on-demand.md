@@ -15,8 +15,8 @@
 ## 1. 图 7 · 从一句话到"这一轮发哪几个工具"
 
 ```mermaid
-flowchart TB
     %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     Q["用户这一句话"]
     DI["_detect_intent 规则识别意图<br/>不调用模型"]
 

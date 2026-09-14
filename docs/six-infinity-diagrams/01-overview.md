@@ -50,8 +50,8 @@
 ## 2. 图 1 · 六个无限总览
 
 ```mermaid
-flowchart TB
     %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     U["用户输入<br/>长度不限 · 要的篇幅不限"]
 
     F["载体层（工厂）<br/>分解 · 装配 · 存储 · 调度 · 拼装 · 校验<br/>六个无限全部在这一层实现"]

@@ -38,8 +38,8 @@
 **图 1 · 火种与载体的分工**
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph MODEL["火种层 —— 模型权重，可替换零件"]
         direction LR
         M1["小参数本地模型"]
@@ -117,8 +117,8 @@ flowchart TB
 **图 2 · 六个无限在链路中的位置**
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph IN["① 进模型的输入端"]
         direction TB
         U["用户输入"]

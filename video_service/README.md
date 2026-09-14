@@ -152,8 +152,8 @@ GET /api/video/state
 代码位置索引：`video_service/video_api.py` 的 `video_mode()`（第 19–34 行）与 `_worker()`（第 198–270 行）；`video_service/cloud_video.py` 的 `available()`（第 65–67 行）。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     A["Web 前端 视频按钮"] -->|"POST /api/video"| B["video_api.api_video 建任务"]
     B --> C["后台线程 _worker"]
     C --> D{"video_mode 判定"}
@@ -188,8 +188,8 @@ flowchart TB
 代码位置索引：`video_service/video_api.py` 第 199–270 行；`video_service/model_switch.py` 的 `_state`（第 15 行）与 `_set()`（第 74–82 行）。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph JOB["任务状态 video_api 任务表里的 state"]
         J1["queued 排队"] --> J2["switching 切换中"]
         J2 --> J3["generating 生成中"]

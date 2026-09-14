@@ -56,8 +56,8 @@
 ### 九节状态全景
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
+flowchart TB
     ROOT["后半篇九节 · 实现状态"]
 
     ROOT --> A["十四 精度叠加<br/>部分落地"]
@@ -133,8 +133,8 @@ flowchart TB
 按本次代码核对，真正接入 `agent_run` 主流程的是校验的档案查询、记忆检索与工具调用三类。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
+flowchart TB
     U["用户输入"] --> M["4B 火种单次前向<br/>存量精度，一次用完"]
     M --> OUT["候选答案"]
 
@@ -347,8 +347,8 @@ print(B.should_use_tool("小焦的记忆存在哪"))
 ## 架构与原理
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
+flowchart TB
     R["原则：不拿质量换速度"]
 
     R --> A["跨请求 KV 缓存复用<br/>未落地"]
@@ -527,8 +527,8 @@ print(BO.dispatch("今天天气不错").get("kind"))             # none
 ## 架构与原理
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
+flowchart TB
     M["同一个火种配不同提示词<br/>等于不同角色<br/>角色随载体走，换模型不改角色"]
 
     M --> R1["规划者<br/>只输出步骤，不执行"]
@@ -723,8 +723,8 @@ A/B 对比与回滚机制不存在。仓库中与"越用越好"方向相同的�
 ## 架构与原理
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
+flowchart TB
     DES["设计形态：改进闭环"]
     DES --> B1["记基线<br/>同一批问题上的成功率"]
     B1 --> B2["改一处<br/>提示词、工具清单、流程参数"]
@@ -895,8 +895,8 @@ print(s["total"], s["by_layer"], s["by_clarity_cn"], s["style_samples"], s["summ
 ## 架构与原理
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph BOARD["公共黑板 core/central/__init__.py"]
         direction TB
         ST["中央状态<br/>命名空间到字典的映射<br/>只覆盖同名键"]
@@ -1124,8 +1124,8 @@ Invoke-RestMethod http://127.0.0.1:5000/api/central | ConvertTo-Json -Depth 6
 ## 架构与原理
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
+flowchart TB
     IN["用户说的话"] --> E1["入口：转向量<br/>core/embedder.py"]
     Q["用户问话"] --> E2["出口：转向量<br/>core/embedder.py"]
     E1 --> STORE["记忆库<br/>logs/xiaojiao_memory_vec.jsonl"]
@@ -1365,8 +1365,8 @@ python tools/test_embedder_long.py
 ## 架构与原理
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
+flowchart TB
     U["用户输入"] --> FUSE{"含回指词且自身无明确对象"}
     FUSE -->|"是"| MERGE["上下文融合<br/>从最近几轮历史里找指代对象"]
     MERGE -->|"找到"| FULL["补全成完整请求"]
@@ -1560,8 +1560,8 @@ python tools/test_search_intent.py     # 实测 58 项全部通过
 ## 架构与原理
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph FG["前台主流程 用户对话 优先"]
         direction TB
         M1["agent_run<br/>记忆检索 到 生成 到 写档案"]
@@ -1766,8 +1766,8 @@ for p in ("logs/autonomy/tasks.jsonl", "logs/autonomy/notifications.jsonl"):
 ## 架构与原理
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
+flowchart TB
     O["目标：知道系统此刻在发生什么"]
 
     O --> L1["第一层 日志<br/>已落地<br/>logs 下按模块分目录的 jsonl"]

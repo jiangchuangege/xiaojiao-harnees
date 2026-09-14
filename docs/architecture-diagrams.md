@@ -22,8 +22,8 @@
 ## 图 1 · 总纲：把模型换成零件，把系统做成主体
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 360, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     ROOT["小焦<br/>用户眼里的「一个助手」"]
 
     subgraph MODEL["模型层 —— 火种，可替换零件"]
@@ -62,8 +62,8 @@ flowchart TB
 ## 图 2 · 十一大器官（载体内部有什么）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     BODY["载体 = 完整的身体<br/>器官齐全才叫活，缺一个就是残"]
 
     subgraph ORG1["认知与表达"]
@@ -109,8 +109,8 @@ flowchart TB
 ## 图 3 · 载体核心智力十项（一次任务怎么被走完）
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 300, "nodeSpacing": 44, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart LR
     U["用户输入"] --> A["① 任务理解<br/>他到底要什么<br/>结合历史/画像"]
     A --> B["② 任务拆解<br/>拆成模型做得到的小步"]
     B --> C["③ 步骤规划<br/>谁先谁后（依赖关系）"]
@@ -140,8 +140,8 @@ flowchart LR
 ## 图 4 · 记忆深度系统（事实 / 表达 / 印象 + 清晰度降级）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     IN["用户说的话"] --> CLS{"载体分类<br/>core/memory_deep.py<br/>不靠模型判断"}
 
     CLS -->|"有人物/时间/地点/事件/情绪"| F["事实层<br/>原样存 · 精确检索 · 永不压缩<br/>「我住在济南」"]
@@ -182,8 +182,8 @@ flowchart TB
 ## 图 5 · 健康系统（监测 → 诊断 → 四级治疗 → 病历 → 预防）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     MO["模型输出"] --> MON["监测：18 类症状<br/>core/health/monitor.py<br/>语言4·逻辑4·情绪3·行为4·生理3"]
     MON --> DIAG{"诊断<br/>core/health/diagnose.py<br/>严重程度 + 判因"}
     DIAG -->|"单次轻症"| L1["一级治疗<br/>自动重试 / 换角度 / 复读截断<br/>用户无感"]
@@ -211,8 +211,8 @@ flowchart TB
 ## 图 6 · 变形金刚（火种库 + 能力注册 → 永远是同一个"小焦"）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 360, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph BRAINS["BrainRegistry · 火种库"]
         direction LR
         B1["4B 模型"]
@@ -262,8 +262,8 @@ flowchart TB
 ## 图 7 · 协同网络（中央状态 + 事件总线带来的正反馈）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     TOOL["工具强"] --> U1["理解更准"]
     TOOL --> U2["推理能落地"]
     U2 --> U3["推理更对"]
@@ -295,8 +295,8 @@ flowchart TB
 ## 图 8 · 自主性 + 世界层（小焦活在互联网里）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     ROOT["小焦 · 活在互联网里"]
 
     ROOT --> AUTO["自主性<br/>core/autonomy/"]
@@ -333,8 +333,8 @@ flowchart TB
 ## 图 9 · 完整架构大图（请求从进来到出去的全程）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     U["用户输入<br/>任意长度"] --> SPLIT{"超过单次上限？<br/>core/input_splitter.py"}
     SPLIT -->|"要"| CHUNKS["切片 → 循环处理 → 拼装<br/>界面上只显示「正在处理…」"]
     SPLIT -->|"不要"| INTENT
@@ -369,8 +369,8 @@ flowchart TB
 ## 图 10 · 六个无限（都发生在模型外面）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     U["用户：想说什么说什么 · 想贴多长贴多长 · 想要多长要多么长"]
     U --> C["载体层（唯一能兜住「无限」的地方）"]
 
@@ -401,8 +401,8 @@ flowchart TB
 ## 图 11 · 极限补刀七项（让 4B 在载体里逼近大模型）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     G["共同公式<br/>① 把不确定的东西结构化<br/>② 用大模型当教师蒸馏进结构<br/>③ 4B 只执行一小步<br/>④ 每次结果存回结构，越用越大"]
 
     G --> D1["10.1 元推理模板库<br/>core/boost/reasoning.py<br/>30+ 种推理类型：归纳/演绎/反证/回溯/第一性原理…"]
@@ -434,8 +434,8 @@ flowchart TB
 ## 图 12 · 精度叠加（载体给模型附加"等效精度"）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph S1["存量精度 —— 训练时烧进权重，一次用完"]
         W["4B 权重<br/>一次前向 = 一个答案 = 没有第二次机会"]
     end
@@ -467,8 +467,8 @@ flowchart TB
 ## 图 13 · 速度优化（只做无损加速 · 现状与目标）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     R["原则：不拿质量换速度"]
     R --> A["1. KV Cache 复用固定前缀<br/><b>现状：未落地</b><br/>llama-server 每请求独立，KV 不跨请求保留<br/>已落地的是 core/health/heal.py 的 reload_kv 重置与预热"]
     R --> B["2. LLM 网关<br/><b>现状：只有路由那一半</b><br/>语义缓存 / 批处理 / 限流熔断 未落地<br/>温度按意图给、补刀按意图分派 已落地"]
@@ -491,8 +491,8 @@ gaps 那一框写出来不好看，但文档的作用是让人知道离目标还
 ## 图 14 · 多智能体协作（一个模型切多角色）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     M["同一个模型 + 不同提示词 = 不同角色<br/>角色是提示词，提示词在载体里 → 换火种不用改角色"]
     M --> R1["规划者：只输出步骤，不许执行"]
     M --> R2["执行者：只做当前这一步"]
@@ -525,8 +525,8 @@ flowchart TB
 ## 图 15 · 自我改进闭环（能改的和不能改的）
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     B["记基线<br/>同一批问题上的成功率"] --> C["改一处<br/>提示词 / 工具 / 流程"]
     C --> A["跑 A/B 对比"]
     A --> D{"效果更好"}
@@ -558,8 +558,8 @@ flowchart LR
 ## 图 16 · 全局工作空间（公共黑板 · 实际落地在 core/central/）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph BOARD["公共黑板 —— core/central/"]
         ST["中央状态<br/>各模块写自己的命名空间，不覆盖别人的"]
         EV["事件总线<br/>logs/central/events.jsonl"]
@@ -588,8 +588,8 @@ flowchart TB
 ## 图 17 · 小脑定位（感官 + 记忆索引器官 · 空间 v2）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 360, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     IN["用户说的话"] --> E1["入口：转向量<br/>core/embedder.py"]
     E1 --> STORE["记忆库<br/>logs/xiaojiao_memory_vec.jsonl"]
     Q["用户问话"] --> E2["出口：转向量<br/>core/embedder.py"]
@@ -626,8 +626,8 @@ flowchart TB
 ## 图 18 · 意图理解交给模型（载体给信息，模型做判断）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     U["用户输入"] --> FUSE{"含 全部 / 那个 / 这个 / 继续<br/>且自身没有明确对象"}
     FUSE -->|是| MERGE["上下文融合：从最近几轮 history 找指代对象"]
     MERGE -->|找到| FULL["补全成完整请求"]
@@ -659,8 +659,8 @@ flowchart TB
 ## 图 19 · 并发与状态一致性
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph FG["前台主流程（用户对话）—— 优先，绝不被后台卡住"]
         M1["agent_run：记忆 → 检索 → 大脑 → 学习"]
     end
@@ -694,8 +694,8 @@ flowchart TB
 ## 图 20 · 可观测性（四个层次 · 现状如实标）
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     O["目标：知道系统此刻在发生什么"]
     O --> L1["1. 日志<br/><b>已落地</b><br/>logs/*.jsonl：思维流 / 健康 / 世界 / 中央事件 / 自主性"]
     O --> L2["2. 指标<br/><b>部分落地</b><br/>插件侧有熔断计数；模块侧的调用次数 / 成功率 / 平均延迟 无统一采集口"]

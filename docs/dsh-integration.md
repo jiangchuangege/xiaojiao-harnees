@@ -23,8 +23,8 @@ DSH 的请求经 `/v1` 进入小焦的对话主循环，由小焦自己注入人
 再交给本地大脑推理。图中红色节点标出接口的边界：请求方传入的 `tools` 字段不参与调用。
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph HOST["DeepSeek Harness 宿主"]
         UI["DSH 界面与模型选择"]
         PLUG["DSH 社区插件"]

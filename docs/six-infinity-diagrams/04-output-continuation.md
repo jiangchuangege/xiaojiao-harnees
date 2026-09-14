@@ -15,8 +15,8 @@
 ## 1. 图 4 · 续写与合并的控制流
 
 ```mermaid
-flowchart TB
     %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     T["用户任务<br/>写一篇 3000 字的介绍"]
     P1["parse_target_chars 解析目标字数<br/>3000 字 / 5 万字 / 两万字 / 20000 words"]
     P2{"needs_continuation<br/>要长文吗？默认门槛 800 字"}

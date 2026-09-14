@@ -185,8 +185,8 @@ flowchart TB
 **图 2 · 安装器分级判定流程**
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph CHECK["① 环境体检"]
         direction TB
         START(["双击 一键安装.bat 或 python install_all.py"])
@@ -297,8 +297,8 @@ python start_xiaojiao.py
 **图 3 · 多大脑注册与显存调度**
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph PICK["① 意图与调度"]
         direction TB
         A["意图识别与大脑选择"]
@@ -382,8 +382,8 @@ flowchart LR
 **图 4 · 小脑训练数据管线**
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph SRC["① 语料来源"]
         direction TB
         A["LCCC 中文多轮对话语料"]
@@ -574,8 +574,8 @@ npm install -g @tt-a1i/archify-dsh
 **图 5 · 抓取插件工作流程**
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     subgraph INTENT["① 抓取意图识别"]
         direction TB
         A["指令：抓取某网址或下载某文件"]
@@ -704,8 +704,8 @@ python -m pip install "scrapling[fetchers]" markdownify mcp
 **图 6 · N.E.K.O. 猫娘协作与学习通道**
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph NEKO["N.E.K.O.：本地部署的开源项目"]
         direction TB
         APP["桌面客户端<br/>界面与形象"]
@@ -781,8 +781,8 @@ flowchart LR
 **图 7 · 文件与模型互调一览**
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart LR
     subgraph ENTRY["① 入口"]
         direction TB
         U["用户"]

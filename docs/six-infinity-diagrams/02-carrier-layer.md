@@ -15,8 +15,8 @@
 ## 1. 图 2 · 八个职责与它们的落点
 
 ```mermaid
-flowchart TB
     %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
     IN["一次请求进来<br/>agent_run · /api/chat/stream"]
     D["① 任务分解<br/>_detect_intent 规则判意图<br/>split_task 拆指令与内容<br/>parse_target_chars 解析目标字数<br/>needs_continuation 判断是否走长文"]
     A["② 上下文装配<br/>system_for_intent 按意图生成 system<br/>_retrieve_memory 注入相关记忆<br/>_plan_tools 定本轮工具并算 token<br/>_fit_context 装不下就从最老的历史砍"]

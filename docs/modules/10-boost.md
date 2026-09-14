@@ -63,8 +63,8 @@
 说明：七项结构不同，但都走同一条四步公式；缺少第四步，前三步就退化为普通的提示词工程。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart TB
     G["共同公式 结构化 载体维护 模型走一小步 结果存回结构"]
     G --> D1["10.1 元推理模板库 内置 37 种推理类型"]
     G --> D2["10.2 长链因果图 环检测 矛盾检测 回溯"]
@@ -94,8 +94,8 @@ flowchart TB
 说明：按顺序逐项试探，命中即返回并结束；全部不命中时返回 `kind` 为 `none`，不注入任何内容。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart TB
     Q["用户提问"] --> G1{"长度小于 4"}
     G1 -->|"是"| NONE["返回 none 不注入"]
     G1 -->|"否"| S1{"跨域信号 或 要多份风格 或 上千字长文"}
@@ -126,8 +126,8 @@ flowchart TB
 说明：图由载体维护，模型每轮只补相邻的一步；撤回一个节点时，其下游一并标记失效。
 
 ```mermaid
-flowchart LR
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart LR
     A["因 销量下滑"] --> B["因 竞品降价"]
     B --> C["果 用户流失"]
     C --> D["结论 需要调价"]
@@ -148,8 +148,8 @@ flowchart LR
 说明：生成之前把已登记实体注入提示词，生成之后再校验文本，两次使用同一张表。
 
 ```mermaid
-flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
+flowchart TB
     T["已有文本"] --> EX["extract 抽实体与关系"]
     EX --> TB["EntityTable 人名 地名 时间 物件"]
     EX --> RG["RelationGraph 关系三元组"]
