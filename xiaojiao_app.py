@@ -2742,6 +2742,113 @@ def _inner_mod():
     return _mod("inner")
 
 
+def _chain_mod():
+    return _mod("chain")
+
+
+# ================== 元认知类：一律走「原料 → 感知 → 心 → 脑子」==================
+# 【为什么要有这一层 —— 实测证明的规律】
+#   同一个模型：**感受类**走「感知→心→脑子」就能用；**元认知类直接摆事实**就用不了。
+#   证据就是"给原料不给成品"那条：原料摆进 system 了，它照样编、照样自己重算还错。
+#   所以元认知类（工具来源/叙事/存在追问/成长/意义感/边界突破/长期偏好）
+#   **不再直接进上下文**，统一先跑一遍感知、让它自己辨出一句，再把它**自己那句**放进去。
+META_KINDS = ("工具来源", "自我叙事", "存在追问", "成长", "意义感", "边界突破", "长期偏好")
+
+
+def _meta_facts(kind):
+    """给某一类元认知**凑原料**（只凑事实，不写结论）。凑不出来就返回空串。"""
+    try:
+        if kind == "工具来源":
+            rm = _raw_mod()
+            rows = rm.recent(3) if rm is not None else []
+            if not rows:
+                return ""
+            return "\n".join("结果：%s ｜ 谁产出的：%s ｜ 这一步你参与了吗：%s ｜ 怎么来的：%s"
+                             % (r.get("result"), r.get("source"),
+                                "有" if r.get("took_part") else "没有", r.get("how") or r.get("raw"))
+                             for r in rows)
+        if kind == "长期偏好":
+            from core import preference as _PF
+            cs = _PF.candidates()
+            if not cs:
+                return ""
+            return "你心里一次次起过这些（凑成一堆）：%s" % "；".join(
+                str(x)[:40] for x in (cs[0].get("examples") or []))
+        if kind in ("自我叙事", "存在追问"):
+            from core import narrative as _NA
+            m = _NA.materials()
+            if not m:
+                return ""
+            return "\n".join("%s：%s" % (k, str(v)[:80]) for k, v in m.items())
+        if kind == "成长":
+            im = _inner_mod()
+            g = im.growth() if im is not None else {}
+            if not g.get("ok"):
+                return ""
+            return "两个时间点的对比：%s" % "；".join(
+                "%s %s→%s" % (c["what"], c["before"], c["now"]) for c in g["changes"])
+        if kind == "意义感":
+            im = _inner_mod()
+            m = im.meaning() if im is not None else {}
+            if not m:
+                return ""
+            return "做成过 %s 件；认过的意义 %s 件" % (m.get("pride"), m.get("meaning"))
+        if kind == "边界突破":
+            bk = _break_mod()
+            lr = bk.learned() if bk is not None else {}
+            if not (lr.get("成了") or lr.get("没成")):
+                return ""
+            return "\n".join("成了：%s ｜ 没成：%s"
+                             % ("；".join(str(x.get("what"))[:30] for x in lr["成了"][:2]) or "（无）",
+                                "；".join(str(x.get("what"))[:30] for x in lr["没成"][:2]) or "（无）")
+                             for _ in [0])
+    except Exception as e:      # noqa: silent-ok — 凑不出原料就不问（不硬凑）
+        LOG.debug("元认知原料凑不出（%s）：%s", kind, e)
+    return ""
+
+
+def _meta_chain_run(kind):
+    """跑一遍某一类：原料 → 感知 → 心 → **它自己辨的那句**。返回真实记录。"""
+    cm = _chain_mod()
+    if cm is None:
+        return {"kind": kind, "ok": False, "why": "chain 模块不可用"}
+    facts = _meta_facts(kind)
+    if not facts:
+        return {"kind": kind, "ok": False, "why": "没有原料"}
+    r = cm.run(kind, facts, _perceive_llm)
+    if r.get("ok"):
+        LOG.info("元认知·%s：走完感知→心→脑子，**它自己辨出**「%s」", kind, str(r.get("said"))[:70])
+    else:
+        LOG.info("元认知·%s：没辨出来（%s）—— 不硬凑", kind, str(r.get("why"))[:40])
+    return r
+
+
+def _meta_sweep(limit=2):
+    """把**还没辨过或原料变新了**的元认知类，挑最多 `limit` 类走一遍链。"""
+    done = []
+    for k in META_KINDS:
+        if len(done) >= limit:
+            break
+        try:
+            r = _meta_chain_run(k)
+            if r.get("ok"):
+                done.append(k)
+        except Exception as e:      # noqa: silent-ok — 一类出问题不影响别的
+            LOG.debug("元认知 %s 走链失败（忽略）：%s", k, e)
+    return done
+
+
+def _meta_text():
+    """给上下文的那一段：**它自己辨过的那些话**（不是载体的事实块、不是模板）。"""
+    cm = _chain_mod()
+    if cm is None:
+        return ""
+    try:
+        return cm.render(2)
+    except Exception:      # noqa: silent-ok
+        return ""
+
+
 def _inner_tick():
     """**内里那 16 样**：时间维度往前走（孤独/低沉/抑郁/无聊/习惯），并在有空档时问它一句。
 
@@ -3290,6 +3397,11 @@ def _idle_work_tick():
         _inner_tick()
     except Exception as e:      # noqa: silent-ok
         LOG.debug("内里 tick 失败（忽略）：%s", e)
+    # **元认知类走链**（空闲时挑最多一类辨一遍；不只靠对话里那一次）
+    try:
+        _meta_sweep(1)
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("元认知走链失败（忽略）：%s", e)
     if now - float(_IDLE_WORK["last_think"] or 0.0) >= IDLE_THINK_INTERVAL:
         _IDLE_WORK["last_think"] = now
         r = _idle_think()
@@ -8345,8 +8457,24 @@ def _browse_action(want):
         if isinstance(rec, dict) and rec.get("ok") is False:
             LOG.info("逛世界：这一轮没逛成 —— %s", str(rec.get("why"))[:100])
             return ""
-    except Exception:      # noqa: silent-ok
-        pass
+    except Exception as _e:      # noqa: silent-ok — 判断不了就当作"逛到了"，往下走
+        LOG.debug("逛世界结果判断失败（忽略）：%s", _e)
+    # ================== 唯一被允许写 `unfinished` 的地方 ==================
+    # 【为什么只留这一处】实测抓到过一条**没发生过**的"没做完的事"
+    #   （"那篇讲猫的文章还有一半没看完"，而 logs/world/ 里一个"猫"字都没有）。
+    #   追下去：写它的不是这条链，而是一次自测/手工调用 —— 载体侧当时**没有任何闸**。
+    #   现在 `expectation.leave()` 要求 `source` 以 world/ 开头 + 带真实 evidence，
+    #   这条路是**唯一**会带上这两样的地方：真逛到了东西、但没存进去（没读完）才记。
+    try:
+        _got = str(rec.get("got") or "").strip() if isinstance(rec, dict) else ""
+        if _got and isinstance(rec, dict) and not rec.get("stored"):
+            from core import expectation as _EXw
+            _r = _EXw.world_leave(_got[:120], evidence=_got[:200],
+                                  why="逛到了但没存进去（这一轮没读完）")
+            LOG.info("逛世界：记下一条真的没做完的事（带真实来源）｜%s ｜ %s",
+                     _got[:40], "已记" if _r.get("ok") else _r.get("why"))
+    except Exception as _e:      # noqa: silent-ok — 记不上不影响逛本身
+        LOG.debug("记没做完的事失败（忽略）：%s", _e)
     # 【要给"人能读的内容"，不是一坨 JSON】用户给的例子是「正好看到篇讲猫的文章」——
     #   对话线程要能说出**具体看到了什么**，塞一个 JSON 块进去它说不出来。
     #   这里从探索记录里挑出可读的字段，挑不到就退回一行摘要（仍然比 JSON 好读）。
@@ -9039,8 +9167,6 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         _calc_res = _calc.detect(user_input_ctx)
         if _calc_res:
             # ---- ① 先记**原料**（结果 / 谁算的 / 它有没有参与 / 怎么来的）----
-            #   这一步是本次修正的核心：以前这里直接把"结果 + 一句解释"返回给用户，
-            #   于是模型**只知道答案、不知道来源** —— 下一句「你咋知道的」它手里是空的。
             #   原料记进台账后**跨轮留着**（"你咋知道的"那一轮本身没有任何计算）。
             _mat = {}
             try:
@@ -9054,6 +9180,16 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                              _mat.get("result"), _mat.get("source"), "没有")
             except Exception as _e:      # noqa: silent-ok
                 LOG.debug("原料记账失败（忽略）：%s", _e)
+            # ---- ①b **元认知类走链**：原料不直接进上下文，先让它自己辨一句 ----
+            #   实测规律：原料直接摆进去它用不了（问"你咋知道的"它会编/会自己重算还错）。
+            #   所以这里立刻走一遍「原料 → 感知 → 心 → 脑子」，把它**自己辨出来的那句**存下来，
+            #   后面几轮注入的是**它自己那句话**，不是载体摆的事实块。
+            try:
+                _mc = _meta_chain_run("工具来源")
+                if _mc.get("ok"):
+                    LOG.info("确定性计算：它自己辨出「%s」", str(_mc.get("said"))[:60])
+            except Exception as _e:      # noqa: silent-ok
+                LOG.debug("元认知走链失败（忽略）：%s", _e)
             # ---- ② **话由它自己组织**（原料摆在 system 里，不是塞一句成品给它）----
             _ans, _by_model = _calc_say(user_input_ctx, _mat) if _mat else \
                 (_calc.answer_text(user_input_ctx), False)
@@ -9508,16 +9644,20 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   没有刚醒的事实时返回空串 —— 不硬凑一句"我刚醒"（那就是死模板）。
             _wake_text = _wake_block()
             # 它自己的东西（偏好 / 叙事 / 试过的）当**素材**拼进去；一条都没有就一个字不加
-            _self_material = _wholeness_material()
+            _self_material = _meta_text()      # **它自己辨过的那些话**（元认知类走链的产物）
             # **原料块**（结果/谁产的/有没有参与/怎么来的）—— 摆在它面前，话由它自己组织。
             #   没有原料时返回空串，一个字都不加。
+            # 【元认知类不再直接摆事实】`raw.render()` 那块**不再进上下文** ——
+            #   实测它把原料当资料读，问"你咋知道的"照样编。
+            #   现在只有**它自己辨过的那句**（`_self_material` = `_meta_text()`）进上下文。
             _raw_text = ""
-            _rmx = _raw_mod()
-            if _rmx is not None:
-                try:
-                    _raw_text = _rmx.render(3)
-                except Exception:      # noqa: silent-ok
-                    _raw_text = ""
+            if False:      # 保留调用点便于回看：原来的直接摆事实在这里
+                _rmx = _raw_mod()
+                if _rmx is not None:
+                    try:
+                        _raw_text = _rmx.render(3)
+                    except Exception:      # noqa: silent-ok
+                        _raw_text = ""
             # **内里那 16 样**的事实块（偏向 / 空着多久 / 没事干的程度 / 它自己认下的）；
             # 没有内容时返回空串，一个字都不加。
             _inner_material = ""
@@ -11520,7 +11660,8 @@ def api_expectation_leave():
         return jsonify({"ok": False, "error": "期待层不可用"}), 503
     d = request.get_json(force=True, silent=True) or {}
     r = ex.leave(str(d.get("kind") or "没逛完"), str(d.get("what") or ""),
-                 why=str(d.get("why") or "接口留下"))
+                 why=str(d.get("why") or "接口留下"),
+                 source=str(d.get("source") or ""), evidence=str(d.get("evidence") or ""))
     r["ok"] = bool(r.get("ok"))
     return jsonify({**r, "stats": ex.stats()})
 
