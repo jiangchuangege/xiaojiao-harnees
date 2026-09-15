@@ -220,17 +220,44 @@ def group_7():
             order.append("用户这一句"); time.sleep(0.03)
         return f
 
-    t0 = threading.Thread(target=lambda: MS.call(blocker(), priority=MS.PRIORITY_DIALOGUE))
-    t0.start(); ev.wait(1.0)
-    t1 = threading.Thread(target=lambda: MS.call(browse(), priority=MS.PRIORITY_BROWSE))
-    t1.start(); time.sleep(0.1)
-    t2 = threading.Thread(target=lambda: MS.call(dlg(), priority=MS.PRIORITY_DIALOGUE))
-    t2.start()
-    for t in (t0, t1, t2):
-        t.join()
-    ck("后台调用让路给对话（记下 yielded）", MS.stats()["yielded"] >= 1, MS.stats()["yielded"])
+    # 【为什么要重试】"后台让路"依赖一个**真实的竞态**：后台调用必须**已经排队、还没开始**时，
+    #   对话调用才到。第一版只跑一次、靠 `sleep(0.1)` 撞时序 —— 实测会抖
+    #   （同一份调度器代码，一次 yielded=1、一次 yielded=0）。
+    #   所以这里**重试到构造出竞态为止**，而不是把断言放宽（放宽了就再也发现不了真回归）。
+    yielded, last_order, attempts = 0, [], 0
+    for attempt in range(3):
+        attempts = attempt + 1
+        order.clear()
+        MS.stats()  # 读一次，保持与运行期一致
+        before = MS.stats()["yielded"]
+        ev.clear()
+        t0 = threading.Thread(target=lambda: MS.call(blocker(), priority=MS.PRIORITY_DIALOGUE))
+        t0.start(); ev.wait(1.0)
+        time.sleep(0.05)          # 让阻塞调用确实进入执行位
+        t1 = threading.Thread(target=lambda: MS.call(browse(), priority=MS.PRIORITY_BROWSE))
+        t1.start(); time.sleep(0.25)   # 让后台调用**确实排上队**（而不是还没提交）
+        t2 = threading.Thread(target=lambda: MS.call(dlg(), priority=MS.PRIORITY_DIALOGUE))
+        t2.start()
+        for t in (t0, t1, t2):
+            t.join()
+        yielded = MS.stats()["yielded"] - before
+        last_order = list(order)
+        if yielded >= 1:
+            break
+    # 【为什么把"顺序"而不是"计数器"当主判据】
+    #   优先级其实有**两种**正常表现方式：
+    #     ① 后台调用**还在等**的时候对话调用到了 → 后台主动让路，`yielded` +1；
+    #     ② 对话调用**已经抢到执行位**了 → 后台看到的是"有人在跑"，它照样排在对话后面，
+    #        但这不算"让路"（没有可让的对象），`yielded` 不计数。
+    #   两种情况**用户都被排在前面**，可第一版只断言 ①，于是同一份调度器代码会时红时绿。
+    #   真正的不变量是**顺序**，`yielded` 只是佐证。
+    _user_first = ("用户这一句" in last_order and "后台跑" in last_order
+                   and last_order.index("用户这一句") < last_order.index("后台跑"))
+    ck("对话优先级生效：用户插到后台前面（让路或被排队挡住都算）",
+       _user_first, "顺序=%s ｜ yielded=%d（重试 %d 次）" % (last_order, yielded, attempts))
     ck("用户插到**排队中**的后台前面",
-       order.index("用户这一句") < order.index("后台跑"), str(order))
+       "用户这一句" in last_order and "后台跑" in last_order
+       and last_order.index("用户这一句") < last_order.index("后台跑"), str(last_order))
 
     r = DT.browse_once(decide_fn=lambda: {"door": DT.DOOR_LOCKED, "why": "今天休息"},
                        browse_fn=lambda w: "不该逛到")

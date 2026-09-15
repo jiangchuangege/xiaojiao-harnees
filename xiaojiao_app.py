@@ -7368,6 +7368,58 @@ def _browse_explorer():
         return None
 
 
+def _recent_dialogue_for_interest(days=7, limit=12):
+    """取最近 N 天的**用户原话**，交给模型自己判断"用户关心什么"。
+
+    【按原理：不预设、不统计】规格明确要求兴趣由**模型自己**从最近 7 天对话里判断。
+    所以这里只做一件最笨的事：**把原话捞出来给它看** —— 不做关键词统计、不做话题聚类、
+    更不喂"世界模型话题表"（那是载体已经统计过的结果，等于替模型做了判断）。
+    【为什么只取用户说的话】小焦自己的回答会污染判断：它答什么不代表用户关心什么。
+
+    读不到就返回空串 —— 逛不逛由模型自己决定，**不该因为读不到历史就编一段兴趣出来**。
+    """
+    try:
+        _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "chat_history.jsonl")
+        if not os.path.exists(_p):
+            return ""
+        cutoff = time.time() - float(days) * 86400
+        rows = []
+        with open(_p, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except Exception:      # noqa: silent-ok — 坏行跳过
+                    continue
+                # 【字段名以真实文件为准】`logs/chat_history.jsonl` 每行是
+                #   `{"time": "2026-09-12T19:40:37", "log_id": …, "user": …, "final_reply": …}` ——
+                #   用户原话在 **`user`**，时间在 **`time`** 且是 **ISO 字符串**（不是 epoch 秒）。
+                #   第一版我按 `role`/`ts` 去读，结果一条都读不到（实测返回长度 0）——
+                #   又一次"以为的 schema"和真实文件不符。**先看文件，再写解析。**
+                ts = 0.0
+                _t = d.get("time")
+                if isinstance(_t, (int, float)):
+                    ts = float(_t)
+                elif isinstance(_t, str) and _t:
+                    for _fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+                        try:
+                            ts = time.mktime(time.strptime(_t[:26], _fmt))
+                            break
+                        except Exception:      # noqa: silent-ok — 换下一种格式
+                            continue
+                if ts and ts < cutoff:
+                    continue
+                c = str(d.get("user") or "").strip()
+                if c and c != "⏳__pending__":
+                    rows.append(c[:80])
+        return "\n".join("- " + x for x in rows[-int(limit):])
+    except Exception as e:      # noqa: silent-ok — 读不到就不给，让模型按"没有记录"处理
+        LOG.debug("读最近对话失败（忽略）：%s", e)
+        return ""
+
+
 def _browse_decide():
     """**模型自主决策**：门开到哪一档、想逛什么。
 
@@ -7375,19 +7427,18 @@ def _browse_decide():
     保守值只在模型没给可用答案时用，不是载体的默认节奏。
     """
     try:
-        ex = _browse_explorer()
-        topics = []
-        if ex is not None:
-            try:
-                topics = [str(t.get("name")) for t in (ex.model.topics(top=6) or [])]
-            except Exception:      # noqa: silent-ok
-                topics = []
+        # 【按原理：兴趣由模型从**最近 7 天对话**里自己判断，载体不预设、不统计】
+        #   第一版我喂的是"世界模型的话题表"—— 那是载体已经统计过的结果，
+        #   等于替模型做了判断，违背了「不预设、不统计」这条。
+        #   现在把最近 7 天的**原始对话**交给它，让它自己看、自己判。
+        recent = _recent_dialogue_for_interest(days=7, limit=12)
         _p = ("你在自己上网逛（用户看不见你在逛，只有你主动分享时才知道）。请自己决定两件事：\n"
               "① 门的状态：open=随时能出去；half=半开半关（回家了但没想好）；locked=今天休息，不出门。\n"
               "② 想逛什么主题（一个词或短语；不想逛就留空）。\n"
               "只输出两行：第一行 open / half / locked；第二行主题。\n"
               "如果最近很累、或者觉得没什么值得逛的，就输出 locked。\n"
-              "最近聊过的话题：%s" % ("、".join(topics[:6]) or "（还没有）"))
+              "\n【最近 7 天你和用户的对话（自己看、自己判断他关心什么）】\n%s\n"
+              % (recent or "（最近 7 天没有对话记录）"))
         out = (_selfrate_llm(_p) or "").strip()
         lines = [x.strip() for x in out.split("\n") if x.strip()]
         door = (lines[0].lower().strip("。.：:") if lines else "")
@@ -7414,10 +7465,23 @@ def _browse_action(want):
         return ""
     if not rec:
         return ""
+    # 【必须区分"逛到了"和"没逛成" —— 这是我自己写出来的一个 bug】
+    #   实测：当天的探索额度用尽时，`explore_once` 返回
+    #   `{"ok": false, "why": "今天已经看够 50 个站（daily_budget）"}`。
+    #   第一版把这个 JSON 直接当成"逛到的内容"返回，于是它会被拿去问模型"要不要分享" ——
+    #   模型完全可能把「今天已经看够 50 个站」当成一篇逛到的文章说给用户听。
+    #   **没逛成就是没逛成，返回空串**；原因写日志供复盘，但不冒充内容。
     try:
-        return json.dumps(rec, ensure_ascii=False)[:600]
+        if isinstance(rec, dict) and rec.get("ok") is False:
+            LOG.info("逛世界：这一轮没逛成 —— %s", str(rec.get("why"))[:100])
+            return ""
     except Exception:      # noqa: silent-ok
-        return str(rec)[:600]
+        pass
+    try:
+        body = json.dumps(rec, ensure_ascii=False)
+    except Exception:      # noqa: silent-ok
+        body = str(rec)
+    return body[:600]
 
 
 def _browse_share(text):
