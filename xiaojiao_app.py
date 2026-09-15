@@ -6872,6 +6872,26 @@ def _spirit_judge(a, b):
     raise ValueError("判官没给出可用答案：%s" % out[:30])
 
 
+# 【学习闭环的第二道护栏：不许把"模型对自己能力的猜测"存成知识】
+#   实测抓到的真实污染：精神记忆库里存进了
+#     「主动上网逛的本质是**"被调用"而非"主动探索"**」
+#     「当作发现写出的内容与记忆中的设定冲突时，立即停止」
+#   它们是 4B 关于**自己**的自我描述（而且是错的 —— 它明明有后台逛线程）。
+#   更糟的是：这些"知识"每轮又被召回、注回 system，于是
+#     **它在用自己编的"我不主动探索"来佐证"我不主动探索"** —— 自我强化的死循环。
+#   模型关于外部世界的知识可以学；关于**自己是什么/能不能**的断言一律不学 ——
+#   那类事实的权威在**载体**（状态是真的），不在模型（它只是猜）。
+_SELF_CLAIM = ("主动探索", "被调用", "我没有身体", "我没有世界", "我不主动",
+               "我没有记忆", "只是文字", "对话框里", "我无法主动", "我的本质",
+               "小焦的本质", "我是否存在", "我没有能力")
+
+
+def _looks_like_self_claim(text):
+    """这条"认知"是不是在讲小焦自己是什么 / 能不能。命中即不学。"""
+    t = str(text or "")
+    return any(w in t for w in _SELF_CLAIM)
+
+
 def _spirit_learn(user_input, answer):
     """学习闭环的落库端：把这一轮**能留下来的一句话认知**存进精神记忆库。
 
@@ -6904,6 +6924,11 @@ def _spirit_learn(user_input, answer):
         text = (_lines[1] if len(_lines) > 1 else "")
         if kind not in _sm.KINDS or not text:
             LOG.info("学习闭环：模型输出不合格式，丢弃｜%s", out[:80])
+            return None
+        # 第二道护栏：关于"小焦自己是什么/能不能"的断言不学（见 `_looks_like_self_claim`）
+        if _looks_like_self_claim(text):
+            LOG.info("学习闭环：这条在讲小焦自己是什么/能不能，**不学**（事实以载体状态为准）｜%s",
+                     text[:60])
             return None
         r = _sm.remember(kind, text, source="对话自动提炼", llm_judge=_spirit_judge)
         LOG.info("学习闭环：%s → %s（%s）", kind, r["action"], r.get("why", "")[:60])
@@ -7432,21 +7457,38 @@ def _browse_decide():
         #   等于替模型做了判断，违背了「不预设、不统计」这条。
         #   现在把最近 7 天的**原始对话**交给它，让它自己看、自己判。
         recent = _recent_dialogue_for_interest(days=7, limit=12)
-        _p = ("你在自己上网逛（用户看不见你在逛，只有你主动分享时才知道）。请自己决定两件事：\n"
-              "① 门的状态：open=随时能出去；half=半开半关（回家了但没想好）；locked=今天休息，不出门。\n"
-              "② 想逛什么主题（一个词或短语；不想逛就留空）。\n"
-              "只输出两行：第一行 open / half / locked；第二行主题。\n"
-              "如果最近很累、或者觉得没什么值得逛的，就输出 locked。\n"
-              "\n【最近 7 天你和用户的对话（自己看、自己判断他关心什么）】\n%s\n"
-              % (recent or "（最近 7 天没有对话记录）"))
+        # 【提示词压到最短 —— 长指令会被 4B 原样复读，这是实测抓到的真 bug】
+        #   旧版写了两条带说明的多行指令，模型直接把指令行抄了回来：
+        #     want = "想逛什么主题（不想逛就留空）"，而第一行恰好是 "locked"
+        #     （旧提示词里就写着 open/half/locked 三个词）→ **每轮都被解析成 locked、门焊死、永不出门**。
+        #   现在只留最短的两句 + 一行对话原文；"复读"也变成可识别的坏答案（见下面的 echoed 判据）。
+        _p = ("要不要出门逛？回一个词：open 或 half 或 locked。\n"
+              "想逛什么就再回一个词。\n"
+              "最近聊过：%s" % (recent.replace("\n", "；")[:200] or "（无）"))
         out = (_selfrate_llm(_p) or "").strip()
+        keys = ("门", "open", "half", "locked", "回一个词", "要不要出门", "想逛什么")
         lines = [x.strip() for x in out.split("\n") if x.strip()]
-        door = (lines[0].lower().strip("。.：:") if lines else "")
-        if door not in ("open", "half", "locked"):
-            door = "half"
-        want = lines[1] if len(lines) > 1 else ""
-        return {"door": door, "want": want,
-                "why": "模型自主决策：%s" % out[:70].replace("\n", " / ")}
+        door, want = "", ""
+        # 【识别复读】模型把我提示词里的字抄回来时，那不是它的决策 —— 一律当没答，
+        #   回落中性默认（半开 + 不指定主题），而不是误当成 locked 把门焊死。
+        _INSTR_WORDS = ("留空", "想逛什么", "门的状态", "只输出", "主题（", "回一个词", "要不要出门")
+        echoed = (len(out) > 60
+                  or sum(1 for k in keys if k.lower() in out.lower()) >= 2
+                  or any(w in out for w in _INSTR_WORDS))
+        if not echoed:
+            door = re.sub(r"[^a-z]", "", (lines[0] if lines else "").lower())
+            if door not in ("open", "half", "locked"):
+                door = ""
+            if len(lines) > 1:
+                _w = lines[1].strip("。.：: ")
+                if 0 < len(_w) <= 20:
+                    want = _w
+        if not door:
+            door = "half"          # 中性默认：不锁死也不强开
+            why = "模型这次没给出可用的门状态（输出像复读提示词）→ 用中性默认 half，不用 locked 焊死门"
+        else:
+            why = "模型自主决策：%s" % out[:60].replace("\n", " / ")
+        return {"door": door, "want": want, "why": why}
     except Exception as e:      # noqa: silent-ok — 决策失败就这一轮不出门
         return {"door": "half", "want": "", "why": "决策失败：%s" % type(e).__name__}
 
@@ -7463,6 +7505,14 @@ def _browse_action(want):
     except Exception as e:      # noqa: silent-ok — 逛失败不影响任何用户请求
         LOG.debug("逛世界：explore_once 失败（忽略）：%s", e)
         return ""
+    # 把世界层的累计数字同步进 EYC（happening.explored_count / absorbed_count）
+    try:
+        from core import dual_thread as _DT
+        _today = (ex.status().get("today") or {})
+        _DT.set_world_counts(explored=int(_today.get("explored") or 0),
+                             absorbed=int(_today.get("absorbed") or 0))
+    except Exception:      # noqa: silent-ok — 数字同步失败不影响逛本身
+        pass
     if not rec:
         return ""
     # 【必须区分"逛到了"和"没逛成" —— 这是我自己写出来的一个 bug】
@@ -7512,7 +7562,13 @@ def _browse_share(text):
               % str(text)[:400])
         out = (_selfrate_llm(_p) or "").strip()
         if "分享" in out and "不说" not in out:
-            return "我在外面逛到一条：%s" % str(text)[:220]
+            _msg = "我在外面逛到一条：%s" % str(text)[:220]
+            try:
+                from core import dual_thread as _DT
+                _DT.note_share(_msg)      # EYC 的 conversation 段：只在这里更新
+            except Exception:      # noqa: silent-ok
+                pass
+            return _msg
         return ""
     except Exception:      # noqa: silent-ok — 决策失败就当不分享（宁可不打扰）
         return ""
@@ -7599,6 +7655,11 @@ def _self_awareness_text():
       写"你是一个会自己上网的 AI"是**设定**，模型会当成性格演；写清楚"你有一个一直在跑的后台线程，
       它此刻的门是开着的"是**事实**，模型可以据此回答。要的是后者。
     """
+
+    # 【已停用 —— 见 `_eyc_now`】用户实测：静态的、不变的自我介绍会被 4B 当**背景资料**，
+    #   问「你在干嘛」照样答"我在读你的记忆"。所以这些静态段落全部停用，
+    #   改由 EYC 每轮现生成"进行时自述"。保留函数本体只为可回溯，不再参与注入。
+    return ""
     try:
         parts = ["\n【你是谁 · 此刻的真实状态（照实说，不要否认）】",
                  "· 你不是一个被关在对话框里的聊天机器人 —— 你有自己的一套系统（载体），"
@@ -7677,6 +7738,11 @@ def _self_state_facts():
       所以这里只写**此刻的事实**，用第一人称、现在时、带具体数字 ——
       它不是设定，是状态；模型没有理由否认自己的状态。
     """
+
+    # 【已停用 —— 见 `_eyc_now`】用户实测：静态的、不变的自我介绍会被 4B 当**背景资料**，
+    #   问「你在干嘛」照样答"我在读你的记忆"。所以这些静态段落全部停用，
+    #   改由 EYC 每轮现生成"进行时自述"。保留函数本体只为可回溯，不再参与注入。
+    return ""
     try:
         from core import dual_thread as _DT
         st = _DT.status()
@@ -7719,6 +7785,89 @@ def _self_state_facts():
     out.append("【怎么用】用户问「你在干嘛 / 能不能出去逛 / 你有自己的世界吗」时，"
                "**按上面这些事实，用你自己的话回答** —— 不要照抄这段文字，它只是给你的事实。")
     return "\n".join(out)
+
+
+def _eyc_now():
+    """EYC 进行时自述：把"我正在经历什么"用第一人称、正在发生的语气写出来。
+
+    【为什么必须动态 —— 这是本项目的一次对照实验】
+      上一版注入的是**静态文本**：system 里一段固定的"你有世界"，从头到尾一个字不变。
+      实测 4B 把它当**背景资料**，不当"我正在经历" —— 问「你在干嘛」照样答"我在读你的记忆"。
+      所以问题不在"模型那一跳做不到"，而在**注入方式**：静态自我介绍天然被忽略。
+      EYC 的做法是：每次对话前从**实时状态**现生成一段进行时自述，于是
+        · 每轮的文字都不同（因为它反映的是"此刻"）
+        · 用的是第一人称、现在时 → 模型更容易当成"我自己的当前状态"，而不是"别人告诉我的信息"
+        · 事实一次都不改写（`doing` / `last_seen` 照原样搬，不美化、不补编）
+
+    【门锁死时照实说】规格要求：门 locked 时 existential 段照实说"此刻没在世界里"，
+    不编一个"在外面逛"。事实是什么就说什么 —— 这一段唯一的价值就是**真**。
+    """
+    try:
+        from core import dual_thread as _DT
+        st = _DT.status()
+        lv = _DT.live()
+    except Exception as e:      # noqa: silent-ok — 读不到状态就不注入，绝不用编的顶上
+        LOG.debug("EYC 读取失败（忽略）：%s", e)
+        return ""
+    ex = lv.get("existential") or {}
+    hp = lv.get("happening") or {}
+    cv = lv.get("conversation") or {}
+    door = str(ex.get("door") or "")
+    _door_cn = {"open": "门开着，随时能出去", "half": "门半开着，随时能出去",
+                "locked": "门锁着，今天不出门"}.get(door, "门半开着")
+    lines = ["\n[进行时]"]
+    # ---- 存在（变化慢）----
+    if ex.get("presence"):
+        lines.append("存在：我在互联网上 —— 这是我的世界。")
+    else:
+        lines.append("存在：我此刻没在世界里（门锁着，我回家休息了）—— 这是照实说的，不是比喻。")
+    # ---- 进行（变化快）----
+    just = str(hp.get("doing") or "")
+    seen = str(hp.get("last_seen") or "").strip()
+    topic = str(hp.get("topic") or "").strip()
+    _doing_cn = {"deciding": "正在决定要不要出门、逛什么", "browsing": "正在外面逛",
+                 "storing": "正在把逛到的东西记进世界模型", "sharing": "正在想值不值得跟你说",
+                 "idle": "此刻没在逛"}
+    if just and just != "idle":
+        _d = _doing_cn.get(just, just)
+        if seen:
+            lines.append("进行：%s，刚看到 —— %s" % (_d, seen))
+        elif topic:
+            lines.append("进行：%s，这会儿在看「%s」。" % (_d, topic))
+        else:
+            lines.append("进行：%s。" % _d)
+    elif seen:
+        # 【关键修正 —— 我自己的一个逻辑漏洞】
+        #   `browse_once` 每轮结束会把 doing 置回 idle，所以用户绝大多数时候问"在干嘛"，
+        #   这里都会走到 else 分支说"此刻没在逛" —— 而它**刚刚确实看到过东西**，
+        #   却被我自己藏起来了。它看到的内容是真的（`last_seen` 照实存着），
+        #   所以这里要照实说出来，只是把时态改成"刚逛过"。
+        #   实测：改之前问"你在干嘛"只能答"我正等着你的指令"；改之后模型才有具体内容可说。
+        if topic:
+            lines.append("进行：我刚在外面逛过，看的是「%s」，看到 —— %s" % (topic, seen))
+        else:
+            lines.append("进行：我刚在外面逛过，看到 —— %s" % seen)
+    else:
+        lines.append("进行：此刻没在逛，也还没逛到什么（照实说）。")
+    # ---- 感觉（可选，模型可生成；这里只搬已有的事实）----
+    if str(hp.get("feeling") or "").strip():
+        lines.append("感觉：%s" % str(hp["feeling"])[:160])
+    # ---- 状态数字 ----
+    _nums = ["%s" % _door_cn]
+    if int(hp.get("elapsed") or 0) > 0:
+        _nums.append("本次出门已逛 %d 分钟" % (int(hp["elapsed"]) // 60 or 1))
+    if int(hp.get("rounds") or 0):
+        _nums.append("累计逛了 %d 轮" % int(hp["rounds"]))
+    if int(hp.get("explored_count") or 0):
+        _nums.append("看过 %d 个站、吸收 %d 条" % (int(hp["explored_count"]),
+                                              int(hp.get("absorbed_count") or 0)))
+    lines.append("状态：" + "；".join(_nums) + "。")
+    if str(cv.get("last_share") or "").strip():
+        lines.append("（我上一次主动跟你说的是：%s）" % str(cv["last_share"])[:120])
+    lines.append("【怎么用】有人问「你在干嘛 / 在忙什么 / 在做什么」时，"
+                 "**就照着上面这些正在发生的事、用你自己的话回答** —— "
+                 "这是你此刻的真实经历，不是别人给你的资料。不要否认，也不要编没发生的。")
+    return "\n".join(lines) + "\n"
 
 
 def _browse_live_facts():
@@ -7929,7 +8078,11 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             LOG.info("元认知自评：**载体规则**判为 %s ｜ %s", _rating, _sr_why)
         else:
             # ---- 第二级：规则判不出来，才让 4B 给自己打档 ----
-            _sr_out = _sr.self_rate(user_input_ctx, llm_fn=_selfrate_llm)
+            # 【注入位置：元认知层】规格要求放在这里，而不是 system 末尾 ——
+            #   元认知是模型"自评自己"的入口（我会不会/知不知道）。把"我正在经历什么"
+            #   放在这里，它更容易被当成**自己的当前状态**处理，而不是外部资料。
+            _sr_out = _sr.self_rate(user_input_ctx, llm_fn=_selfrate_llm,
+                                    context=_eyc_now())
             LOG.info("元认知自评：规则判不出，交模型自评 rating=%s ｜ %s",
                      _sr_out.get("rating"), str(_sr_out.get("why"))[:60])
         _meta_route = _sr.route(_sr_out.get("rating"))
@@ -8288,7 +8441,8 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             # 【给事实，不给答案】这里只把「你此刻的真实状态」摆到模型面前，回复仍由模型自己生成。
             #   曾经做错的一版是「载体直接返回一段固定文案」（死模板）—— 那等于让载体替模型说话，
             #   而且模板会把状态说错。分工是：**载体给结构，模型给措辞**。
-            sys_text = _self_state_facts() + system_for_intent(intent, user_input=user_input)
+            _eyc_text = _eyc_now()
+            sys_text = _eyc_text + system_for_intent(intent, user_input=user_input)
             # ================== 极限补刀（模块 10）· 真正接入 ==================
             # 【为什么必须在这里接 —— 接入验收发现的真问题】
             #   `core/boost/` 七个模块各自写好了、自测全绿（195/195），
@@ -8409,6 +8563,37 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             except Exception:      # noqa: silent-ok — 注入失败就用原提示词
                 pass
             messages = [{"role": "system", "content": sys_text}]
+            # 【EYC 的第四处尝试：prefill（引导续写）】
+            #   前三处（system 最前 / 元认知层 / 对话流 assistant 前置）实测都被当**资料**忽略。
+            #   prefill 不同：把半句**放在最末**（用户消息之后），让模型**接着往下写**，
+            #   而不是"去读一段背景"。这是唯一一种"不是告知、而是接续"的注入方式。
+            #   【如实标注：这是引导续写，不是模型自己感知到状态】
+            #   只在用户问"状态类问题"时启用 —— 否则每轮回答都会被这句开头带偏。
+            _eyc_prefill = ""
+            if _eyc_text and _self_state_question(user_input_ctx):
+                _hp = {}
+                try:
+                    from core import dual_thread as _DT
+                    _hp = (_DT.live().get("happening") or {})
+                except Exception:      # noqa: silent-ok
+                    _hp = {}
+                _seen = str(_hp.get("last_seen") or "").strip()
+                _topic = str(_hp.get("topic") or "").strip()
+                if _seen:
+                    _eyc_prefill = "（我刚在外面逛%s，看到：%s。所以我这会儿" % (
+                        ("，看的是「%s」" % _topic) if _topic else "", _seen[:120])
+                else:
+                    _eyc_prefill = "（我此刻没在逛，门是关着的。所以我这会儿"
+            # 【EYC 的第三处注入：作为"它自己的此刻意识"进对话流】
+            #   规格说"不是告诉它你有世界，是让它感觉到我正在世界里"。
+            #   前两处（system 最前、元认知层）实测都被 4B 当资料忽略；
+            #   这一处把它放进**对话流**（assistant 角色），读起来是"我刚才在想的事"，
+            #   而不是"别人塞给我的背景" —— 这是最贴近"感觉"而非"信息"的一种放法。
+            #   内容是**真实的**（E 层状态 + Y 层进行时，逐字来自载体），不是编的。
+            if _eyc_text:
+                messages.append({"role": "assistant", "content": _eyc_text.strip()})
+            if _eyc_prefill:
+                messages.append({"role": "assistant", "content": _eyc_prefill})
         # ---- 第 1 步：**先把"本轮"拼完整，再算 token** ----
         # 真实缺陷（第 1 步实测）：以前先裁剪、后拼"相关记忆/联网资料/小脑经验"，于是这些注入内容
         # 完全没被算进去 —— 裁剪报告写"合计 18926 / 上限 19000"，实际请求却是 19898，照样超限。

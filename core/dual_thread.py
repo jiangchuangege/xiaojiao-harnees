@@ -67,43 +67,83 @@ _STATE = {
 
 
 
-# ================== 逛线程的**实时上下文**（4D 的关键一环）==================
-# 【为什么需要它 —— 用户给的测试就是这条】
-#   规格里的例子：用户发消息"在干嘛呢" → 对话线程读到用户消息 + 逛线程此刻在看的东西
-#   → 调模型生成"哎我在外面逛呢，正好看到篇讲猫的文章，你要不要听听？"。
-#   注意这里有两样东西：
-#     ① **它主动写的 share**（电话通道）—— 只在它"想跟你说"的时候才有；
-#     ② **它此刻在看什么**（本结构）—— **一直都有**，不需要它主动开口。
-#   第一版只做了 ①，于是用户问"在干嘛"时，只要它没主动分享过，对话线程就一无所知。
-#   补上 ② 之后，"它正在看什么"才成为对话线程**随时可读**的事实。
+# ================== EYC 进行时状态（升级版 _LIVE）==================
+# 【为什么要升级 —— 用户指出的真问题】
+#   上一版注入的是**静态文本**：system 里一段固定的"你有世界"，从头到尾不变。
+#   4B 把它当"背景资料"，不当"我正在经历" —— 所以问"你在干嘛"，它照样答"我在读你的记忆"。
+#   结论不是"模型侧那一跳做不到"，而是**注入方式错了**：静态告知 天然被当资料忽略。
 #
-# 【边界：只给事实，不给答案】这里存的是"它此刻在看什么"这种客观状态，
-#   怎么把这件事说给人听，仍然由模型自己组织语言（见 xiaojiao_app._browse_live_facts）。
+# 【EYC：把"静态告知"改成"动态感受"】
+#   E = Existential（存在）：载体持续让模型感受到"我在世界里"。不是一句告知，是一个持续状态信号。
+#   H = Happening（进行时）：载体持续同步"我正在做什么、看到什么、感受到什么"。实时变化，不是快照。
+#   C = Conversation（对话）：这些进行时状态通过电话通道流向对话线程；用户找它时，
+#                             它带着"我正在经历"的真实状态说话。
+#   字段更新频率刻意不同：
+#     · `existential` 变化慢 —— 门开关时才更新
+#     · `happening`   变化快 —— 每逛一步都更新
+#     · `conversation` 只在它主动 share 时更新
 _LIVE = {
-    "doing": "idle",      # idle / deciding / browsing / storing / sharing
-    "topic": "",          # 此刻在看什么主题
-    "last_seen": "",      # 此刻看到的具体内容
+    "existential": {"world": "互联网", "door": DOOR_HALF, "presence": False},
+    "happening": {"doing": "", "topic": "", "feeling": "", "last_seen": "",
+                  "rounds": 0, "elapsed": 0, "explored_count": 0, "absorbed_count": 0},
+    "conversation": {"last_share": "", "share_round": 0},
     "at": 0.0,
-    "rounds": 0,
+    "_out_since": 0.0,      # 本次出门的起始时刻（算 elapsed 用，不对外暴露）
 }
 
 
 def live():
-    """逛线程**此刻**在做什么（只读副本）。对话线程随时可以读它。"""
+    """EYC 状态只读副本。对话线程每次处理用户消息前读它（不依赖 share）。"""
     with _LOCK:
-        return dict(_LIVE)
+        return {
+            "existential": dict(_LIVE["existential"]),
+            "happening": dict(_LIVE["happening"]),
+            "conversation": dict(_LIVE["conversation"]),
+            "at": _LIVE["at"],
+        }
 
 
-def set_live(doing=None, topic=None, last_seen=None):
-    """由逛线程在每一步更新（也供自测直接构造现场）。"""
+def set_live(doing=None, topic=None, last_seen=None, feeling=None, presence=None):
+    """由逛线程在每一步更新 `happening`（也供自测直接构造现场）。"""
     with _LOCK:
+        h = _LIVE["happening"]
         if doing is not None:
-            _LIVE["doing"] = str(doing)
+            h["doing"] = str(doing)
         if topic is not None:
-            _LIVE["topic"] = str(topic)[:120]
+            h["topic"] = str(topic)[:120]
         if last_seen is not None:
-            _LIVE["last_seen"] = str(last_seen)[:400]
+            h["last_seen"] = str(last_seen)[:400]
+        if feeling is not None:
+            h["feeling"] = str(feeling)[:200]
+        if presence is not None:
+            _LIVE["existential"]["presence"] = bool(presence)
         _LIVE["at"] = time.time()
+        if h["doing"] and h["doing"] != "idle" and not _LIVE["_out_since"]:
+            _LIVE["_out_since"] = time.time()
+        if h["doing"] in ("idle", ""):
+            _LIVE["_out_since"] = 0.0
+            h["elapsed"] = 0
+        elif _LIVE["_out_since"]:
+            h["elapsed"] = int(time.time() - _LIVE["_out_since"])
+    return live()
+
+
+def set_world_counts(explored=None, absorbed=None):
+    """世界层的累计数字（探索过多少站、吸收了多少条）。"""
+    with _LOCK:
+        h = _LIVE["happening"]
+        if isinstance(explored, int):
+            h["explored_count"] = explored
+        if isinstance(absorbed, int):
+            h["absorbed_count"] = absorbed
+    return live()
+
+
+def note_share(text):
+    """记下最近一次主动分享（`conversation` 段只在它真的分享时更新）。"""
+    with _LOCK:
+        _LIVE["conversation"]["last_share"] = str(text)[:200]
+        _LIVE["conversation"]["share_round"] = int(_LIVE["happening"].get("rounds") or 0)
     return live()
 
 
@@ -118,6 +158,9 @@ def set_decision(door=None, why="", asleep=None):
     with _LOCK:
         if door in DOOR_BUDGET:
             _STATE["door"] = door
+            _LIVE["existential"]["door"] = door
+            # presence：门开着/半开 = 在世界的"场"里；锁死 = 此刻不在
+            _LIVE["existential"]["presence"] = door in (DOOR_OPEN, DOOR_HALF)
         if asleep is not None:
             _STATE["asleep"] = bool(asleep)
         _STATE["why"] = str(why or "")[:200]
@@ -140,7 +183,7 @@ def browse_once(decide_fn=None, browse_fn=None, store_fn=None, share_fn=None):
     rec = {"ts": time.time(), "decision": None, "got": "", "stored": False, "shared": ""}
     with _LOCK:
         _STATE["rounds"] += 1
-        _LIVE["rounds"] = _STATE["rounds"]
+        _LIVE["happening"]["rounds"] = _STATE["rounds"]
     set_live(doing="deciding")
     # ① 决策（模型自己定门的状态与想逛什么）
     try:
@@ -165,7 +208,7 @@ def browse_once(decide_fn=None, browse_fn=None, store_fn=None, share_fn=None):
     got = str(got or "").strip()
     rec["got"] = got[:200]
     if not got:
-        set_live(doing="idle")
+        set_live(doing="idle", presence=False)
         return rec
     with _LOCK:
         _STATE["last_visit"] = got[:120]
