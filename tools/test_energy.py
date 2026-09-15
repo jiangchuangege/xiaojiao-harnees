@@ -184,7 +184,7 @@ def group_e():
     try:
         app._perceive_llm = _said
         EN.set_level(0.05, why="自测：精力极低")
-        app._LAST_DIALOGUE["at"] = time.time() - 999     # 用户早就安静了
+        app._LAST_DIALOGUE["at"] = time.time() - 99999   # 用户**真的**不在了（远超 30 分钟）
         rec = app._self_sleep_once()
     finally:
         app._perceive_llm = real

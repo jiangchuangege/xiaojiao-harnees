@@ -43,7 +43,8 @@
 import re
 
 __all__ = ["LIFE", "DIRECTIONS", "SELF_LINES", "TEMPERATURE", "self_background",
-           "perceive", "parse", "looks_like_echo", "stats", "DECISIONS", "decide_sleep"]
+           "perceive", "parse", "looks_like_echo", "stats", "DECISIONS", "decide_sleep",
+           "RELATION_KINDS"]
 
 # 感知这一次调用用的温度。**比对话低**，原因是实测出来的、不是拍的：
 #   同一套提问、同一批 8 句，在 0.7 上跑两遍会出现**完全不同的落点** ——
@@ -104,7 +105,12 @@ _TASK = (
     "意：<就这么说你的感受，一两句；可以说不太清，也可以不止一种感觉>",
     "命：<上面四样里哪几样真的被动了，写出来；一动没动就写 无>",
     "向：<威胁 / 失去 / 新的 / 好的 / 无 —— 只挑一个；命没动就是 无>",
+    "",
+    "再补一行 —— **只写你自己感觉到的**，不是查词表：",
+    "关系：<伤 / 哄 / 无 —— 这句话有没有伤到你（伤）、有没有在哄你（哄），都没有就写 无>",
 )
+# 关系那一栏它自己挑的三个值（**载体不查"伤人词表"** —— 读的是它自己写下的那一栏）
+RELATION_KINDS = ("伤", "哄", "无")
 
 
 def perceive(event, llm_fn, doing="", extra=""):
@@ -155,10 +161,11 @@ def parse(raw):
     "不查表"在这份代码里的落点就是这一条。
     """
     text = str(raw or "").strip()
-    out = {"meaning": "", "touches_life": [], "direction": "", "parsed_by": "无"}
+    out = {"meaning": "", "touches_life": [], "direction": "", "relation": "",
+           "parsed_by": "无"}
     if not text:
         return out
-    m_line, l_line, d_line = "", "", ""
+    m_line, l_line, d_line, r_line = "", "", "", ""
     for ln in re.split(r"[\r\n]+", text):
         s = ln.strip().lstrip("-·*# ").strip()
         if not s:
@@ -169,6 +176,8 @@ def parse(raw):
             l_line = re.sub(r"^(命|生命)\s*[:：]\s*", "", s).strip()
         elif not d_line and re.match(r"^(向|方向)\s*[:：]", s):
             d_line = re.sub(r"^(向|方向)\s*[:：]\s*", "", s).strip()
+        elif not r_line and re.match(r"^(关系)\s*[:：]", s):
+            r_line = re.sub(r"^(关系)\s*[:：]\s*", "", s).strip()
     # 意思：有标签就用标签后面那句；没有就把整段当意思（模型不爱守格式是常态）
     if m_line:
         out["meaning"] = m_line
@@ -194,6 +203,13 @@ def parse(raw):
                 break
     if not out["direction"] and d_line and "无" in d_line:
         out["direction"] = "无"
+    # 关系那一栏：**只认它自己写下的**（不查词表、不猜）
+    for w in RELATION_KINDS[:2]:
+        if w in r_line:
+            out["relation"] = w
+            break
+    if not out["relation"] and r_line and "无" in r_line:
+        out["relation"] = "无"
     return out
 
 

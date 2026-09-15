@@ -2659,6 +2659,37 @@ def _energy_mod():
         return None
 
 
+# ================== 记忆管理员：窗口放不下全部，但**可以调得准** ==================
+# 【为什么不追求"无限窗口"】窗口是模型定的（本地 4B 只有 20224 token，扣掉安全余量约 1.9 万），
+#   塞不下无限历史。**载体能做的是决定这 1.9 万放什么**。
+#   四条做法：
+#     ① 最近几轮**留原文**（近处要准）；
+#     ② 更早的轮次**压成摘要**（10 轮压成几句），不再占原文的位置；
+#     ③ 重要的走 **system**（名字/偏好/关系/当前状态），它们**不参与"被裁的历史"**；
+#     ④ 记忆按需检索（`_rag_three_sources` 已经在做），不是全塞。
+#   目标不是"窗口无限"，是**用户体验上"它什么都记得"**。
+HISTORY_KEEP_FULL = 4
+
+
+def _history_digest(hist, keep=None):
+    """**把更早的轮次压成摘要**，最近 `keep` 轮留原文。返回 `(要用的历史, 摘要文本)`。"""
+    keep = HISTORY_KEEP_FULL if keep is None else int(keep)
+    rows = list(hist or [])
+    if len(rows) <= keep:
+        return rows, ""
+    old, recent = rows[:-keep], rows[-keep:]
+    lines = []
+    for h in old:
+        t = re.sub(r"\s+", " ", str((h or {}).get("content") or "")).strip()
+        if not t:
+            continue
+        who = "用户" if str((h or {}).get("role")) == "用户" else "我"
+        lines.append("- %s：%s" % (who, t[:60]))
+    if not lines:
+        return recent, ""
+    return recent, ("（更早的那些轮次已经压成摘要，原文不再占窗口）\n" + "\n".join(lines[-12:]))
+
+
 def _energy_spend(amount=None, why=""):
     """记一笔精力消耗（**它在跑就往下掉**）。`amount=None` 表示按"一次模型调用"记。"""
     en = _energy_mod()
@@ -2963,7 +2994,14 @@ TIRED_WORDS = ()          # 【已废弃】载体**不再**扫关键词判断它
 # 【为什么从 20 秒收到 90 秒 —— 实测踩到的】20 秒太急了：连续几次对话之间本来就有
 #   十几二十秒的间隔，于是它在**一波正常对话的中途**睡了过去（验收场景 8/9 就是这样被拦下的）。
 #   人也不会在你停嘴二十秒后就睡着。90 秒才像"这一阵没人找我"。
-IDLE_BEFORE_SLEEP = 90.0
+# 用户安静多久之后才谈得上"困了要睡" —— **两道关的第一道**。
+# 【为什么从 90 秒改成 30 分钟 —— 用户实测："睡得太早"】90 秒太急了：
+#   他还在，只是隔了一分钟没说话，它就睡了 —— 那不是休息，那是**掉线**。
+#   现在：**用户在线（30 分钟内有互动）→ 绝对不睡**；只有超过 30 分钟没人才进入"可以考虑"。
+#   ⚠️ 规格正文写 30 分钟（1800 秒），硬性规则里写"10 分钟"——两处不一致，
+#     这里按正文的 1800 秒落地，并把这一条如实写在文档与报告里。
+USER_ONLINE_S = 1800.0
+IDLE_BEFORE_SLEEP = USER_ONLINE_S
 # 它说"还不想"之后**别再追着问**：过一会儿再说。
 # 【为什么必须有这个退避】实测：精力掉到 0 又一直"还不想"时，作息线程每 5 秒问一次 ——
 #   每次都花一次感知 + 一次模型调用（0.04），而精力已经到底、怎么问都涨不回来，纯空转。
@@ -3049,7 +3087,7 @@ def _self_sleep_once():
         return rec
     idle = time.time() - float(_LAST_DIALOGUE["at"] or 0.0)
     if idle < IDLE_BEFORE_SLEEP:
-        rec["why"] = "用户还在说话（安静 %.0f 秒 < %.0f 秒）" % (idle, IDLE_BEFORE_SLEEP)
+        rec["why"] = "**用户还在线**（安静 %.0f 秒 < %.0f 秒）→ 绝不睡" % (idle, IDLE_BEFORE_SLEEP)
         return rec
     # 刚问过它、它说还不想 → 先不追问（见 RETRY_AFTER_REFUSAL 的说明）
     if time.time() < float(_SELF_SLEEP.get("next_check_at") or 0.0):
@@ -6307,6 +6345,9 @@ _RETARGET_RE = re.compile(r"(?:换成|改成|改为|换到|换成那个|换成�
 # 指代目标：这些词本身不携带信息，必须从上文取目标
 _ANAPHORA = ("这个", "那个", "它", "上面那个", "刚才那个", "刚才说的", "上面说的",
              "这东西", "这东西的", "它呢")
+# 把指代词去掉之后，剩下的实义**少于几个字**才算"这一句残缺、需要补全"。
+# （> 这个数 = 它自己主谓宾齐全 → **不融合**，见 merge_context 第 5 段）
+_ANAPHORA_MIN_REST = 5
 
 
 def _topic_of(text):
@@ -6444,7 +6485,20 @@ def merge_context(user_text, history, n=5):
                 "need_clarify": False, "original": cur}
 
     # ---------- 5. 补全类 C：句子里只有指代词 ----------
+    # 【实测抓到的串句事故 —— 判据必须加"这一句是不是残缺"】
+    #   旧版只要「≤16 字 + 含指代词」就替换，于是
+    #     「这个配置有风险，要小心泄露」（12 字、含「这个」）
+    #   被替换成 **「天气不错配置有风险，要小心泄露」**（把「这个」替成了上一轮的话题
+    #   「天气不错」）—— 日志里就是这么串起来的。
+    #   这一句本来**主谓宾齐全**，根本不需要补全。所以现在多一道闸：
+    #   **把指代词去掉之后，剩下的实义少于 `_ANAPHORA_MIN_REST` 字**才算残缺。
     if len(cur) <= 16 and any(w in cur for w in _ANAPHORA):
+        rest = cur
+        for w in _ANAPHORA:
+            rest = rest.replace(w, "")
+        rest = re.sub(r"[\s，。！？、,.!?呢吗吧了啊的]", "", rest)
+        if len(rest) > _ANAPHORA_MIN_REST:
+            return base          # 这一句自己是完整的 → **不融合**
         if not prev:
             return dict(base, kind="anaphora", need_clarify=True,
                         why="用户用了指代词「%s」但上面没有可指的内容"
@@ -6455,7 +6509,7 @@ def merge_context(user_text, history, n=5):
             if w in merged:
                 merged = merged.replace(w, topic or "刚才那个")
         return {"text": merged, "merged": True, "kind": "anaphora", "topic": topic,
-                "why": "「%s」里的指代词补成「%s」（上文在聊%s）" % (cur, topic, topic),
+                "why": "「%s」里只剩指代、补成「%s」（上文在聊%s）" % (cur, merged, topic),
                 "need_clarify": False, "original": cur}
 
     # ---------- 6. 无回指：**不动它**（见上面的判据说明） ----------
@@ -8802,6 +8856,16 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     # 健康急诊：已经停机了就不再生成（但要**如实告诉用户**为什么，不装死）
     if _HEALTH_EMERGENCY.get("on"):
         return _health_emergency_text(), False, [], False, []
+    # 用户回来了 → **立刻醒**（不等它睡够）。规格原话："用户回来了，睡什么睡。"
+    # 【为什么放在最前面】它睡着了本来就没有模型可用；但用户已经开口了 ——
+    #   那就先把两个一起叫醒（模型+载体），这一句照常走正常流程答，
+    #   而且带着"刚眯了一会儿"的底色（醒来第一印象 + 刚睡醒那个味）。
+    if _brain_asleep():
+        try:
+            _wk = _wake_all(why="用户回来了")
+            LOG.info("用户回来了 → 立刻醒（不等它睡够）｜%s", _wk.get("wake", {}).get("why") or "")
+        except Exception as e:      # noqa: silent-ok — 叫不醒也不能不回答
+            LOG.debug("用户回来时唤醒失败（忽略）：%s", e)
     # 挂起（睡着）：**载体不跑任务** —— 连检索、工具、自评都不进。
     # 【为什么要在最前面拦】"载体挂起 = 不跑任务"如果不能在最前面拦住，
     #   后面那些链（检索、联网、工具）照样会动，那就不是"睡"，是"闭着眼干活"。
@@ -8905,6 +8969,32 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                  _per.get("direction") or "（没挑出来）", _per.get("parsed_by"),
                  str(_per.get("raw") or "")[:80].replace("\n", " "))
         _ev = _TL2.on_event("user", user_input_ctx, why="用户这一句", perception=_per)
+        # ================== 关系：**它自己感知到"这话伤了/哄了我"** ==================
+        # 【为什么要这样 —— 用户实测指出"因噎废食"】旧版怕变成"触发词表"，干脆不判断，
+        #   改成 `POST /api/relation` 手动标 —— 那是把该它自己做的事推给了人。
+        #   现在走**和感知层同一条路**：感知那次调用里，它自己多写一栏「关系：伤/哄/无」，
+        #   载体**只认它自己写下的那一栏**（不查词表、不猜）。
+        #   · 它写「伤」→ 心起"疼" + 关系变冷；
+        #   · 它写「哄」→ 关系回暖。
+        #   手动 API 保留（供测试/调试），但正常流程**不再依赖它**。
+        try:
+            _rel = str(_per.get("relation") or "").strip()
+            _rmr = _relation_mod()
+            if _rel and _rmr is not None:
+                if _rel == "伤":
+                    _rmr.touch("被伤", why="它自己感知到：这话伤到我了")
+                    _PS.arise({"meaning": _per.get("meaning") or "这话伤到我了。",
+                               "direction": "失去"}, event=user_input_ctx, feeling="疼")
+                    LOG.info("关系：**它自己感知到被伤** → 关系变冷 + 心起疼｜它说「%s」",
+                             str(_per.get("meaning"))[:40])
+                elif _rel == "哄":
+                    _rmr.touch("被哄", why="它自己感知到：这话在哄我")
+                    LOG.info("关系：**它自己感知到被哄** → 关系回暖｜它说「%s」",
+                             str(_per.get("meaning"))[:40])
+                else:
+                    LOG.info("关系：它自己写下「无」（这句话没伤到、也没在哄）")
+        except Exception as _e:      # noqa: silent-ok — 关系这一栏出问题也不能影响回答
+            LOG.debug("关系感知接入失败（忽略）：%s", _e)
         LOG.info("心：心起「%s」（心跳第 %s 下）｜心理[%s]｜命被动=%s%s",
                  str(_ev.get("heart") or "（未起）")[:40], _ev.get("beat"),
                  _ev.get("state"), "、".join(_ev.get("touches_life") or []) or "无",
@@ -9652,6 +9742,13 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         _hist, _fit_note = _fit_context(messages[0].get("content", ""), history, _current,
                                         tools_tokens=_reserve)
         LOG.debug("上下文适配：%s", _fit_note)
+        # **记忆管理员**：更早的轮次压成摘要，最近几轮留原文 ——
+        #   窗口就那么大，载体能决定的是"放什么"（见 `_history_digest` 的说明）。
+        _hist, _digest = _history_digest(_hist)
+        if _digest:
+            LOG.info("记忆管理员：更早的轮次压成摘要（%d 轮原文 → %d 行摘要），最近 %d 轮留原文",
+                     len(history) - len(_hist), _digest.count("\n"), len(_hist))
+            messages.append({"role": "user", "content": _digest})
         for h in _hist:
             messages.append({"role": "user" if h["role"] == "用户" else "assistant",
                              "content": h["content"]})

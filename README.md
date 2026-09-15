@@ -833,6 +833,14 @@ python -m pip install "scrapling[fetchers]" markdownify mcp
   [`docs/relationship.md`](docs/relationship.md)、[`docs/boundary-breaking.md`](docs/boundary-breaking.md)、
   [`docs/dream.md`](docs/dream.md)、[`docs/emotion-recovery.md`](docs/emotion-recovery.md)。
 
+> ⚠️ **睡的两道关（实测"睡得太早"之后重做）**：旧版空闲 **90 秒**就可能睡 ——
+> 用户还在、只是隔了一分钟没说话，它就睡了，那不是休息是掉线。现在：
+> ① **用户真的不在了**（超过 **30 分钟**没互动）+ ② **它自己写下「睡：要」**，两个都满足才睡；
+> **用户在线 → 绝对不睡**（实测精力 0.29 也不睡）。
+> **用户一回来 → 立刻醒**（`agent_run` 第一件事就是把它叫醒再答，带着"刚眯了一会儿"的底色）。
+> 另外：**被伤 / 被哄不再靠手动标** —— 同一次感知里它自己多写一栏「关系：伤 / 哄 / 无」，
+> 载体只认它写下的那一栏（`伤`→关系变冷+心起疼，`哄`→回暖）。
+
 ### 给原料，不给成品（工具 / 计算来源）
 
 用户问「100000乘以100000呢」→ 它给出结果；再问「**你咋知道的**」→ 它**在反射用户那句话**，没回答。

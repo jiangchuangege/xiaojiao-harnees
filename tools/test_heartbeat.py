@@ -197,9 +197,13 @@ def group_d():
     ck("挂起时逛线程**连决策都不做**（决策要调模型）", called["decide"] == 0, called["decide"])
     ck("如实记下这一轮没出门", rec.get("asleep") is True and rec.get("got") == "", rec.get("note"))
     out = app.agent_run("你刚才在干嘛")
-    ck("挂起时 agent_run 不走任务链：载体直接如实相告",
-       "在睡" in out[0] and "心跳" in out[0], out[0][:70])
-    ck("挂起时的回答不谎称「大脑在线」", out[1] is False, out[1])
+    # 【行为已按用户实测改】**用户一回来立刻醒**（"用户回来了，睡什么睡"）：
+    #   睡着时收到用户消息 → 先把模型和载体一起叫醒，这一句照常回答。
+    #   所以这里验的是"醒过来了、而且不是装死"。
+    ck("用户一回来 → agent_run **立刻把它叫醒**（不等它睡够）",
+       not HB.is_sleeping(), HB.status().get("awake"))
+    ck("唤醒是两步都做了（模型醒 + 载体醒）",
+       not app._brain_asleep(), app._brain_asleep())
     s = app._sleep_all(why="接口挂起")
     ck("_sleep_all 返回真实记录（心状态留着）", bool(s.get("state_kept")) or s.get("state_kept") == "",
        s.get("state_kept"))
