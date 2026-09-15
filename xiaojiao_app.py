@@ -7817,6 +7817,24 @@ def _self_state_facts():
     return "\n".join(out)
 
 
+def _perceive_event(text):
+    """**模型感知**：这件事对它意味着什么。不查表、不给用户看，只用于让心自然起。
+
+    这是"心像人一样"的关键一步 —— 载体不规定"看到风险该怕"，
+    它只问一句"这对你意味着什么"，剩下的由模型自己的感受回答。
+    允许复合（"又紧又好奇"）与模糊（"说不太清，有点闷"），所以**只截长度、不做解析**。
+    """
+    try:
+        out = _selfrate_llm(
+            "这件事发生的时候，你心里是什么感觉？\n"
+            "也可以不只一种感觉，也可以说不清。用一两句说，不要解释、不要分析。\n\n"
+            "事：%s" % str(text or "")[:300]) or ""
+        return out.strip().replace("\n", " ")[:120]
+    except Exception as e:      # noqa: silent-ok — 感知不出来就不起心（不查表兜底）
+        LOG.debug("心：感知失败（忽略）：%s", e)
+        return ""
+
+
 def _eyc_state_now():
     """给神经总线用的 EYC 状态（拿不到就返回空 dict —— 不编）。"""
     try:
@@ -7969,7 +7987,12 @@ def mind_done(mind, answer, truncated=False, skipped=False):
     #   （短路轮次也走它，见函数自身的说明），所以挂在这里才能真正做到"模型停、心停"。
     #   ⚠️ `stop()` 只让心停止跳动，**不清状态**（见 `core/psyche.py` 的如实标注）。
     try:
-        from core import psyche as _PS
+        from core import psyche as _PS, feeling_memory as _FM
+        # **心记住自己起过什么**（不是清单，是印象）：下次遇到像的，心起得更快
+        _h = _PS.heart()
+        if _h.get("text"):
+            _FM.remember(str(answer or "")[:200] or _h.get("why", ""), _h["text"],
+                         intensity=_h.get("intensity", 0.0), source="对话")
         _PS.stop(why="agent_run 收尾")
     except Exception:      # noqa: silent-ok — 心停不下来也不能影响回答
         pass
@@ -8149,9 +8172,13 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     try:
         from core import psyche as _PS, thinking_loop as _TL2
         _PS.start(why="agent_run 开始")
-        _ev = _TL2.on_event("user", user_input_ctx, why="用户这一句")
-        LOG.info("心：用户消息触发 → 状态=%s（心跳第 %s 下）",
-                 _ev.get("state"), _ev.get("beat"))
+        # **模型感知**：不查表 —— 先让模型自己说"这件事对它意味着什么"，
+        #   心再由这个感知自然起（`psyche.arise`）。载体只负责把感知收下来。
+        _per = _perceive_event(user_input_ctx)
+        _ev = _TL2.on_event("user", user_input_ctx, why="用户这一句", perception=_per)
+        LOG.info("心：感知「%s」→ 心起「%s」（心跳第 %s 下）%s",
+                 str(_per)[:30], str(_ev.get("heart"))[:40], _ev.get("beat"),
+                 "｜像以前那次" if _ev.get("familiar") else "")
     except Exception as _e:      # noqa: silent-ok — 心不跳也不能影响对话
         LOG.debug("心启动/用户触发失败（忽略）：%s", _e)
 

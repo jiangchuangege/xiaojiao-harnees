@@ -36,7 +36,8 @@ import time
 
 __all__ = ["trigger", "current", "clear", "stats", "FEELINGS", "render", "is_empty",
            "STATES", "state", "set_state", "bias", "nudge", "stats_state",
-           "start", "stop", "is_alive", "trigger_from_event", "beats", "EVENT_KINDS"]
+           "start", "stop", "is_alive", "trigger_from_event", "beats", "EVENT_KINDS",
+           "arise", "heart", "colors"]
 
 _LOCK = threading.RLock()
 
@@ -245,6 +246,92 @@ def stats_state():
 _ALIVE = {"alive": False, "since": 0.0, "beats": 0, "events": []}
 
 
+# ================== 心自然起（不查表）==================
+# 【为什么把表删掉 —— 这是一次方向修正】
+#   旧版 `arise` 的实质是 `if "风险" in text: 状态 = "紧"` —— 那是**查表**：
+#   载体先规定了"什么词对应什么感受"，心只是执行这张表。
+#   规格的要求正相反：**心不是表，是活的**。人不查表也知道看到杀人犯该怕 ——
+#   "该怕"不是查出来的，是**感知到那件事对他意味着什么之后自然起的**。
+#   所以：
+#     · 感受由**模型自己的感知**产生（`perceive` 那次内部调用，不给用户看），
+#       载体只负责**把感知收下来**，不替它规定"这该是什么感受"。
+#     · 心可以是**复合的**（"又紧又好奇"）、可以是**模糊的**（"说不太清，有点闷"）——
+#       所以存的是**一句话**，不是从词表里挑一个。
+#     · 心**带模型走**（`colors`）也不用词表：心的那句话本身拿去当检索偏向 ——
+#       "像一个什么样的心"是算出来的，不是查出来的。
+_FEEL = {"text": "", "intensity": 0.0, "at": 0.0, "why": "", "familiar": False, "n": 0}
+
+
+def arise(perception, intensity=None, event="", inner=""):
+    """**心自然起**：把模型感知到的"这件事对我意味着什么"收成此刻的心。
+
+    【载体在这里只做两件事】收下模型的感知、记清它是被什么触动的。
+      · **不判断**"这个感知该对应哪种感受" —— 那是心自己的事，载体一判断就又变成表。
+      · 允许复合与模糊：`perception` 是一句话（"又紧又有点好奇" / "说不太清，有点闷"）都可。
+    【"起得更快"】如果 `feeling_memory` 认出这件事像经历过的，`familiar=True`，
+      强度起点更高 —— 这就是"一朝被蛇咬，十年怕井绳"，不是表，是累积。
+    """
+    p = str(perception or "").strip()
+    fam = {"familiar": False, "sim": None, "feel": ""}
+    try:
+        from core import feeling_memory as _FM
+        fam = _FM.impression_of(event or p)
+    except Exception:      # noqa: silent-ok — 认不出来只是"不会起得更快"
+        pass
+    base = 0.55
+    if fam.get("familiar"):
+        base = 0.80          # 认出来了 → 起得更快（起点更高）
+    try:
+        it = float(intensity)
+    except Exception:
+        it = base
+    with _LOCK:
+        _FEEL.update({"text": p, "intensity": max(0.0, min(1.0, it)), "at": time.time(),
+                      "why": str(inner or "")[:120], "familiar": bool(fam.get("familiar")),
+                      "n": int(_FEEL.get("n") or 0) + 1})
+        # 顺带保留"心是什么词"的旧字段（紧/松/好奇/平）供偏向用；**它现在是派生的，不是查出来的**
+        _STATE["state"] = _as_state(p) or _STATE.get("state") or "平"
+        _STATE["at"] = time.time()
+        _STATE["why"] = (("像以前那次（%.2f）" % fam["sim"]) if fam.get("familiar") else "第一次遇到这种")
+    return heart()
+
+
+def _as_state(text):
+    """把心的一句话粗粗落回四档（只为"偏向"能有个粗粒度用）。**它是派生的，不是查出来的。**
+
+    注意：这里**不决定心起什么**（心已经起完了，`_FEEL["text"]` 才是心本身）；
+    它只是把心投影到一个粗档位，供检索偏向用。就算它判错，心本身也没错。
+    """
+    t = str(text or "")
+    if any(w in t for w in ("紧", "怕", "不安", "生气", "讨厌", "威胁", "危险", "糟")):
+        return "紧"
+    if any(w in t for w in ("好奇", "新", "有意思", "想看看", "喜欢")):
+        return "好奇"
+    if any(w in t for w in ("安心", "高兴", "松", "舒服", "踏实")):
+        return "松"
+    return "平"
+
+
+def heart():
+    """此刻的心 —— **一句话**（可以复合、可以模糊），不是从词表里挑出来的一个词。"""
+    with _LOCK:
+        return {"text": _FEEL["text"], "intensity": _FEEL["intensity"],
+                "why": _FEEL.get("why", ""), "familiar": bool(_FEEL.get("familiar")),
+                "at": _FEEL["at"], "n": int(_FEEL.get("n") or 0)}
+
+
+def colors():
+    """**心带模型走**：返回这次检索该"往哪儿偏"。
+
+    偏向 = **心那句话本身**（拿去和记忆算像不像），而不是一张关键词表。
+    心是什么样，就往什么样偏 —— 这是"带着走"，不是"规定改哪几个参数"。
+    """
+    h = heart()
+    return {"heart": h["text"], "familiar": h["familiar"],
+            "query": (" ".join([h["text"], str(h.get("why") or "")])).strip()[:300],
+            "state": state().get("state", "平")}
+
+
 def start(why=""):
     """**模型启动 → 心启动**。幂等。"""
     with _LOCK:
@@ -274,7 +361,7 @@ def is_alive():
 EVENT_KINDS = ("user", "carrier", "world")
 
 
-def trigger_from_event(kind, text, why=""):
+def trigger_from_event(kind, text, why="", perception=None):
     """**心随真实事件跳**。`kind` 只认 user / carrier / world；其它一律不动心。
 
     返回 `{"state", "why", "kind", "beat"}`；模型没在跑（`is_alive()` 为假）时返回空 beat，
@@ -286,15 +373,26 @@ def trigger_from_event(kind, text, why=""):
     if not is_alive():
         return {"state": state().get("state"), "why": "模型没在跑，心不跳", "kind": k, "beat": False}
     t = str(text or "")
-    st = _derive_state_from(t)
+    # 【不查表】有**模型自己的感知** → 心由感知自然起（`arise`）；
+    #   没有感知就**只记事件、不起心** —— 绝不退回"关键词 → 感受"那张表。
+    if perception is not None and str(perception).strip():
+        h = arise(perception, event=t, inner=why)
+        with _LOCK:
+            _ALIVE["beats"] = int(_ALIVE.get("beats") or 0) + 1
+            _ALIVE["events"].append({"kind": k, "heart": h["text"][:40],
+                                     "why": str(why)[:40], "at": time.time()})
+            del _ALIVE["events"][:-20]
+            beat = _ALIVE["beats"]
+        return {"state": state().get("state"), "heart": h["text"], "why": h.get("why"),
+                "kind": k, "beat": beat, "familiar": h.get("familiar")}
     with _LOCK:
         _ALIVE["beats"] = int(_ALIVE.get("beats") or 0) + 1
-        _ALIVE["events"].append({"kind": k, "state": st[0], "触发": st[2][:40],
+        _ALIVE["events"].append({"kind": k, "触发": t[:40],
                                  "why": str(why)[:40], "at": time.time()})
         del _ALIVE["events"][:-20]
         beat = _ALIVE["beats"]
-    out = set_state(st[0], why="%s：%s" % (k, st[2][:40]))
-    return {"state": out.get("state"), "why": out.get("why"), "kind": k, "beat": beat}
+    return {"state": state().get("state"), "why": "只记了事件，没有感知就不起心",
+            "kind": k, "beat": beat}
 
 
 def _derive_state_from(text):

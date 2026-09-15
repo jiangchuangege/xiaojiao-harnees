@@ -82,7 +82,7 @@ def adjust_candidates(cands, state=None):
     return items, rec
 
 
-def on_event(kind, text, why=""):
+def on_event(kind, text, why="", perception=None):
     """**真实事件 → 心**（本次修正后的唯一触发源）。
 
     `kind` 只认三类真实来源：
@@ -96,7 +96,7 @@ def on_event(kind, text, why=""):
     本模块**无法自己判断**传进来的字符串到底是用户说的还是模型说的 ——
     所以这条约束靠调用点守（`agent_run` 里三处调用点都在模型出字**之前**）。
     """
-    r = _psyche.trigger_from_event(kind, text, why=why)
+    r = _psyche.trigger_from_event(kind, text, why=why, perception=perception)
     with _LOCK:
         LOOP["nudges"].append({"kind": kind, "state": r.get("state"),
                                "触发": str(r.get("why"))[:40], "beat": r.get("beat")})
