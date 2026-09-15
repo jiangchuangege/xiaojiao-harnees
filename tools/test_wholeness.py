@@ -144,8 +144,12 @@ def group_a():
 def group_b():
     print("\n[B] 期待（它自己提起了才叫期待）")
     EX.clear()
-    r = EX.leave("没逛完", "那篇讲猫的文章还有一半没看完")
-    ck("留下一件没做完的事", r["ok"] is True, r.get("kind"))
+    r = EX.world_leave("那篇讲猫的文章还有一半没看完", evidence="explore#1 讲猫的文章前半段")
+    ck("留下一件没做完的事（**带真实来源**才收）", r["ok"] is True, r.get("kind"))
+    ck("**没有来源的直接拒收**（载体不许替它编一件没发生过的经历）",
+       EX.leave("没逛完", "那篇讲猫的文章还有一半没看完")["ok"] is False, "")
+    ck("**从偏好推出来的也拒收**",
+       EX.leave("没逛完", "从偏好推出的一条", source="preference")["ok"] is False, "")
     ck("载体手里压着 1 件（**这是载体的事实**）", EX.carried() == 1, EX.carried())
     ck("**还没有期待**：它自己一次都没提起过", EX.brought_up() == [], EX.stats()["brought_up"])
     EX.note_brought_up("那篇讲猫的文章还有一半没看完", said="我还惦记着那篇猫的文章")

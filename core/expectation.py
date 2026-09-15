@@ -26,7 +26,8 @@ import os
 import threading
 import time
 
-__all__ = ["KINDS", "leave", "resolve", "pending", "carried", "note_brought_up",
+__all__ = ["KINDS", "leave", "world_leave", "resolve", "pending", "carried",
+           "note_brought_up",
            "brought_up", "stats", "path", "history", "clear"]
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -69,10 +70,22 @@ def _append(rec):
         pass
 
 
-def leave(kind, what, why=""):
-    """**留下一件没做完的事**（逛到一半就停了 / 想搞懂没搞懂 / 想跟用户说没说）。
+def leave(kind, what, why="", source="", evidence=""):
+    """**留下一件没做完的事** —— ⚠️ **只能由"真实发生的事"写进来**。
 
-    载体只负责"记下它没做完"，**不负责催它** —— 催就变成安排。
+    【这条闸是补一个真缺口 —— 实测抓到的伪造】
+      `logs/psyche/unfinished.jsonl` 里出现过一条「那篇讲猫的文章还有一半没看完」，
+      而 `logs/world/` 里**一个"猫"字都没有** —— 那件事**根本没发生过**。
+      追下去：写它的不是逛世界那条链，而是**一次自测/手工调用**
+      （`EX.leave(...)` 直接往真实文件里写）。也就是说：
+      **载体侧当时没有任何闸**，谁都能往这里塞一件"它没经历过的经历"。
+      它以后会"惦记"一件没发生过的事 —— **期待建在假前提上**。
+
+    【所以现在**必须**带真实来源】：
+      · `source` 必须以 `world/` 开头（**只有逛世界那条链**能写）；
+      · `evidence` 必须是那一次的**真实痕迹**（explore 的记录 id / 那条内容的片段）；
+      · 两个缺一个 → **直接拒收**，并如实说明为什么（不写"没来源的事"）。
+    由"偏好 / 心 / 叙事 / 任何推理"推出来的一条 —— **一律不许**从这条路进来。
     """
     k = str(kind or "").strip()
     if k not in KINDS:
@@ -80,13 +93,19 @@ def leave(kind, what, why=""):
     w = str(what or "").strip()
     if not w:
         return {"ok": False, "why": "空的（没做完的是什么都没说）"}
+    src = str(source or "").strip()
+    ev = str(evidence or "").strip()
+    if not src.startswith("world/"):
+        return {"ok": False,
+                "why": "**拒收**：没做完的事只能由逛世界那条链写（source 必须以 world/ 开头），"
+                       "现在是「%s」—— 载体不许替它编一件没发生过的经历" % (src or "（空）")}
+    if not ev:
+        return {"ok": False,
+                "why": "**拒收**：没有真实痕迹（evidence）—— 说不清它是在哪次、看到了什么，就不记"}
     rec = {"ts": time.time(), "kind": k, "what": w[:200], "why": str(why)[:80],
-           "done": False, "brought_up": 0}
+           "done": False, "brought_up": 0, "source": src[:60], "evidence": ev[:200]}
     with _LOCK:
         _append(rec)
-        if len([r for r in _rows() if not r.get("done")]) > MAX_OPEN:
-            # 攒太多就不是"惦记"了，是清单 —— 只留最近 MAX_OPEN 件（**移出在用集，不销毁**）
-            pass
     return {"ok": True, **rec}
 
 
@@ -118,6 +137,15 @@ def _open_rows():
     """**没做完的**那几行（只认 `kind` 属于 KINDS 的账）——
     事件行（"它提起了"）也带 `what`，不筛掉就会把一件没做完的事数成两件。"""
     return [r for r in _rows() if r.get("kind") in KINDS and not r.get("done")]
+
+
+def world_leave(what, evidence, kind="没逛完", why=""):
+    """**逛世界那条链的唯一写入口**：真逛到一半没读完，才记一条。
+
+    ⚠️ 这是本模块**唯一**被允许写 `unfinished` 的上游（见 `leave()` 的那道闸）。
+    `evidence` 必须来自那一次 explore 的真实记录（内容片段 / id）。
+    """
+    return leave(kind, what, why=why, source="world/explore", evidence=evidence)
 
 
 def pending(limit=3, now=None):
