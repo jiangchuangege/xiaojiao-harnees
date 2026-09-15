@@ -32,7 +32,7 @@ import threading
 
 from core import psyche as _psyche
 
-__all__ = ["adjust_candidates", "after_thought", "bias_snapshot", "stats", "LOOP"]
+__all__ = ["adjust_candidates", "on_event", "bias_snapshot", "stats", "LOOP"]
 
 _LOCK = threading.RLock()
 
@@ -82,18 +82,26 @@ def adjust_candidates(cands, state=None):
     return items, rec
 
 
-def after_thought(thought):
-    """**大脑 → 心理：改状态**。
+def on_event(kind, text, why=""):
+    """**真实事件 → 心**（本次修正后的唯一触发源）。
 
-    读大脑的输出，判断心理状态该往哪走（`psyche.nudge` 的判据是规则、看得见）。
-    不是"大脑发一条通知说它想通了"，而是**载体读输出、改状态** —— 下一步的检索与生成跟着变。
+    `kind` 只认三类真实来源：
+      · `"user"`    用户输入了什么
+      · `"carrier"` 载体自己遇到了什么（检索到危险内容 / 工具报错 / 逛到新东西）
+      · `"world"`   世界变了什么
+    **模型吐出来的字不在其中** —— 旧版 `after_thought(thought)` 读模型输出改心，
+    那让心成了嘴的影子。规格要求砍掉它，这里就是砍掉后的替代。
+
+    ⚠️ 如实标注：调用方如果拿模型输出当 `text` 传进来，那还是"嘴的影子"。
+    本模块**无法自己判断**传进来的字符串到底是用户说的还是模型说的 ——
+    所以这条约束靠调用点守（`agent_run` 里三处调用点都在模型出字**之前**）。
     """
-    st = _psyche.nudge(thought)
+    r = _psyche.trigger_from_event(kind, text, why=why)
     with _LOCK:
-        LOOP["nudges"].append({"state": st.get("state"), "why": st.get("why", "")[:40],
-                               "thought": str(thought or "")[:50]})
+        LOOP["nudges"].append({"kind": kind, "state": r.get("state"),
+                               "触发": str(r.get("why"))[:40], "beat": r.get("beat")})
         del LOOP["nudges"][:-_MAX_REC]
-    return st
+    return r
 
 
 def bias_snapshot():

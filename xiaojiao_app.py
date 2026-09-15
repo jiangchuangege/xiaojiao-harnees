@@ -7208,6 +7208,15 @@ def _rag_concurrent(query):
             LOG.info("思考圈：心理[%s] → 检索方向未变（%s）", _lr["state"], _lr.get("note"))
     except Exception as _e:      # noqa: silent-ok — 圈转不动也不能影响检索
         LOG.debug("思考圈重排失败（忽略）：%s", _e)
+    # 真实事件之二：**载体自己遇到了什么**（检索回来的内容 → 可能让心变）
+    try:
+        from core import thinking_loop as _TL3
+        _blob = " ".join(str((c or {}).get("text") or "")[:120] for c in cands[:3])
+        if _blob.strip():
+            _ev2 = _TL3.on_event("carrier", _blob, why="检索到的内容")
+            LOG.info("心：载体事件（检索到内容）触发 → 状态=%s", _ev2.get("state"))
+    except Exception as _e:      # noqa: silent-ok
+        LOG.debug("心：载体事件触发失败（忽略）：%s", _e)
     g = _rag_grade(cands, query)
     best = g["best"]
     LOG.info("RAG 三源同时查：候选 %d 条 · 各源耗时 %s · 并发总耗时 %.2fs（串行会是 %.2fs）",
@@ -7526,6 +7535,13 @@ def _browse_action(want):
         _DT.set_world_counts(explored=int(_today.get("explored") or 0),
                              absorbed=int(_today.get("absorbed") or 0))
     except Exception:      # noqa: silent-ok — 数字同步失败不影响逛本身
+        pass
+    # 真实事件之三：**世界变了什么** —— 逛到东西时让心跟着动
+    try:
+        from core import thinking_loop as _TLw
+        if isinstance(rec, dict) and rec.get("ok") is not False:
+            _TLw.on_event("world", json.dumps(rec, ensure_ascii=False)[:300], why="逛到新东西")
+    except Exception:      # noqa: silent-ok
         pass
     if not rec:
         return ""
@@ -7949,6 +7965,14 @@ def mind_done(mind, answer, truncated=False, skipped=False):
     ② 去掉会怎样：状态只能靠"没走短路的轮次"推进。用户连问三句工具类问题，
       思维流要到第三句才接上话题 —— "连续"变成时有时无，而"时有时无"等于没有。
     """
+    # 【模型停止 → 心停止】挂在 `mind_done` 上：它是**所有路径**的收尾口
+    #   （短路轮次也走它，见函数自身的说明），所以挂在这里才能真正做到"模型停、心停"。
+    #   ⚠️ `stop()` 只让心停止跳动，**不清状态**（见 `core/psyche.py` 的如实标注）。
+    try:
+        from core import psyche as _PS
+        _PS.stop(why="agent_run 收尾")
+    except Exception:      # noqa: silent-ok — 心停不下来也不能影响回答
+        pass
     try:
         if mind and mind.get("st") is not None:
             from core import mind_stream as _msx
@@ -8116,6 +8140,20 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             _switch_hint_text = _switch_hint(user_input_ctx)
     except Exception as e:      # noqa: silent-ok — 自评失败不影响回答，退回正常流程
         LOG.debug("元认知自评跳过（忽略）：%s", e)
+
+    # ================== 心：启停跟模型走 + 随用户消息跳 ==================
+    #   规则 1：模型启动 → 心启动；模型停止 → 心停止（见本函数结尾的 stop）。
+    #   规则 2：心随**真实事件**跳 —— 这里先看"用户输入了什么"，
+    #   另外两处真实来源（载体检索到的内容、世界变化）在各自的调用点。
+    #   **不看模型吐出来的字。**
+    try:
+        from core import psyche as _PS, thinking_loop as _TL2
+        _PS.start(why="agent_run 开始")
+        _ev = _TL2.on_event("user", user_input_ctx, why="用户这一句")
+        LOG.info("心：用户消息触发 → 状态=%s（心跳第 %s 下）",
+                 _ev.get("state"), _ev.get("beat"))
+    except Exception as _e:      # noqa: silent-ok — 心不跳也不能影响对话
+        LOG.debug("心启动/用户触发失败（忽略）：%s", _e)
 
     # ================== 逛世界 · 拉起后台逛线程（4C：后台跑，不影响用户）==================
     # 【为什么在这里 lazy 起，而不是 import 期起】import 期起会让任何 `import xiaojiao_app`
@@ -8898,16 +8936,11 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                      str((_s_n.get("feeling") or {}).get("trigger"))[:40])
         except Exception as _e:      # noqa: silent-ok — 焊不上也绝不能影响已经答好的内容
             LOG.debug("神经总线焊入失败（忽略）：%s", _e)
-        # ---- 思考圈 ②：大脑 → 心理（**改状态**）----
-        #   不是"大脑发一条通知说它想通了"，而是载体读它的输出、改心理状态；
-        #   下一轮的检索方向与生成参数就跟着变 —— 圈因此转起来。
-        try:
-            from core import thinking_loop as _TL
-            _nst = _TL.after_thought(answer)
-            LOG.info("思考圈：大脑 → 心理（状态改为 %s，因为 %s）",
-                     _nst.get("state"), str(_nst.get("why"))[:40])
-        except Exception as _e:      # noqa: silent-ok — 改不了状态也绝不能影响已答好的内容
-            LOG.debug("思考圈改状态失败（忽略）：%s", _e)
+        # 【已砍掉：读模型输出改心】
+        #   旧版这里调 `after_thought(answer)` —— 读**模型吐出来的字** → 改心理状态。
+        #   那让**心成了嘴的影子**（模型说什么，心就跟着变什么）。
+        #   现在心只随**真实事件**跳（见本轮三处 `trigger_from_event` 调用点），
+        #   这里什么都不做 —— 留这段注释是为了记住"为什么这里没有代码"。
         _spirit_learn(user_input_ctx, answer)
         return answer, True, info, needs_confirm, tool_trace
 

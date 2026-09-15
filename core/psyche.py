@@ -35,7 +35,8 @@ import threading
 import time
 
 __all__ = ["trigger", "current", "clear", "stats", "FEELINGS", "render", "is_empty",
-           "STATES", "state", "set_state", "bias", "nudge", "stats_state"]
+           "STATES", "state", "set_state", "bias", "nudge", "stats_state",
+           "start", "stop", "is_alive", "trigger_from_event", "beats", "EVENT_KINDS"]
 
 _LOCK = threading.RLock()
 
@@ -47,10 +48,17 @@ _LIVE = {"feeling": "", "intensity": 0.0, "trigger": "", "body": "", "at": 0.0,
          "_streak": 0, "_last": ""}
 
 # 触发判据：(感受, 身体反应, 命中关键词)。顺序即优先级 —— 越具体的判据越靠前。
+# 【触发词必须与 `_BIAS` 的关键词一致 —— 这是实测抓到的一处不一致】
+#   旧表里"紧"那一档只有 离开/走了/再见…，而 `_BIAS["紧"]` 用的是 风险/危险/失败…
+#   两张表各写一套的后果：用户说"这个配置有风险，要小心泄露"，心推出来是 **平** ——
+#   心该紧的时候没紧，后面的检索方向自然也不会偏。**同一件事的两个词表必须同源。**
 _RULES = (
-    ("有点紧", "声音发紧", ("离开", "走了", "再见", "不聊了", "别烦我", "生气", "失望")),
-    ("泄气", "肩膀塌下来", ("失败", "不行", "做不到", "没办法", "没通过", "报错", "卡住")),
-    ("有意思", "眼睛亮了一下", ("看到", "发现", "原来", "居然", "有趣", "新奇", "竟然")),
+    ("有点紧", "声音发紧", ("离开", "走了", "再见", "不聊了", "别烦我", "生气", "失望",
+                          "风险", "危险", "警告", "小心", "注意", "泄露", "隐患",
+                          "严重", "紧急", "安全", "失败", "报错", "异常")),
+    ("泄气", "肩膀塌下来", ("不行", "做不到", "没办法", "没通过", "卡住")),
+    ("有意思", "眼睛亮了一下", ("看到", "发现", "原来", "居然", "有趣", "新奇", "竟然",
+                             "新研究", "新的", "最新", "第一次")),
     ("被牵着", "注意力被拉过去", ("你", "用户", "你问", "你要", "帮你")),
     ("好奇", "想再往下看", ("为什么", "怎么", "是什么", "能不能", "也许", "或许")),
     ("踏实", "呼吸放慢", ("完成", "通过", "搞定", "好了", "成功", "跑通")),
@@ -216,6 +224,95 @@ def stats_state():
     return {"state": st["state"], "why": st.get("why", ""),
             "streak": int(st.get("_streak") or 0), "bias": bias(st["state"]),
             "note": "心理存的是**状态**（方向），不是内容；它不改文字，只改检索优先级与生成参数"}
+
+
+# ================== 心的两条规则（触发源修正）==================
+# 【改的是什么 —— 这是一次真实的错误修正】
+#   旧版：`nudge(thought)` 读**模型吐出来的字** → 读到"风险"心就变紧。
+#   那样一来 **心是嘴的影子**：模型说什么，心就跟着变什么。
+#   但人的心不是这样跳的 —— 心跟着**真实发生的事**跳，不跟着自己说的话跳。
+#   所以现在：
+#     · 触发源换成 `trigger_from_event(kind, text)`，`kind` 只认三类**真实来源**：
+#         "user"    用户输入了什么
+#         "carrier" 载体自己遇到了什么（检索到危险内容 / 工具报错 / 逛到新东西）
+#         "world"   世界变了什么
+#     · `nudge()` 保留但**不再是触发源**（只作为自测里直接设状态的入口）。
+#
+# 【心的启停跟模型走】
+#   模型启动 → 心开始跳；模型停止 → 心停下。心活在"模型运行"的这段时间里。
+#   ⚠️ 如实标注：`stop()` **不清状态**，只是让它不再跳。因为"心停下"是停止跳动，
+#   不是"把这个人清空" —— 清空会让下一轮的"心理 → 大脑"失去依据（圈就断了）。
+_ALIVE = {"alive": False, "since": 0.0, "beats": 0, "events": []}
+
+
+def start(why=""):
+    """**模型启动 → 心启动**。幂等。"""
+    with _LOCK:
+        _ALIVE["alive"] = True
+        _ALIVE["since"] = time.time()
+        _ALIVE["events"].append({"kind": "start", "why": str(why)[:60], "at": time.time()})
+        del _ALIVE["events"][:-20]
+    return is_alive()
+
+
+def stop(why=""):
+    """**模型停止 → 心停止**。幂等。**不清状态**（见上面如实标注）。"""
+    with _LOCK:
+        _ALIVE["alive"] = False
+        _ALIVE["events"].append({"kind": "stop", "why": str(why)[:60], "at": time.time()})
+        del _ALIVE["events"][:-20]
+    return is_alive()
+
+
+def is_alive():
+    with _LOCK:
+        return bool(_ALIVE["alive"])
+
+
+# 事件类型 → 允许触发。**"模型输出"不在表里** —— 这就是本次修正的核心：
+# 嘴说的不算事，真实发生的才算。
+EVENT_KINDS = ("user", "carrier", "world")
+
+
+def trigger_from_event(kind, text, why=""):
+    """**心随真实事件跳**。`kind` 只认 user / carrier / world；其它一律不动心。
+
+    返回 `{"state", "why", "kind", "beat"}`；模型没在跑（`is_alive()` 为假）时返回空 beat，
+    **不跳** —— 心活在模型运行的那段时间里。
+    """
+    k = str(kind or "").strip().lower()
+    if k not in EVENT_KINDS:
+        return {"state": state().get("state"), "why": "事件来源不在允许表里，不跳心", "kind": k, "beat": False}
+    if not is_alive():
+        return {"state": state().get("state"), "why": "模型没在跑，心不跳", "kind": k, "beat": False}
+    t = str(text or "")
+    st = _derive_state_from(t)
+    with _LOCK:
+        _ALIVE["beats"] = int(_ALIVE.get("beats") or 0) + 1
+        _ALIVE["events"].append({"kind": k, "state": st[0], "触发": st[2][:40],
+                                 "why": str(why)[:40], "at": time.time()})
+        del _ALIVE["events"][:-20]
+        beat = _ALIVE["beats"]
+    out = set_state(st[0], why="%s：%s" % (k, st[2][:40]))
+    return {"state": out.get("state"), "why": out.get("why"), "kind": k, "beat": beat}
+
+
+def _derive_state_from(text):
+    """从**事件内容**推导心理状态。复用 `_derive` 的判据（同一套规则，没另造）。"""
+    feeling, _body, why = _derive(text)
+    # 把"感受词"映射成"状态"：见模块头的状态表
+    _MAP = {"有点紧": "紧", "泄气": "紧", "有意思": "好奇", "好奇": "好奇",
+            "被牵着": "平", "踏实": "松", "安静": "平", "平静": "平"}
+    return _MAP.get(feeling, "平"), feeling, why
+
+
+def beats():
+    """心跳自检：活没活、跳了几下、最近几次事件（含来源）。"""
+    with _LOCK:
+        return {"alive": bool(_ALIVE["alive"]), "since": _ALIVE["since"],
+                "beats": int(_ALIVE.get("beats") or 0),
+                "recent": list(_ALIVE["events"][-5:]),
+                "note": "触发源只认 user / carrier / world 三类真实来源；模型吐的字不算"}
 
 
 def clear():
