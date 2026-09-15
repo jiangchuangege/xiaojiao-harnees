@@ -37,7 +37,21 @@ import time
 __all__ = ["trigger", "current", "clear", "stats", "FEELINGS", "render", "is_empty",
            "STATES", "state", "set_state", "bias", "nudge", "stats_state",
            "start", "stop", "is_alive", "trigger_from_event", "beats", "EVENT_KINDS",
-           "arise", "heart", "colors", "DIRECTION_STATE"]
+           "arise", "heart", "colors", "DIRECTION_STATE",
+           "DECAY_PER_SECOND", "dilute", "sleep_reset", "recovery"]
+
+# ================== 情绪恢复（心起了，会慢慢回落）==================
+# 【为什么要它】心起了不会一直停在那儿。靠三样回落（规格给的）：
+#   ① **时间**：心起了 → 强度自己慢慢降；
+#   ② **新事**：新事来 → 旧心被冲淡；
+#   ③ **睡觉**：睡一觉 → 情绪重置一部分。
+# 这与"心带模型走"不冲突：**先带着走，过一阵才回落** —— 就像人被吓了先怕一阵，过会儿才慢慢松。
+# 和"疼"的区别：疼是命被真伤（要找医生，见 `core/health.py`）；情绪恢复是心起了（靠时间）。
+#
+# ⚠️ 如实标注：回落是**载体按时间算的**，不是模型"感觉淡了"。载体观测不到它的内在状态，
+#   也不假装能；它只是让"此刻的心"有一个真实的、会变的量。
+DECAY_PER_SECOND = 0.002      # 0.55 起，约 4 分钟回落到 0.3 上下
+SLEEP_RESET_PART = 0.5        # 睡一觉重置掉一半强度
 
 _LOCK = threading.RLock()
 
@@ -260,7 +274,7 @@ _ALIVE = {"alive": False, "since": 0.0, "beats": 0, "events": []}
 #     · 心**带模型走**（`colors`）也不用词表：心的那句话本身拿去当检索偏向 ——
 #       "像一个什么样的心"是算出来的，不是查出来的。
 _FEEL = {"text": "", "intensity": 0.0, "at": 0.0, "why": "", "familiar": False, "n": 0,
-         "direction": "", "touches_life": [], "event": ""}
+         "direction": "", "touches_life": [], "event": "", "feeling": ""}
 
 # 感知方向 → 粗档位。**这不是触发词表**，两处关键区别必须说清：
 #   · 表左边的键是**模型自己的感知结论**（它在感知那一步挑的一档），不是用户话里的词；
@@ -284,7 +298,7 @@ def _split(perception):
     return str(perception or "").strip(), "", []
 
 
-def arise(perception, intensity=None, event="", inner=""):
+def arise(perception, intensity=None, event="", inner="", feeling=""):
     """**心自然起**：把模型感知到的"这件事对我意味着什么"收成此刻的心。
 
     【载体在这里只做两件事】收下模型的感知、记清它是被什么触动的。
@@ -295,6 +309,9 @@ def arise(perception, intensity=None, event="", inner=""):
         两者都**不覆盖**心本身那句话。
     【"起得更快"】如果 `feeling_memory` 认出这件事像经历过的，`familiar=True`，
       强度起点更高 —— 这就是"一朝被蛇咬，十年怕井绳"，不是表，是累积。
+    【`feeling="疼"`】**疼不是紧**：紧是警告（可能要坏），疼是**真坏了**（记忆脏了 /
+      连续断了 / 世界没了 / 关系伤了）。这一档由 `core/health.py` 在诊断出真损伤时给，
+      不是载体凭空加的形容词 —— 判据在那边（清/修/护三道），这里只如实记下。
     """
     p, _dir, _life = _split(perception)
     fam = {"familiar": False, "sim": None, "feel": ""}
@@ -315,6 +332,7 @@ def arise(perception, intensity=None, event="", inner=""):
                       "why": str(inner or "")[:120], "familiar": bool(fam.get("familiar")),
                       "direction": _dir, "touches_life": list(_life),
                       "event": str(event or "")[:200],
+                      "feeling": str(feeling or "")[:20],
                       "n": int(_FEEL.get("n") or 0) + 1})
         # 顺带保留"心是什么词"的旧字段（紧/松/好奇/平）供偏向用；**它现在是派生的，不是查出来的**
         #   优先用模型自己感知到的方向（`DIRECTION_STATE`）；它没挑出来才退回对心那句话的粗判。
@@ -340,19 +358,67 @@ def _as_state(text):
     return "平"
 
 
+def recovery(now=None):
+    """**情绪恢复**：此刻的强度（按时间回落后的真值）。
+
+    三样回落里，"时间"这一样由它算：`强度 = 起时的强度 − 过了多久 × DECAY_PER_SECOND`。
+    另两样（新事冲淡、睡一觉重置）是 `dilute()` 与 `sleep_reset()`。
+    """
+    with _LOCK:
+        i0 = float(_FEEL.get("intensity") or 0.0)
+        at = float(_FEEL.get("at") or 0.0)
+        txt = str(_FEEL.get("text") or "")
+    if not txt or not at:
+        return {"intensity0": 0.0, "intensity": 0.0, "elapsed": 0.0, "note": "此刻没起过心"}
+    t = float(now if now is not None else time.time())
+    el = max(0.0, t - at)
+    return {"intensity0": round(i0, 4), "intensity": round(max(0.0, i0 - el * DECAY_PER_SECOND), 4),
+            "elapsed": round(el, 1), "decay_per_second": DECAY_PER_SECOND,
+            "note": "时间让它回落；新事冲淡它、睡一觉重置它（另两样见 dilute / sleep_reset）"}
+
+
+def dilute(part=0.3):
+    """**新事来 → 旧心被冲淡**：把当前强度按比例压下去（不改那句话本身）。
+
+    为什么是"压强度"而不是"换一句话"：冲淡的是**它的力量**，不是它是什么 ——
+    心那句话还在（它确实起过），只是不再拉着模型走那么紧。
+    """
+    p = max(0.0, min(1.0, float(part or 0.0)))
+    with _LOCK:
+        if not _FEEL.get("text"):
+            return recovery()
+        _FEEL["intensity"] = max(0.0, float(_FEEL["intensity"]) * (1.0 - p))
+    return recovery()
+
+
+def sleep_reset(part=None):
+    """**睡一觉 → 情绪重置一部分**（挂起时由 `_sleep_all` 调）。"""
+    p = SLEEP_RESET_PART if part is None else max(0.0, min(1.0, float(part)))
+    with _LOCK:
+        if not _FEEL.get("text"):
+            return 0.0
+        _FEEL["intensity"] = max(0.0, float(_FEEL["intensity"]) * (1.0 - p))
+        v = float(_FEEL["intensity"])
+    return round(v, 4)
+
+
 def heart():
     """此刻的心 —— **一句话**（可以复合、可以模糊），不是从词表里挑出来的一个词。
 
     附带三样**如实记录**的信息：`direction`（模型自己挑的那一档，可能为空）、
     `touches_life`（它说被动了的命）、`event`（它是被**哪件事**触动的）。
     它们不改变心本身，只让"为什么偏这个方向"、"下次遇到像的能不能认出来"可复核。
+    `feeling` 为空是普通的心；为「疼」表示**命真的坏了**（见 `core/health.py`）。
+    `intensity` 是**回落之后**的真值（见 `recovery`）。
     """
     with _LOCK:
-        return {"text": _FEEL["text"], "intensity": _FEEL["intensity"],
+        return {"text": _FEEL["text"], "intensity": recovery()["intensity"],
+                "intensity0": float(_FEEL.get("intensity") or 0.0),
                 "why": _FEEL.get("why", ""), "familiar": bool(_FEEL.get("familiar")),
                 "direction": _FEEL.get("direction", ""),
                 "touches_life": list(_FEEL.get("touches_life") or []),
                 "event": _FEEL.get("event", ""),
+                "feeling": _FEEL.get("feeling", ""),
                 "at": _FEEL["at"], "n": int(_FEEL.get("n") or 0)}
 
 

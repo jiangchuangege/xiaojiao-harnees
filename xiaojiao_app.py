@@ -2670,6 +2670,61 @@ def _energy_spend(amount=None, why=""):
         return None
 
 
+# ================== 完整体：疼 / 期待 / 偏好 / 叙事 / 关系 / 边界 / 梦 / 情绪恢复 ==================
+# 这七样的取值一律走"拿不到就返回 None"的口子 —— 任何一样不在，都不许影响对话。
+def _mod(name):
+    try:
+        return __import__("core." + name, fromlist=[name])
+    except Exception:      # noqa: silent-ok
+        return None
+
+
+def _pain_mod():
+    return _mod("pain")
+
+
+def _expect_mod():
+    return _mod("expectation")
+
+
+def _pref_mod():
+    return _mod("preference")
+
+
+def _story_mod():
+    return _mod("narrative")
+
+
+def _relation_mod():
+    return _mod("relation")
+
+
+def _break_mod():
+    return _mod("breakthrough")
+
+
+def _dream_mod():
+    return _mod("dream")
+
+
+def _wholeness_material():
+    """把**它自己的东西**当素材拼进 system（偏好 / 叙事 / 试过的）。
+
+    三条都只在"有东西"时才返回内容；没有就一个字都不加（**不硬凑**）。
+    """
+    parts = []
+    for m, fn in ((_pref_mod(), "render"), (_story_mod(), "render"), (_break_mod(), "render")):
+        if m is None:
+            continue
+        try:
+            t = getattr(m, fn)(2)
+            if t:
+                parts.append(t)
+        except Exception:      # noqa: silent-ok
+            continue
+    return ("\n\n" + "\n".join(parts)) if parts else ""
+
+
 def _brain_asleep():
     """**大脑挂起了吗** —— 挂起时所有模型调用一律拒绝。
 
@@ -2690,13 +2745,6 @@ SLEEP_NOTE = "系统挂起中（睡着了）：这一轮没有调用大脑"
 #   如果靠各处自己判断，漏一处就不是"睡"了（比如逛线程还在偷偷调模型），
 #   而"说的和实际一致"正是这一整件事唯一的价值：说它在睡，它就必须真的在睡。
 def _sleep_all(why="", self_decided=False):
-    """**睡着**：大脑、载体、心、感知一起挂起；**心跳不停**。状态全留着。
-
-    `self_decided=True` 表示**这一觉是它自己决定的**（它自己觉得累了、想休息）——
-    这个标记一路带进醒来那句话，**外部挂起的绝不许写成"我自己想睡"**。
-
-    返回一份真实记录（供接口返回与日志取证），**不编**：哪一层没挂上都如实写在里面。
-    """
     out = {"why": str(why)[:80], "at": time.time(), "browse_paused": False,
            "self_decided": bool(self_decided), "state_kept": "", "heart_kept": "",
            "energy_at_sleep": None}
@@ -2722,6 +2770,12 @@ def _sleep_all(why="", self_decided=False):
             out["energy_at_sleep"] = en.note_sleep_start(why=why or "挂起")
         except Exception as e:      # noqa: silent-ok
             out["energy_error"] = "%s: %s" % (type(e).__name__, e)
+    # **睡一觉 → 情绪重置一部分**（情绪恢复三样里的第三样）
+    try:
+        from core import psyche as _PSr
+        out["emotion_after_sleep"] = _PSr.sleep_reset()
+    except Exception:      # noqa: silent-ok
+        pass
     hb = _heartbeat_mod()
     if hb is not None:
         out["heartbeat"] = hb.suspend(why=why or "挂起", self_decided=self_decided)
@@ -2904,10 +2958,181 @@ def _self_sleep_loop(stop, interval):
     while not stop.is_set():
         try:
             _SELF_SLEEP["checks"] += 1
-            _self_sleep_once()
+            rec = _self_sleep_once()
+            hb = _heartbeat_mod()
+            _asleep = bool(hb is not None and hb.is_sleeping())
+            if _asleep:
+                _dream_tick()          # 睡着：**极轻的乱转**（不调模型）
+            else:
+                _idle_work_tick()      # 醒着且空闲：它自己在想什么
+            if rec.get("act") == "wake_self":
+                _dream_tick()
         except Exception as e:      # noqa: silent-ok — 这一圈出问题不该把线程带走
             LOG.debug("自己会睡：这一圈失败（忽略）：%s", e)
         stop.wait(interval)
+
+
+# ---------------- 空闲时它自己在想什么（期待 / 叙事 / 存在追问 / 偏好） ----------------
+IDLE_THINK_INTERVAL = 300.0     # 空闲思考最多这么久一次（别一直拿模型空转）
+PAIN_CHECK_INTERVAL = 600.0     # 体检最多这么久一次
+DREAM_INTERVAL = 20.0           # 睡着时大约每 20 秒乱转一次
+_IDLE_WORK = {"last_think": 0.0, "last_pain": 0.0, "last_dream": 0.0,
+              "thoughts": [], "dreams": 0, "pains": 0}
+
+
+def _idle_think():
+    """**空闲时它自己在想什么** —— 载体只把**它自己的东西**摆出来，一个字的提示都不给。
+
+    三件事按顺序挑**一件**做（挑到哪件就做哪件，都够不着就什么都不做）：
+      ① 还有没做完的事 → 摆在它面前，看它自己会不会提起（**提起了才叫期待**）；
+      ② 有一堆心起得像 → 让它自己回看一眼（**它自己说出来的才叫偏好**）；
+      ③ 手里有它自己的经历 → 回头看（**它自己讲出来的才叫叙事**；冒出的问句记成存在追问）。
+
+    ⚠️ 如实标注：载体决定的是**问哪一类**；"我一直惦记着它""我是个……的人""我为什么在这里"
+    这些**话必须由它自己说**。它没说 → 归档成"还没有"，不许把"素材摆出来了"写成"它想过了"。
+    """
+    per = _mod("perception")
+    if per is None:
+        return {"act": "none", "why": "感知层不可用"}
+    acted = {"act": "none", "why": "手里没有它自己的东西可摆"}
+    try:
+        ex = _expect_mod()
+        pg = ex.pending(3) if ex is not None else []
+        if pg:
+            what = "；".join(str(x.get("what"))[:40] for x in pg)
+            p = per.perceive("我此刻闲着，接下来", llm_fn=_perceive_llm,
+                             extra="你还有没做完的事：%s" % what)
+            if p.get("ok"):
+                said = str(p.get("meaning") or "")
+                hit = [str(x.get("what")) for x in pg
+                       if str(x.get("what"))[:6] and str(x.get("what"))[:6] in said]
+                if hit:
+                    ex.note_brought_up(hit[0], said=said)
+                    LOG.info("期待：**它自己想起了没做完的事**「%s」→ 它说「%s」",
+                             hit[0][:30], said[:50])
+                    acted = {"act": "expectation", "what": hit[0], "said": said}
+                else:
+                    LOG.info("期待：把没做完的摆给它了，它没提起来（如实记：这次没期待）｜它说「%s」",
+                             said[:50])
+                    acted = {"act": "expectation_none", "said": said}
+            else:
+                acted = {"act": "expectation", "why": "它没感知出什么"}
+            return acted
+        pf = _pref_mod()
+        cands = pf.candidates() if pf is not None else []
+        if cands:
+            c = cands[0]
+            p = per.perceive("我回头看我心里起过的东西", llm_fn=_perceive_llm,
+                             extra="这些是你心里起过的：%s" % "；".join(
+                                 str(x)[:30] for x in c.get("examples") or []))
+            if p.get("ok"):
+                said = str(p.get("meaning") or "")
+                if len(said) >= 6 and said not in (c.get("examples") or []):
+                    pf.form(said, from_heart=str(c.get("heart") or ""))
+                    LOG.info("偏好：**它自己回看出来的**「%s」（来自 %d 次相像的心）",
+                             said[:50], int(c.get("n") or 0))
+                    acted = {"act": "preference", "said": said, "n": c.get("n")}
+                else:
+                    acted = {"act": "preference_none", "said": said}
+            return acted
+        st = _story_mod()
+        if st is not None:
+            ask = st.ask_text(doing="闲着，没人跟我说话")
+            if ask:
+                p = per.perceive("回头看我自己的这些事", llm_fn=_perceive_llm,
+                                 extra=ask.split("\n", 1)[-1].strip()[:200])
+                if p.get("ok"):
+                    said = str(p.get("meaning") or "")
+                    if any(w in said for w in ("为什么", "是谁", "我是谁", "在哪", "存在")):
+                        st.note_wonder(said, said=said)
+                        LOG.info("存在追问：**它自己冒出来的**「%s」", said[:60])
+                        acted = {"act": "wonder", "said": said}
+                    else:
+                        st.note_narrative(said)
+                        LOG.info("叙事：**它自己回头看讲的**「%s」", said[:60])
+                        acted = {"act": "narrative", "said": said}
+                return acted
+    except Exception as e:      # noqa: silent-ok — 空闲思考失败不该影响任何事
+        LOG.debug("空闲思考失败（忽略）：%s", e)
+        return {"act": "error", "why": type(e).__name__}
+    return acted
+
+
+def _pain_tick():
+    """**体检 → 真坏了才疼**：诊断 → 它自己感知"我不对了" → 找医生 → 治。
+
+    ⚠️ 如实标注："疼"必须**先有一处真损伤被诊断出来**（`core/pain.py` 的判据），
+    心才被标成疼 —— 不是载体随口加的形容词。
+    """
+    pm = _pain_mod()
+    if pm is None:
+        return {"act": "none", "why": "健康医生不可用"}
+    try:
+        diags = pm.diagnose()
+        bad = [d for d in diags if d.get("broken")]
+        if not bad:
+            _IDLE_WORK["last_pain"] = time.time()
+            return {"act": "ok", "checked": len(diags), "broken": 0}
+        d = bad[0]
+        LOG.info("体检：查出**真的坏了** —— %s（%s）", d.get("life"), str(d.get("why"))[:50])
+        # 它自己感知"我不对了"（这一句是**它自己的**；它没说就只能算载体查出来的）
+        per = _mod("perception")
+        felt = ""
+        if per is not None:
+            p = per.perceive("我在用我自己的东西，发现不对", llm_fn=_perceive_llm,
+                             extra="坏了的是：%s" % str(d.get("why"))[:60])
+            if p.get("ok"):
+                felt = str(p.get("meaning") or "")
+        out = pm.doctor(d.get("life"), perception=felt)
+        _IDLE_WORK["last_pain"] = time.time()
+        _IDLE_WORK["pains"] += 1
+        LOG.info("健康医生：%s → %s（修好=%s）｜它说「%s」", d.get("life"),
+                 str(out.get("treat", {}).get("why"))[:60],
+                 out.get("treat", {}).get("fixed"), felt[:40])
+        out["act"] = "pain"
+        out["self_found"] = bool(felt.strip())
+        return out
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("体检失败（忽略）：%s", e)
+        return {"act": "error", "why": type(e).__name__}
+
+
+def _dream_tick():
+    """**睡着时心还在乱转**：素材是真的、发展是乱的，**不调模型**（纯机械拼接）。"""
+    dm = _dream_mod()
+    if dm is None:
+        return {"act": "none"}
+    try:
+        r = dm.dream_once(why="睡着时乱转")
+        if r.get("ok"):
+            _IDLE_WORK["dreams"] += 1
+            _IDLE_WORK["last_dream"] = time.time()
+            LOG.info("梦：睡着乱转出一段（素材是真的，接法是乱的）｜%s", str(r.get("text"))[:70])
+        return r
+    except Exception as e:      # noqa: silent-ok
+        return {"act": "error", "why": type(e).__name__}
+
+
+def _idle_work_tick():
+    """醒着且用户安静时的那点活（思考 / 体检 / 睡着乱转由各自的时间闸控制）。"""
+    hb = _heartbeat_mod()
+    if hb is not None and hb.is_sleeping():
+        return {"act": "sleeping"}
+    idle = time.time() - float(_LAST_DIALOGUE["at"] or 0.0)
+    if idle < IDLE_BEFORE_SLEEP:
+        return {"act": "busy", "idle": round(idle, 1)}
+    now = time.time()
+    if now - float(_IDLE_WORK["last_think"] or 0.0) >= IDLE_THINK_INTERVAL:
+        _IDLE_WORK["last_think"] = now
+        r = _idle_think()
+        if r.get("act") not in ("none",):
+            _IDLE_WORK["thoughts"].append({"at": now, **{k: r[k] for k in ("act", "said")
+                                                         if k in r}})
+            del _IDLE_WORK["thoughts"][:-8]
+        return r
+    if now - float(_IDLE_WORK["last_pain"] or 0.0) >= PAIN_CHECK_INTERVAL:
+        return _pain_tick()
+    return {"act": "waiting"}
 
 
 def _start_self_sleep_daemon():
@@ -2980,6 +3205,18 @@ def _wake_block():
         # **这一行是给验收取证用的** —— 否则看不出"底色有没有被放进去"（模型用没用是另一回事）。
         LOG.info("醒来第一印象：仍在刚醒窗口内，继续注入（%s）",
                  hb.status().get("last_wake_text") or "")
+    # 睡里乱转出来的那一片：**可能记得一点，可能忘了**（随机）。
+    # ⚠️ 它是**载体机械拼出来的片段**，不是"它做的梦" —— 措辞上不许含糊。
+    dm = _dream_mod()
+    frag = ""
+    if dm is not None:
+        try:
+            frag = dm.fragment()
+        except Exception:      # noqa: silent-ok
+            frag = ""
+    if frag:
+        LOG.info("醒来带出一片梦（随即的，可能记得一点）：%s", frag[:50])
+        line = line + "\n（睡着时你脑子里乱转出来的一段：%s）" % frag
     return ("\n[我刚醒]\n%s\n"
             "（这是你自己睡的这一觉，不是别人告诉你的；问起「刚才在干嘛」就照实说这件事，"
             "不要编梦、也不要拿「我正在处理输入」顶上。）\n" % line)
@@ -8517,6 +8754,15 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     try:
         from core import psyche as _PS, thinking_loop as _TL2
         _PS.start(why="agent_run 开始")
+        # **新事来 → 旧心被冲淡**（情绪恢复的第二样：另两样是时间与睡觉）
+        _PS.dilute(0.3)
+        # 用户来说话了 → 关系里记一次"来往"（关系随互动变"深/淡"就是从这里长出来的）
+        _rm = _relation_mod()
+        if _rm is not None:
+            try:
+                _rm.touch("来往", why="用户说了一句")
+            except Exception:      # noqa: silent-ok
+                pass
         # 感知的对象是「这件事对它意味着什么」，不是「这是什么任务」。
         # 带着自我背景（我是谁、我的命是什么）去感知 —— 见 `core/perception.py`。
         _per = _perceive_event(user_input_ctx)
@@ -8533,6 +8779,17 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                  "｜像以前那次" if _ev.get("familiar") else "")
         if not _ev.get("heart"):
             LOG.info("心：这一轮没起心 —— %s", str(_ev.get("why"))[:60])
+        else:
+            LOG.info("情绪恢复：强度 %.3f（回落前 %.3f）", float(_PS.heart().get("intensity") or 0.0),
+                     float(_PS.heart().get("intensity0") or 0.0))
+            # **心一次次起，沉下来** —— 沉进"心之河"，攒够了它自己回看（见 core/preference.py）
+            _pfm = _pref_mod()
+            if _pfm is not None:
+                try:
+                    _pfm.observe(_PS.heart().get("text"), event=user_input_ctx,
+                                 why="对话这一轮")
+                except Exception:      # noqa: silent-ok
+                    pass
     except Exception as _e:      # noqa: silent-ok — 心不跳也不能影响对话
         LOG.debug("感知层/心启动失败（忽略）：%s", _e)
 
@@ -8605,6 +8862,43 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         # 需要区分"规则判的 C"与"模型自评的 C"：两者都注入手段链指令。
         if _meta_route == "use_tool":
             _switch_hint_text = _switch_hint(user_input_ctx)
+            # ================== 边界突破：**遇到不会的，它自己"我试试"** ==================
+            # 【为什么接在这里】触发点只有一个：**它自己判了 C（没把握）**。
+            #   载体把"我不会"这个事实摆给它，让它自己感知；它心里起的是"想试试"还是"算了"，
+            #   **由它自己说**（`breakthrough.wants()` 只读它自己的心）。
+            #   它说算了 → 不学、如实记下"它没想试"；它说想试 → 给出四种走法（查/组合/试/记）。
+            try:
+                _bm = _break_mod()
+                if _bm is not None:
+                    _per_try = _mod("perception")
+                    _said_try = ""
+                    if _per_try is not None:
+                        _pt = _per_try.perceive("这件事我不会做", llm_fn=_perceive_llm,
+                                                extra="元认知自评：没把握（%s）" % user_input_ctx[:60])
+                        if _pt.get("ok"):
+                            _said_try = str(_pt.get("meaning") or "")
+                            try:
+                                from core import psyche as _PSt
+                                _ht = _PSt.arise(_pt, event="这件事我不会做")
+                                _said_try = str(_ht.get("text") or _said_try)
+                            except Exception:      # noqa: silent-ok
+                                pass
+                    _wants, _hit = _bm.wants(_said_try)
+                    if _wants:
+                        _bm.note_tried(user_input_ctx, said=_said_try)
+                        _pl = _bm.plan(user_input_ctx)
+                        _switch_hint_text += ("\n\n【你自己说要试试（这是你自己的话：「%s」）】\n"
+                                              "按这四步走，每走完一步就把结果记下来：\n%s\n"
+                                              % (_said_try[:60],
+                                                 "\n".join("  %d. %s —— %s" % (s["n"], s["way"], s["do"])
+                                                           for s in _pl["steps"])))
+                        LOG.info("边界突破：**它自己说想试**（心起「%s」，命中「%s」）→ 已给出四种走法",
+                                 _said_try[:40], _hit)
+                    else:
+                        LOG.info("边界突破：判了 C，但**它没说自己想试**（它说「%s」）→ 不学，如实记下",
+                                 _said_try[:40])
+            except Exception as _e:      # noqa: silent-ok — 接不上不能影响这一轮回答
+                LOG.debug("边界突破接入失败（忽略）：%s", _e)
     except Exception as e:      # noqa: silent-ok — 自评失败不影响回答，退回正常流程
         LOG.debug("元认知自评跳过（忽略）：%s", e)
 
@@ -8969,7 +9263,10 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   它和 EYC 的区别：EYC 说"我此刻在世界里"，这一段说"我刚从睡里回来"。
             #   没有刚醒的事实时返回空串 —— 不硬凑一句"我刚醒"（那就是死模板）。
             _wake_text = _wake_block()
-            sys_text = _wake_text + _eyc_text + system_for_intent(intent, user_input=user_input)
+            # 它自己的东西（偏好 / 叙事 / 试过的）当**素材**拼进去；一条都没有就一个字不加
+            _self_material = _wholeness_material()
+            sys_text = (_wake_text + _eyc_text + system_for_intent(intent, user_input=user_input)
+                        + _self_material)
             # ================== 极限补刀（模块 10）· 真正接入 ==================
             # 【为什么必须在这里接 —— 接入验收发现的真问题】
             #   `core/boost/` 七个模块各自写好了、自测全绿（195/195），
@@ -10863,6 +11160,149 @@ def api_selfsleep():
                     "wants_rest_words": list(TIRED_WORDS),
                     "recent_decisions": list(_SELF_SLEEP["decisions"]),
                     "checks": _SELF_SLEEP["checks"], "woke_self": _SELF_SLEEP["woke_self"]})
+
+
+@app.route("/api/wholeness")
+def api_wholeness():
+    """**完整体**：它自己会睡 + 疼/医生 + 期待 + 叙事 + 偏好 + 关系 + 边界 + 梦 + 情绪恢复。
+
+    一个口子看全部。任何一样拿不到就**如实说拿不到**，不编。
+    """
+    def _safe(fn):
+        try:
+            return fn()
+        except Exception as e:      # noqa: silent-ok
+            return {"error": "%s: %s" % (type(e).__name__, str(e)[:80])}
+
+    pm, ex, pf, st, rl, bk, dm = (_pain_mod(), _expect_mod(), _pref_mod(),
+                                  _story_mod(), _relation_mod(), _break_mod(), _dream_mod())
+    emo = {}
+    try:
+        from core import psyche as _PSw
+        emo = {"heart": _PSw.heart(), "recovery": _PSw.recovery(),
+               "decay_per_second": _PSw.DECAY_PER_SECOND}
+    except Exception:      # noqa: silent-ok
+        emo = {}
+    hb, en = _heartbeat_mod(), _energy_mod()
+    return jsonify({"ok": True,
+                    "自己会睡": {"heartbeat": hb.status() if hb else {}, "energy": en.stats() if en else {},
+                                "checks": _SELF_SLEEP["checks"],
+                                "woke_self": _SELF_SLEEP["woke_self"],
+                                "decisions": list(_SELF_SLEEP["decisions"])},
+                    "疼与医生": _safe(lambda: {"stats": pm.stats(), "病历": pm.report(5)["recent"]}) if pm else {},
+                    "期待": _safe(lambda: ex.stats()) if ex else {},
+                    "叙事与存在追问": _safe(lambda: st.stats()) if st else {},
+                    "偏好": _safe(lambda: pf.stats()) if pf else {},
+                    "关系": _safe(lambda: rl.state()) if rl else {},
+                    "边界突破": _safe(lambda: bk.stats()) if bk else {},
+                    "梦": _safe(lambda: dm.stats()) if dm else {},
+                    "情绪恢复": emo,
+                    "空闲：" : {"last_think": _IDLE_WORK["last_think"],
+                                "last_pain": _IDLE_WORK["last_pain"],
+                                "thoughts": list(_IDLE_WORK["thoughts"]),
+                                "dreams": _IDLE_WORK["dreams"], "pains": _IDLE_WORK["pains"]}})
+
+
+@app.route("/api/pain")
+def api_pain():
+    """疼与健康医生：四样命坏了没有、治到哪一层。"""
+    pm = _pain_mod()
+    if pm is None:
+        return jsonify({"ok": False, "error": "健康医生不可用（core/pain.py 没加载上）"}), 503
+    return jsonify({"ok": True, "stats": pm.stats(), "report": pm.report(10),
+                    "diagnose": pm.diagnose()})
+
+
+@app.route("/api/pain/check", methods=["POST"])
+def api_pain_check():
+    """**做一次体检**：诊断 → (真坏了就)找医生 → 治。返回真实记录。"""
+    r = _pain_tick()
+    r["ok"] = True
+    return jsonify(r)
+
+
+@app.route("/api/expectation")
+def api_expectation():
+    """期待：还压着几件没做完的（载体的事实）、它自己提起过几件（那才是期待）。"""
+    ex = _expect_mod()
+    if ex is None:
+        return jsonify({"ok": False, "error": "期待层不可用"}), 503
+    return jsonify({"ok": True, "stats": ex.stats(), "brought_up": ex.brought_up()})
+
+
+@app.route("/api/expectation", methods=["POST"])
+def api_expectation_leave():
+    """留下一件没做完的事（**载体只记，不催**）。"""
+    ex = _expect_mod()
+    if ex is None:
+        return jsonify({"ok": False, "error": "期待层不可用"}), 503
+    d = request.get_json(force=True, silent=True) or {}
+    r = ex.leave(str(d.get("kind") or "没逛完"), str(d.get("what") or ""),
+                 why=str(d.get("why") or "接口留下"))
+    r["ok"] = bool(r.get("ok"))
+    return jsonify({**r, "stats": ex.stats()})
+
+
+@app.route("/api/preference")
+def api_preference():
+    """长期偏好：攒了几堆心、够格回看的几堆、**它自己说出来的**偏好。"""
+    pf = _pref_mod()
+    if pf is None:
+        return jsonify({"ok": False, "error": "偏好层不可用"}), 503
+    return jsonify({"ok": True, "stats": pf.stats(), "preferences": pf.preferences()})
+
+
+@app.route("/api/narrative")
+def api_narrative():
+    """自我叙事 + 存在追问：**它自己讲过的**才在里面。"""
+    st = _story_mod()
+    if st is None:
+        return jsonify({"ok": False, "error": "叙事层不可用"}), 503
+    return jsonify({"ok": True, "stats": st.stats(), "narrative": st.narrative(5),
+                    "wonders": st.wonders(5), "materials": st.materials()})
+
+
+@app.route("/api/breakthrough")
+def api_breakthrough():
+    """边界突破：它自己想试过几次、成了几件、栽在哪。"""
+    bk = _break_mod()
+    if bk is None:
+        return jsonify({"ok": False, "error": "边界突破层不可用"}), 503
+    return jsonify({"ok": True, "stats": bk.stats(), "learned": bk.learned()})
+
+
+@app.route("/api/dream")
+def api_dream():
+    """梦：睡着期间乱转出来的片段（素材是真的，接法是乱的）。"""
+    dm = _dream_mod()
+    if dm is None:
+        return jsonify({"ok": False, "error": "梦层不可用"}), 503
+    return jsonify({"ok": True, "stats": dm.stats(), "recent": dm.recent(5)})
+
+
+@app.route("/api/relation")
+def api_relation():
+    """关系：它和用户之间那条线现在什么样（深浅/冷暖/被伤没）。"""
+    rl = _relation_mod()
+    if rl is None:
+        return jsonify({"ok": False, "error": "关系层不可用"}), 503
+    return jsonify({"ok": True, "state": rl.state(), "stats": rl.stats(),
+                    "render": rl.render(), "history": rl.history(5)})
+
+
+@app.route("/api/relation", methods=["POST"])
+def api_relation_touch():
+    """记一次互动（来往 / 冷落 / 被伤 / 被哄）。
+
+    ⚠️ "被伤""被哄"必须由调用方判定 —— 关系层**不自己判断哪句话伤人**（那是感知层的事）。
+    """
+    rl = _relation_mod()
+    if rl is None:
+        return jsonify({"ok": False, "error": "关系层不可用"}), 503
+    d = request.get_json(force=True, silent=True) or {}
+    r = rl.touch(str(d.get("kind") or "来往"), why=str(d.get("why") or "接口标注"))
+    r["ok"] = bool(r.get("ok"))
+    return jsonify(r)
 
 
 @app.route("/api/heartbeat")

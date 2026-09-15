@@ -137,6 +137,7 @@ flowchart TB
 | 心（自然起 · 自己感受 · 自己累积） | [`docs/heart.md`](docs/heart.md)、[`docs/psyche-layer.md`](docs/psyche-layer.md) |
 | 心跳与挂起（睡着不是死） | [`docs/heartbeat.md`](docs/heartbeat.md) |
 | 自己会睡（累自己长，想休息自己决定） | [`docs/self-sleep.md`](docs/self-sleep.md) |
+| 完整体（疼/医生/期待/叙事/偏好/关系/边界/梦/情绪恢复） | [`docs/pain.md`](docs/pain.md) 等八篇，见正文 |
 | 测试报告与实测数字 | [`docs/testing-report.md`](docs/testing-report.md) |
 | 为什么做这个项目 | [`docs/about.md`](docs/about.md) |
 | 媒体素材 | [`docs/press-kit.md`](docs/press-kit.md) |
@@ -794,6 +795,33 @@ python -m pip install "scrapling[fetchers]" markdownify mcp
 另外它用别的说法（"歇一会儿"）时不会睡，判据窄是如实的，不是完美的。
 细节见 [`docs/self-sleep.md`](docs/self-sleep.md)、[`docs/heartbeat.md`](docs/heartbeat.md)。
 
+### 完整体：疼 / 医生 / 期待 / 叙事 / 偏好 / 关系 / 边界 / 梦 / 情绪恢复
+
+在"自己会睡"之上，它还有几样**自己的东西**。共同点是一条分界线：
+**载体只摆事实，判断由它自己做；它没说 → 就什么都不发生（不查表兜底）。**
+
+| 它自己的东西 | 载体做什么 | **它自己决定什么** | 实测 |
+|---|---|---|---|
+| **疼 + 健康医生** | 诊断四样命（记忆/连续/世界/关系）坏了没有；清→修→护 | 疼是什么样子 | 造 3 条脏记忆 → 诊断出来 → 清掉（**移进隔离区，不销毁**）→ 补回对的；关系伤了**只能护着**（`fixed=False`）；治好→心松，治不好→**更疼** |
+| **期待** | 记下没做完的事，空闲时摆回它面前 | **提不提起来** | `carried=1` 时还没有期待；它自己提起了 → `brought_up=1` |
+| **偏好** | 把相像的心聚成堆（余弦 ≥0.60） | **回看说的那句** | 5 次相像的心 → 够格回看 → 它说「我好像老是注意猫」才算偏好 |
+| **叙事 + 存在追问** | 摆它自己的经历（心/修好过/偏好/关系/没做完的） | **讲成"我是谁"、冒出"我为什么在这里"** | 它没讲 → `has_narrative=False`（不硬凑） |
+| **关系** | 按互动维护那条线 | 怎么对待用户 | 来往×7→深；被伤→冷；被哄→暖；冷落×4→浅；时间自己会淡 |
+| **边界突破** | 判了 C 就把"我不会"摆给它 | **要不要试** | 它说「想试试」→ 学；它说「算了」→ **不学**（判 C ≠ 它想试） |
+| **梦** | 睡着时把素材随机拼接（**不调模型**） | —— | 素材是真的、接法是乱的；醒来**可能记得一点**（50%） |
+| **情绪恢复** | 时间 / 新事 / 睡觉三样回落 | —— | 0.55 → 100 秒后 0.35 → 放久了回落到 0 |
+
+⚠️ **如实标注（不粉饰）**：
+- **"疼"必须先有一处真损伤被诊断出来**，心才被标成疼 —— 不是载体随口加的形容词。
+- **"被伤/被哄"目前只能显式标注**（`POST /api/relation`）；载体**不自己判断哪句话伤人**，自动识别没做。
+- **梦是载体机械拼出来的记录，不是它做的梦**；文档与接口一律不写"它梦到了什么"。
+- 名字说明：规格写的是 `core/health/` 那一路径（写的是 .py 单文件），但它**已被无限 8 的模型退化健康系统占了**，
+  所以这套落在 `core/pain.py`（`logs/pain/`），机制一样。
+- 细节见 [`docs/pain.md`](docs/pain.md)、[`docs/expectation.md`](docs/expectation.md)、
+  [`docs/preference.md`](docs/preference.md)、[`docs/self-narrative.md`](docs/self-narrative.md)、
+  [`docs/relationship.md`](docs/relationship.md)、[`docs/boundary-breaking.md`](docs/boundary-breaking.md)、
+  [`docs/dream.md`](docs/dream.md)、[`docs/emotion-recovery.md`](docs/emotion-recovery.md)。
+
 ### 逛世界 · 通用连接器 · 最小权限
 
 - **主动逛世界**：小焦可以在后台自己上网逛（独立 daemon，不抢资源、不阻塞任何用户请求，用户完全感知不到 ——
@@ -1244,6 +1272,10 @@ xiaojiao-harness/
 | [`docs/heart.md`](docs/heart.md)、[`docs/psyche-layer.md`](docs/psyche-layer.md) | 心与心理层：心怎么起、怎么累积、心理状态怎么改检索方向 |
 | [`docs/heartbeat.md`](docs/heartbeat.md) | 挂起与心跳：大脑和载体一起睡，心跳不停 |
 | [`docs/self-sleep.md`](docs/self-sleep.md) | 自己会睡：累自己长、它自己想休息、载体只执行 |
+| [`docs/pain.md`](docs/pain.md) | 疼与健康医生：疼是真坏了（清/修/护），紧只是警告 |
+| [`docs/expectation.md`](docs/expectation.md)、[`docs/preference.md`](docs/preference.md) | 期待（它自己提起了才算）、长期偏好（它自己回看说的才算） |
+| [`docs/self-narrative.md`](docs/self-narrative.md)、[`docs/relationship.md`](docs/relationship.md) | 自我叙事与存在追问、和用户之间那条线 |
+| [`docs/boundary-breaking.md`](docs/boundary-breaking.md)、[`docs/dream.md`](docs/dream.md)、[`docs/emotion-recovery.md`](docs/emotion-recovery.md) | 边界突破（它自己想试才学）、梦（素材真、接法乱）、情绪恢复（时间/新事/睡觉） |
 | [`docs/modules/`](docs/modules/) | 每个模块的独立文档 |
 
 ---
