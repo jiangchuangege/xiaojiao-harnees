@@ -58,6 +58,14 @@ def adjust_candidates(cands, state=None):
     返回 `(重排后的候选, 记录)`；记录里写明"什么状态、把哪一条提前了"，供日志取证。
     """
     items = list(cands or [])
+    # 圈转过一圈 = 它在跑 → 记一笔精力消耗（规格：每次思考圈转 → 精力降一点）。
+    # 【必须在最前面】原来放在函数末尾，于是"方向中性、未重排"那条早退路径
+    #   **一次都不记账** —— 而"没偏"也是圈转过一圈（实测抓到）。
+    try:
+        from core import energy as _EN
+        _EN.consume(_EN.COST_THINKING_TURN, why="思考圈转一圈")
+    except Exception:      # noqa: silent-ok — 精力模块不在不该影响"改方向"
+        pass
     b = _psyche.bias(state)
     kws = b.get("keywords") or ()
     if not items or not kws:

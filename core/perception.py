@@ -74,15 +74,20 @@ SELF_LINES = (
 )
 
 
-def self_background(doing=""):
+def self_background(doing="", extra=""):
     """它的存在状态（**只用于感知这一次调用**，不进对话上下文）。
 
     `doing` 是载体从实时状态里取的"我正在经历什么"（真实值，不美化、不补编）。
+    `extra` 是**它自己身上的一个事实**（比如"精力 22%（满 100%）"）——
+    给的是数，不是结论：载体**不说**"你累了"，"累"这个字由它自己在感知里说出来。
     """
     out = list(SELF_LINES)
     d = str(doing or "").strip()
     if d and d != "idle":
         out.append("你此刻正在做的：%s" % d[:80])
+    e = str(extra or "").strip()
+    if e:
+        out.append("你此刻身上的一个事实：%s" % e[:120])
     return "\n".join(out)
 
 
@@ -102,7 +107,7 @@ _TASK = (
 )
 
 
-def perceive(event, llm_fn, doing=""):
+def perceive(event, llm_fn, doing="", extra=""):
     """**感知**：这件事对它意味着什么。返回结构化感知，不抛异常。
 
     返回 `{"meaning", "touches_life", "direction", "raw", "parsed_by", "ok"}`：
@@ -113,13 +118,20 @@ def perceive(event, llm_fn, doing=""):
       · `ok`        —— 真拿到了感知才为真；为假时调用方**不起心**（不查表兜底）
 
     `llm_fn(prompt)` 是一次纯文本模型调用（不给工具、不给上下文）。
+    `extra` 是它自己身上的一个**事实**（如精力数值）—— 见 `self_background`。
     """
     ev = str(event or "").strip()
     res = {"meaning": "", "touches_life": [], "direction": "", "raw": "",
            "parsed_by": "无", "ok": False}
     if not ev:
         return res
-    prompt = "%s\n\n%s\n\n事：%s" % (self_background(doing), "\n".join(_TASK), ev[:400])
+    prompt = "%s\n\n%s\n\n事：%s" % (self_background(doing, extra), "\n".join(_TASK), ev[:400])
+    # 感知本身也是"它在跑" —— 记一笔消耗（规格：每次感知 → 精力降一点）。
+    try:
+        from core import energy as _EN
+        _EN.consume(_EN.COST_PERCEPTION, why="感知一次")
+    except Exception:      # noqa: silent-ok — 精力模块不在也不该影响感知
+        pass
     try:
         raw = str(llm_fn(prompt) or "").strip()
     except Exception:      # noqa: silent-ok — 感知不出来就不起心，由调用方决定

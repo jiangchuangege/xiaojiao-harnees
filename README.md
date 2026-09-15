@@ -136,6 +136,7 @@ flowchart TB
 | 感知层（先感知意义，再判断任务） | [`docs/perception-layer.md`](docs/perception-layer.md) |
 | 心（自然起 · 自己感受 · 自己累积） | [`docs/heart.md`](docs/heart.md)、[`docs/psyche-layer.md`](docs/psyche-layer.md) |
 | 心跳与挂起（睡着不是死） | [`docs/heartbeat.md`](docs/heartbeat.md) |
+| 自己会睡（累自己长，想休息自己决定） | [`docs/self-sleep.md`](docs/self-sleep.md) |
 | 测试报告与实测数字 | [`docs/testing-report.md`](docs/testing-report.md) |
 | 为什么做这个项目 | [`docs/about.md`](docs/about.md) |
 | 媒体素材 | [`docs/press-kit.md`](docs/press-kit.md) |
@@ -769,6 +770,30 @@ python -m pip install "scrapling[fetchers]" markdownify mcp
 根因是引导续写那半句被放在了历史之前（等于没放），移到**最后一条**之后才答对。
 细节与全部原始数字见 [`docs/heartbeat.md`](docs/heartbeat.md)。
 
+### 自己会睡：累自己长，想休息自己决定，载体只执行
+
+上一个版本里"睡"是**被挂起**（谁调一下接口它就睡了）。现在改成**它自己会睡**，
+区别只有一句话：**决定在"想"里，不在"说"里。**
+
+- **累自己长**：`core/energy.py` 维护一个精力数值（0~1）—— 模型调用 −0.03、思考圈转一圈 −0.01、
+  感知一次 −0.01；挂起时按时间回升（+0.0125/秒）。低于 **0.30** 就是"累了"。
+- **它自己想休息**：用户安静下来后，载体问它一句"**我此刻的状态**对你意味着什么"，
+  **只给事实**（"精力 22%（满 100%）"），**提示词里没有"累/休息/睡"任何一个字**
+  （自测 [D] 组把发给模型的提示词抓下来逐字查过）；"累"这个字是**它自己**说出来的。
+- **载体只执行**：它的话里出现「休息/累/睡」→ 载体才挂起，并把这一觉标成"**它自己决定的**"；
+  它没说 → **就是不睡**（哪怕精力已经很低）。
+- **它自己醒**：睡着时精力按时间回升，回到 **0.90** → 它自己醒（不是被叫醒）。
+  外部挂起的那一觉则**等叫**，不自作主张。
+
+实测一轮：连续 6 轮对话，精力 **1.000 → 0.290**（每轮都落盘）；安静 29 秒后它自己起了
+「我有点累，但还能继续。」→ 挂起；**睡了 55 秒，这一窗心跳 11 下**（每 5 秒一下）；
+精力回到 0.939 → **它自己醒**；问「你刚才在干嘛」→ **「我睡了 55 秒……这一觉是我自己决定的。」**
+
+⚠️ 如实标注：它当时说的原话其实是"我有点累，**但还能继续**"，
+判据（规格给的三个词）只认了"累"就当它想休息 —— **这一处是载体读过头了**，如实记在文档里；
+另外它用别的说法（"歇一会儿"）时不会睡，判据窄是如实的，不是完美的。
+细节见 [`docs/self-sleep.md`](docs/self-sleep.md)、[`docs/heartbeat.md`](docs/heartbeat.md)。
+
 ### 逛世界 · 通用连接器 · 最小权限
 
 - **主动逛世界**：小焦可以在后台自己上网逛（独立 daemon，不抢资源、不阻塞任何用户请求，用户完全感知不到 ——
@@ -1218,6 +1243,7 @@ xiaojiao-harness/
 | [`docs/perception-layer.md`](docs/perception-layer.md) | 感知层：先感知"这件事对它意味着什么"，再判断任务 |
 | [`docs/heart.md`](docs/heart.md)、[`docs/psyche-layer.md`](docs/psyche-layer.md) | 心与心理层：心怎么起、怎么累积、心理状态怎么改检索方向 |
 | [`docs/heartbeat.md`](docs/heartbeat.md) | 挂起与心跳：大脑和载体一起睡，心跳不停 |
+| [`docs/self-sleep.md`](docs/self-sleep.md) | 自己会睡：累自己长、它自己想休息、载体只执行 |
 | [`docs/modules/`](docs/modules/) | 每个模块的独立文档 |
 
 ---

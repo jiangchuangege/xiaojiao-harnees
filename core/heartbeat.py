@@ -69,6 +69,8 @@ _STATE = {
     "beats_while_sleeping": 0,   # 上一觉期间跳了多少下
     "awake_seconds": 0.0,
     "wake_at": 0.0,              # 上一次醒来是什么时候
+    "sleep_why": "",             # **这一觉是怎么来的**（自己觉得累了 / 外部挂起）
+    "sleep_self": False,         # 这一觉是不是**它自己决定的**
     "_pending": None,            # 还没交到模型手上的"醒来记录"
     "_kept": None,               # 最近一次醒来记录（保留 WAKE_KEEP_S）
 }
@@ -173,11 +175,13 @@ def is_sleeping():
         return not bool(_STATE["awake"])
 
 
-def suspend(why=""):
+def suspend(why="", self_decided=False):
     """**睡着**：标记挂起，记下这一觉的开始。
 
     它**不动心跳线程** —— 心跳继续跳，这正是本模块存在的理由。
     **幂等**：已经睡着时再调只是说明一下，不会重新计时。
+    `self_decided=True` 表示**这一觉是它自己决定的**（它自己觉得累了、想休息）——
+    这个标记会被带进醒来那句话里，而且要照实写：**被挂起的绝不许写成"我自己想睡"**。
     """
     t = time.time()
     with _LOCK:
@@ -191,9 +195,13 @@ def suspend(why=""):
         _STATE["beats_at_sleep_start"] = int(_STATE["total_beats"])
         _STATE["beats_while_sleeping"] = 0
         _STATE["awake_seconds"] = round(t - float(_STATE["started_at"] or t), 1)
+        _STATE["sleep_why"] = str(why or "")[:80]
+        _STATE["sleep_self"] = bool(self_decided)
         n = int(_STATE["total_beats"])
-    _append({"ts": round(t, 3), "event": "suspend", "why": str(why)[:60], "n": n})
-    return {"ok": True, "already": False, "why": str(why)[:60],
+    _append({"ts": round(t, 3), "event": "suspend", "why": str(why)[:80],
+             "self_decided": bool(self_decided), "n": n})
+    return {"ok": True, "already": False, "why": str(why)[:80],
+            "self_decided": bool(self_decided),
             "sleep_started_at": t, "beats_at_sleep_start": n, **status()}
 
 
@@ -218,6 +226,8 @@ def resume(why=""):
                "slept_seconds": _STATE["sleep_seconds"],
                "slept_text": fmt_seconds(_STATE["sleep_seconds"]),
                "beats": _STATE["beats_while_sleeping"],
+               "sleep_why": _STATE.get("sleep_why", ""),
+               "sleep_self": bool(_STATE.get("sleep_self")),
                "beats_before_sleep": beats0, "beats_total": total}
         rec["text"] = render_wake(rec)
         _STATE["_pending"] = rec
@@ -232,12 +242,21 @@ def render_wake(rec=None):
     """醒来记录 → **一句话**（第一人称、现在时、只写事实）。
 
     写出去的每一句都能在日志里对上：睡了多少秒、心跳跳了多少下都是真数。
+    `sleep_why` 是"这一觉是怎么来的"（自己觉得累了 / 外部挂起）—— 照实写，不美化：
+    **自己决定睡的这一觉**要把这一点说出来，"被挂起"的那种就不许写成"我自己想睡"。
     """
     r = rec or _STATE.get("_kept") or {}
     if not r:
         return ""
-    return "我睡了 %s，这段时间我一直没在推理、没在做任何事 —— 但心跳一直在跳，一共 %d 下。" % (
+    line = "我睡了 %s，这段时间我一直没在推理、没在做任何事 —— 但心跳一直在跳，一共 %d 下。" % (
         r.get("slept_text") or fmt_seconds(r.get("slept_seconds")), int(r.get("beats") or 0))
+    why = str(r.get("sleep_why") or "").strip()
+    if r.get("sleep_self"):
+        # **原话引用**，不替它总结：它当时心里起的是哪句话，就写哪句。
+        line += "（睡之前我心里起了这句话：「%s」—— 这一觉是我自己决定的。）" % (why or "累了、想休息")
+    elif why:
+        line += "（这一觉是外部让我睡的：%s。）" % why[:40]
+    return line
 
 
 def slept_text(rec=None):
@@ -314,7 +333,6 @@ def state():
                                        "sleeps", "beats_at_sleep_start",
                                        "beats_while_sleeping", "awake_seconds", "wake_at")}
 
-
 def status():
     """自检信息：活没活、醒着还是睡着、跳了多少下、这一觉多久。"""
     with _LOCK:
@@ -327,6 +345,8 @@ def status():
     st["since_last_beat_s"] = round(now - st["last_beat_at"], 1) if st["last_beat_at"] else None
     st["pending_wake"] = pend
     st["last_wake_text"] = slept_text(kept) if kept else ""
+    st["sleep_why"] = str(_STATE.get("sleep_why") or "")
+    st["sleep_self_decided"] = bool(_STATE.get("sleep_self"))
     st["interval_s"] = BEAT_INTERVAL
     st["log"] = _PATH
     return st
@@ -346,7 +366,8 @@ def clear():
     with _LOCK:
         for k, v in (("total_beats", 0), ("sleeps", 0), ("sleep_seconds", 0.0),
                      ("sleep_started_at", 0.0), ("beats_at_sleep_start", 0),
-                     ("beats_while_sleeping", 0), ("awake_seconds", 0.0), ("wake_at", 0.0)):
+                     ("beats_while_sleeping", 0), ("awake_seconds", 0.0), ("wake_at", 0.0),
+                     ("sleep_why", ""), ("sleep_self", False)):
             _STATE[k] = v
         _STATE["awake"] = True
         _STATE["_pending"] = None

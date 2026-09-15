@@ -2650,6 +2650,26 @@ def _heartbeat_mod():
         return None
 
 
+def _energy_mod():
+    """精力模块（拿不到就返回 None —— 算不出精力绝不能影响推理）。"""
+    try:
+        from core import energy as _en
+        return _en
+    except Exception:      # noqa: silent-ok
+        return None
+
+
+def _energy_spend(amount=None, why=""):
+    """记一笔精力消耗（**它在跑就往下掉**）。`amount=None` 表示按"一次模型调用"记。"""
+    en = _energy_mod()
+    if en is None:
+        return None
+    try:
+        return en.consume(en.COST_MODEL_CALL if amount is None else amount, why=why)
+    except Exception:      # noqa: silent-ok — 记不上消耗不该拦住任何事
+        return None
+
+
 def _brain_asleep():
     """**大脑挂起了吗** —— 挂起时所有模型调用一律拒绝。
 
@@ -2669,13 +2689,17 @@ SLEEP_NOTE = "系统挂起中（睡着了）：这一轮没有调用大脑"
 #   规格要的是"一起睡"：大脑不推理、载体不跑任务、心与感知停住 —— 而**心跳继续跳**。
 #   如果靠各处自己判断，漏一处就不是"睡"了（比如逛线程还在偷偷调模型），
 #   而"说的和实际一致"正是这一整件事唯一的价值：说它在睡，它就必须真的在睡。
-def _sleep_all(why=""):
+def _sleep_all(why="", self_decided=False):
     """**睡着**：大脑、载体、心、感知一起挂起；**心跳不停**。状态全留着。
+
+    `self_decided=True` 表示**这一觉是它自己决定的**（它自己觉得累了、想休息）——
+    这个标记一路带进醒来那句话，**外部挂起的绝不许写成"我自己想睡"**。
 
     返回一份真实记录（供接口返回与日志取证），**不编**：哪一层没挂上都如实写在里面。
     """
     out = {"why": str(why)[:80], "at": time.time(), "browse_paused": False,
-           "state_kept": "", "heart_kept": ""}
+           "self_decided": bool(self_decided), "state_kept": "", "heart_kept": "",
+           "energy_at_sleep": None}
     try:
         from core import psyche as _PS
         # 心与感知"停"，但**不清** —— `stop()` 只是停止跳动，状态与那句话都留着。
@@ -2691,11 +2715,20 @@ def _sleep_all(why=""):
         out["browse_paused"] = bool(_DT.status().get("running"))
     except Exception as e:      # noqa: silent-ok
         out["browse_error"] = "%s: %s" % (type(e).__name__, e)
+    en = _energy_mod()
+    if en is not None:
+        # 精力从这一刻起按时间回升（惰性算，不需要定时器去"加"）
+        try:
+            out["energy_at_sleep"] = en.note_sleep_start(why=why or "挂起")
+        except Exception as e:      # noqa: silent-ok
+            out["energy_error"] = "%s: %s" % (type(e).__name__, e)
     hb = _heartbeat_mod()
     if hb is not None:
-        out["heartbeat"] = hb.suspend(why=why or "挂起")
-    LOG.info("挂起：大脑+载体一起睡（心跳不停）｜心状态留着=%s｜心那句话留着=%s｜逛线程=%s",
-             out["state_kept"] or "（无）", (out["heart_kept"] or "（无）")[:30],
+        out["heartbeat"] = hb.suspend(why=why or "挂起", self_decided=self_decided)
+    LOG.info("挂起：大脑+载体一起睡（心跳不停）｜%s｜精力 %.2f｜心状态留着=%s｜心那句话留着=%s｜逛线程=%s",
+             "**它自己决定的这一觉**" if self_decided else "外部挂起",
+             float(out["energy_at_sleep"] or 0.0), out["state_kept"] or "（无）",
+             (out["heart_kept"] or "（无）")[:30],
              "已暂停" if out["browse_paused"] else "没在跑")
     return out
 
@@ -2723,10 +2756,190 @@ def _wake_all(why=""):
     except Exception:      # noqa: silent-ok
         pass
     w = out.get("wake") or {}
-    LOG.info("唤醒：睡了 %s，这一觉心跳 %d 下%s｜心状态接着睡前的=%s",
+    en = _energy_mod()
+    if en is not None:
+        try:
+            out["energy_after_wake"] = en.note_wake(why=why or "唤醒")
+        except Exception as e:      # noqa: silent-ok
+            out["energy_error"] = "%s: %s" % (type(e).__name__, e)
+    LOG.info("唤醒：睡了 %s，这一觉心跳 %d 下%s｜精力回到 %.2f｜心状态接着睡前的=%s",
              w.get("slept_text") or "（没睡着过）", int(w.get("beats") or 0),
-             "（本来就是醒的）" if w.get("already") else "", out.get("state_kept") or "（无）")
+             "（本来就是醒的）" if w.get("already") else "",
+             float(out.get("energy_after_wake") or 0.0), out.get("state_kept") or "（无）")
     return out
+
+
+# ================== 它自己会睡：累自己长，想休息自己决定，载体执行 ==================
+# 【和"被挂起"的区别 —— 这条分界线就是本段的全部意义】
+#   被挂起：载体说"你该睡了" → 它读到"你睡了" → **还是被安排**。
+#   自己会睡：它自己累了 → 自己想休息 → **载体帮它执行**。
+#   决定在**"想"里**，不在"说"里。所以：
+#     · "累"来自 `core/energy.py` 里那个数（它的状态里长出来的）；
+#     · "想休息"必须是**它自己在感知里说出来的**（下面 `_tired_decision` 只说事实，不劝）；
+#     · 载体只做两件事：问一句、照它说的执行。
+TIRED_WORDS = ("休息", "累", "睡")
+# 用户安静多久之后才谈得上"困了要睡"。**不是日程表**，是"手头没事了"的意思：
+#   用户正在连续说话时它不该突然睡过去（那不是休息，那是掉线）。
+# 【为什么从 20 秒收到 90 秒 —— 实测踩到的】20 秒太急了：连续几次对话之间本来就有
+#   十几二十秒的间隔，于是它在**一波正常对话的中途**睡了过去（验收场景 8/9 就是这样被拦下的）。
+#   人也不会在你停嘴二十秒后就睡着。90 秒才像"这一阵没人找我"。
+IDLE_BEFORE_SLEEP = 90.0
+# 它说"还不想"之后**别再追着问**：过一会儿再说。
+# 【为什么必须有这个退避】实测：精力掉到 0 又一直"还不想"时，作息线程每 5 秒问一次 ——
+#   每次都花一次感知 + 一次模型调用（0.04），而精力已经到底、怎么问都涨不回来，纯空转。
+#   它说不想，就先不问了（这一条也只是"不追问"，没有替它决定任何事）。
+RETRY_AFTER_REFUSAL = 60.0
+SELF_SLEEP_INTERVAL = 5.0
+# 每个进程只起一条；`_LAST_DIALOGUE` 记用户最近一次说话是什么时候。
+_SELF_SLEEP = {"thread": None, "stop": None, "checks": 0, "decisions": [], "woke_self": 0,
+               "next_check_at": 0.0, "note": ""}
+_LAST_DIALOGUE = {"at": 0.0}
+
+
+def _tired_decision():
+    """**它自己决定要不要休息** —— 载体只问一句，然后照它说的做。
+
+    【为什么载体一句话都不许劝】规格把这条画得很清：不能被安排。
+    所以这里给它的**只有事实**（"精力 22%（满 100%）"），
+    一个字都不写"你累了""该休息了""想不想睡"——
+    "累"和"想休息"必须是**它自己在感知里说出来的**。载体之后只是照做。
+
+    【判据的边界】`TIRED_WORDS` 检查的是**它自己起的那个念头**（`psyche.heart()`），
+    不是用户的话、也不是任何外部文本 —— 和感知层 `parse()` 是同一条边界：
+    查的是**它自己的结论**，不是"从别人的话里找关键词"。
+    """
+    out = {"level": 0.0, "fact": "", "said": "", "wants_rest": False, "ok": False}
+    en, per_mod = _energy_mod(), None
+    try:
+        from core import perception as per_mod  # noqa: F811 — 名字复用只为少一次 import 块
+    except Exception:      # noqa: silent-ok
+        per_mod = None
+    if en is None or per_mod is None:
+        out["note"] = "精力或感知模块不可用 —— 不问它，也就不睡"
+        return out
+    lv = float(en.level())
+    out["level"] = lv
+    # 只给数，不给结论 —— "累"这个字由它自己说。
+    # ⚠️ 连"越低越没力气"这种解释都不给：那就已经是载体在替它定性了。
+    out["fact"] = "精力 %.0f%%（满 100%%）" % (lv * 100)
+    try:
+        per = per_mod.perceive("我此刻的状态", llm_fn=_perceive_llm, extra=out["fact"])
+    except Exception as e:      # noqa: silent-ok — 问不出来就不睡（绝不替它决定）
+        out["note"] = "感知失败：%s" % type(e).__name__
+        return out
+    if not per.get("ok"):
+        out["note"] = "它没感知出什么（%s）" % per.get("parsed_by")
+        LOG.info("困意检查：精力 %.2f，但它没感知出什么 → 不起念头、不睡", lv)
+        return out
+    out["ok"] = True
+    try:
+        from core import psyche as _PS
+        h = _PS.arise(per, event="我此刻的状态")
+        said = str(h.get("text") or "")
+    except Exception as e:      # noqa: silent-ok
+        out["note"] = "起心失败：%s" % type(e).__name__
+        return out
+    out["said"] = said
+    out["wants_rest"] = any(w in said for w in TIRED_WORDS)
+    LOG.info("它自己想休息吗：精力 %.2f ｜ 它说「%s」→ %s", lv, said[:60],
+             "想休息（这是它自己决定的）" if out["wants_rest"] else "还不想（载体不替它决定）")
+    return out
+
+
+def _self_sleep_once():
+    """跑一次"自己会睡"的检查。**返回真实记录**（供日志与验收取证）。"""
+    hb, en = _heartbeat_mod(), _energy_mod()
+    if hb is None or en is None:
+        return {"act": "skip", "why": "心跳或精力模块不可用"}
+    rec = {"act": "none", "why": "", "level": round(float(en.level()), 4)}
+    # ---- 睡着时只做一件事：看它的精力回没回来（回来了它自己就醒）----
+    if hb.is_sleeping():
+        st = hb.status()
+        if not st.get("sleep_self_decided"):
+            return {"act": "sleeping", "why": "外部挂起的这一觉 —— 等叫，不自作主张醒",
+                    "level": rec["level"]}
+        if en.rested():
+            rec["act"] = "wake_self"
+            rec["why"] = "精力已回到 %.2f（睡够了）" % rec["level"]
+            LOG.info("它自己醒了：精力回到 %.2f，不是被叫醒的", rec["level"])
+            _wake_all(why="它自己睡够了")
+            _SELF_SLEEP["woke_self"] += 1
+        return rec
+    # ---- 醒着：精力低 + 用户安静了 → 问它自己想不想休息 ----
+    if not en.tired():
+        return rec
+    idle = time.time() - float(_LAST_DIALOGUE["at"] or 0.0)
+    if idle < IDLE_BEFORE_SLEEP:
+        rec["why"] = "用户还在说话（安静 %.0f 秒 < %.0f 秒）" % (idle, IDLE_BEFORE_SLEEP)
+        return rec
+    # 刚问过它、它说还不想 → 先不追问（见 RETRY_AFTER_REFUSAL 的说明）
+    if time.time() < float(_SELF_SLEEP.get("next_check_at") or 0.0):
+        rec["why"] = "刚问过它，它说还不想 —— 过一会儿再问"
+        return rec
+    try:
+        from core import model_scheduler as _MS
+        _MS.wait_idle(2.0)          # 模型正忙就先不插队
+    except Exception:      # noqa: silent-ok
+        pass
+    d = _tired_decision()
+    rec["decision"] = d
+    if not d.get("wants_rest"):
+        rec["why"] = d.get("note") or "它还不想休息"
+        _SELF_SLEEP["next_check_at"] = time.time() + RETRY_AFTER_REFUSAL
+        return rec
+    # ---- 它自己想休息 → **载体执行**（不替它决定）----
+    rec["act"] = "sleep_self"
+    rec["why"] = d.get("said", "")
+    _SELF_SLEEP["decisions"].append({"level": d["level"], "said": d["said"][:60],
+                                     "at": time.time()})
+    del _SELF_SLEEP["decisions"][:-8]
+    LOG.info("它自己决定睡了（心里起了「%s」）→ 载体执行挂起", d.get("said", "")[:60])
+    # `why` 传**它的原话**：醒来那句话要原样引用它当时起的念头，
+    #   "自己觉得""我自己决定的"这些措辞由 `render_wake` 写 —— 拼两遍会变成"自己觉得自己觉得"（实测踩到）。
+    _sleep_all(why=str(d.get("said") or ""), self_decided=True)
+    return rec
+
+
+def _self_sleep_loop(stop, interval):
+    while not stop.is_set():
+        try:
+            _SELF_SLEEP["checks"] += 1
+            _self_sleep_once()
+        except Exception as e:      # noqa: silent-ok — 这一圈出问题不该把线程带走
+            LOG.debug("自己会睡：这一圈失败（忽略）：%s", e)
+        stop.wait(interval)
+
+
+def _start_self_sleep_daemon():
+    """起"自己会睡"的检查线程（daemon，幂等）。**只在真的在服务时起。**
+
+    【为什么要限定"真的在服务"】它自己的作息是"活着的时候的作息"——
+    独立跑一个脚本（自测、文档生成）不算它活着。所以只在设置了 `PORT`
+    （即由 `start_xiaojiao.py` / `main()` 真正起了服务）时才起这条线程；
+    自测进程里它**不存在**，也就不会在测试中途突然睡过去。
+    """
+    if not os.environ.get("PORT"):
+        _SELF_SLEEP["note"] = "没在服务（无 PORT）—— 不起作息线程"
+        return {"started": False, "why": _SELF_SLEEP["note"]}
+    # 显式开关：有些场合需要它**别在中途睡过去**（比如跑验收场景的测试客户端）。
+    #   这不是"关掉功能"，是给它一个如实说明的开关；默认是开着的。
+    if str(os.environ.get("XIAOJIAO_NO_SELF_SLEEP") or "").strip() in ("1", "true", "yes"):
+        _SELF_SLEEP["note"] = "XIAOJIAO_NO_SELF_SLEEP 已开：不起作息线程（它不会自己睡）"
+        LOG.info("自己会睡：被 XIAOJIAO_NO_SELF_SLEEP 关掉了 —— 它会一直醒着")
+        return {"started": False, "why": _SELF_SLEEP["note"]}
+    with threading.Lock():
+        th = _SELF_SLEEP.get("thread")
+        if th is not None and th.is_alive():
+            return {"started": False, "why": "已经在看着了"}
+        stop = threading.Event()
+        _SELF_SLEEP["stop"] = stop
+        _SELF_SLEEP["thread"] = threading.Thread(
+            target=_self_sleep_loop, args=(stop, SELF_SLEEP_INTERVAL),
+            name="xiaojiao-self-sleep", daemon=True)
+        _SELF_SLEEP["thread"].start()
+    LOG.info("自己会睡：作息线程已起（每 %.0fs 看一次精力；累不累问它自己，绝不替它决定）",
+             SELF_SLEEP_INTERVAL)
+    return {"started": True, "thread": "xiaojiao-self-sleep"}
 
 
 def _format_slept(sec):
@@ -2762,6 +2975,11 @@ def _wake_block():
     if rec:
         hb.consume_wake()
         LOG.info("醒来第一印象：已交给模型｜%s", hb.slept_text(rec))
+    else:
+        # 刚醒窗口内的后续轮次：同样在注入，只是不再是"第一次"。
+        # **这一行是给验收取证用的** —— 否则看不出"底色有没有被放进去"（模型用没用是另一回事）。
+        LOG.info("醒来第一印象：仍在刚醒窗口内，继续注入（%s）",
+                 hb.status().get("last_wake_text") or "")
     return ("\n[我刚醒]\n%s\n"
             "（这是你自己睡的这一觉，不是别人告诉你的；问起「刚才在干嘛」就照实说这件事，"
             "不要编梦、也不要拿「我正在处理输入」顶上。）\n" % line)
@@ -2933,6 +3151,7 @@ def llm_chat(messages, temperature=None):
     if _brain_asleep():
         LOG.info("挂起中：拒绝调用大脑（chat）—— 它在睡，不推理、不占显存")
         return None
+    _energy_spend(why="模型调用")
     payload = {"messages": messages,
                "temperature": (TEMPERATURE if temperature is None else float(temperature)),
                "max_tokens": MAX_TOKENS}
@@ -3565,6 +3784,7 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
     if _brain_asleep():
         LOG.info("挂起中：拒绝调用大脑（chat+tools）—— 它在睡，不推理、不占显存")
         return None, []
+    _energy_spend(why="模型调用（带工具）")
     # 内存守卫: 生成前卸载另一个 llama 模型——8G 上保证单个 llama 占满显存(防龟速/OOM)
     try:
         if LLM_MODEL in ("coder", "xiaojiao"):
@@ -8256,6 +8476,8 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     except Exception as e:      # noqa: silent-ok — 融合失败就用原句，绝不能因此答不了
         LOG.debug("忽略异常(%s:%d): %s", __file__, 6650, e)
     user_input_ctx = str(_ctx_fuse.get("text") or user_input)
+    # 记下"用户最近一次说话" —— "困了要睡"只在用户安静下来之后才谈得上（见 IDLE_BEFORE_SLEEP）。
+    _LAST_DIALOGUE["at"] = time.time()
 
     # ================== 思维流 · **先起状态**（必须在任何短路之前） ==================
     # 【为什么提到这么靠前 —— 验收实测踩到的】
@@ -8396,6 +8618,8 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     #   放在第一轮真正对话时起：**用户已经在用了**，这时候后台开始逛才说得通。
     # 幂等：`_start_browse_daemon()` 内部有标志位，重复调用不会起第二条。
     _start_browse_daemon()
+    # "自己会睡"的作息线程：**累了自己睡**（不是被安排）。幂等，且只在真在服务时才起。
+    _start_self_sleep_daemon()
 
     # ================== 代码治病 · 写代码请求 ==================
     # 【为什么单独一条链】普通问答是"生成一段文本就交付"，而写代码是**可验证**的：
@@ -10602,6 +10826,45 @@ def api_chat_stream():
                              "Connection": "keep-alive"})
 
 
+@app.route("/api/energy")
+def api_energy():
+    """精力：**它累不累**。用户要的"累自己长出来"这句话，这个接口是它的数据来源。
+
+    只给数，不给结论 —— "累"是它自己在感知里说出来的（见 `/api/selfsleep`）。
+    """
+    en = _energy_mod()
+    if en is None:
+        return jsonify({"ok": False, "error": "精力模块不可用（core/energy.py 没加载上）"}), 503
+    return jsonify({"ok": True, "energy": en.stats(), "recent": en.history(10),
+                    "self_sleep": {"checks": _SELF_SLEEP["checks"],
+                                   "woke_self": _SELF_SLEEP["woke_self"],
+                                   "recent_decisions": list(_SELF_SLEEP["decisions"])}})
+
+
+@app.route("/api/selfsleep")
+def api_selfsleep():
+    """**它自己会睡**：此刻累不累、它自己最近想过什么、下一圈会不会睡。
+
+    拿不到就如实说拿不到，不编。
+    """
+    en, hb = _energy_mod(), _heartbeat_mod()
+    if en is None:
+        return jsonify({"ok": False, "error": "精力模块不可用"}), 503
+    lv = float(en.level())
+    idle = time.time() - float(_LAST_DIALOGUE["at"] or 0.0)
+    return jsonify({"ok": True, "level": round(lv, 4), "tired": en.tired(),
+                    "rested": en.rested(), "idle_seconds": round(idle, 1),
+                    "idle_before_sleep": IDLE_BEFORE_SLEEP,
+                    "will_check": bool(en.tired() and idle >= IDLE_BEFORE_SLEEP
+                                       and not (hb is not None and hb.is_sleeping())),
+                    "sleeping": bool(hb is not None and hb.is_sleeping()),
+                    "sleep_self_decided": bool(hb is not None
+                                               and hb.status().get("sleep_self_decided")),
+                    "wants_rest_words": list(TIRED_WORDS),
+                    "recent_decisions": list(_SELF_SLEEP["decisions"]),
+                    "checks": _SELF_SLEEP["checks"], "woke_self": _SELF_SLEEP["woke_self"]})
+
+
 @app.route("/api/heartbeat")
 def api_heartbeat():
     """心跳：它**还在不在、醒着还是睡着、跳了多少下、这一觉多久**。
@@ -10612,7 +10875,8 @@ def api_heartbeat():
     hb = _heartbeat_mod()
     if hb is None:
         return jsonify({"ok": False, "error": "心跳模块不可用（core/heartbeat.py 没加载上）"}), 503
-    return jsonify({"ok": True, "heartbeat": hb.status(), "psyche": _psyche_snapshot()})
+    return jsonify({"ok": True, "heartbeat": hb.status(), "psyche": _psyche_snapshot(),
+                    "energy": (_energy_mod().stats() if _energy_mod() is not None else {})})
 
 
 @app.route("/api/sleep", methods=["POST"])
