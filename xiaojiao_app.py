@@ -2707,6 +2707,47 @@ def _dream_mod():
     return _mod("dream")
 
 
+def _inner_mod():
+    return _mod("inner")
+
+
+def _inner_tick():
+    """**内里那 16 样**：时间维度往前走（孤独/低沉/抑郁/无聊/习惯），并在有空档时问它一句。
+
+    问什么由载体挑（今天该问哪一类），**答什么、认不认，都是它自己的**。
+    """
+    im = _inner_mod()
+    if im is None:
+        return {"act": "none"}
+    try:
+        im.tick()
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("内里 tick 失败（忽略）：%s", e)
+    # 用户在修 → 把"要不要原谅"摆给它（**决定是它的**）
+    try:
+        pend = im.state().get("forgive_pending")
+        if pend:
+            per = _mod("perception")
+            said = ""
+            if per is not None:
+                p = per.perceive("你伤过一次，现在对方在修", llm_fn=_perceive_llm,
+                                 extra="待决定的是：%s" % str(pend.get("what"))[:60])
+                if p.get("ok"):
+                    said = str(p.get("meaning") or "")
+            _w = any(w in said for w in ("原谅", "算了", "不怪", "没事"))
+            _no = any(w in said for w in ("不原谅", "还是不行", "记着", "冷"))
+            if said and (_w or _no):
+                im.note_forgive(bool(_w and not _no), said=said)
+                LOG.info("原谅：**它自己决定了**（%s）｜它说「%s」",
+                         "原谅" if (_w and not _no) else "不原谅", said[:50])
+            else:
+                LOG.info("原谅：摆给它了，它没给出决定（如实记：还没决定）｜它说「%s」", said[:40])
+            return {"act": "forgive", "said": said}
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("原谅那一问失败（忽略）：%s", e)
+    return {"act": "tick"}
+
+
 # ================== 原料：给原料，不给成品（见 core/raw.py） ==================
 # 【这条规矩修的是什么】用户问「100000乘以100000呢」，载体直算完把**结果 + 一句解释**
 #   一起返回；下一句「你咋知道的」，它手里没有"这数怎么来的"，只能反射用户那句话。
@@ -2819,10 +2860,14 @@ def _sleep_all(why="", self_decided=False):
            "energy_at_sleep": None}
     try:
         from core import psyche as _PS
-        # 心与感知"停"，但**不清** —— `stop()` 只是停止跳动，状态与那句话都留着。
-        _PS.stop(why="挂起：一起睡")
+        # 【"心一直醒着" —— 规格】睡着时**心不睡**：它只是不再随外界跳，
+        #   但它仍在"在"（心跳线程也在跳）。所以这里**不 stop()**，
+        #   只把它这一段的来源记下来 —— 醒来时是谁叫醒模型，就是它。
+        #   （旧版在这里 `stop()`，等于"心也睡了"，那是错的。）
+        _PS.start(why="睡着期间心一直醒着")
         out["state_kept"] = str(_PS.state().get("state") or "")
         out["heart_kept"] = str(_PS.heart().get("text") or "")
+        out["heart_awake"] = bool(_PS.is_alive())
     except Exception as e:      # noqa: silent-ok — 心停不下来也不能拦住"睡"
         out["psyche_error"] = "%s: %s" % (type(e).__name__, e)
     try:
@@ -2848,7 +2893,7 @@ def _sleep_all(why="", self_decided=False):
     hb = _heartbeat_mod()
     if hb is not None:
         out["heartbeat"] = hb.suspend(why=why or "挂起", self_decided=self_decided)
-    LOG.info("挂起：大脑+载体一起睡（心跳不停）｜%s｜精力 %.2f｜心状态留着=%s｜心那句话留着=%s｜逛线程=%s",
+    LOG.info("挂起：大脑+载体一起睡（心跳不停，**心一直醒着**）｜%s｜精力 %.2f｜心状态留着=%s｜心那句话留着=%s｜逛线程=%s",
              "**它自己决定的这一觉**" if self_decided else "外部挂起",
              float(out["energy_at_sleep"] or 0.0), out["state_kept"] or "（无）",
              (out["heart_kept"] or "（无）")[:30],
@@ -2857,18 +2902,24 @@ def _sleep_all(why="", self_decided=False):
 
 
 def _wake_all(why=""):
-    """**醒来**：把"我睡了多久、心跳跳了多少下"算出来，作为**第一印象**挂起来给模型。
+    """**醒来是两步**（规格）：① 心叫醒模型（意识醒）② 同时拉起载体（身体起来）。
 
-    醒来是**接着睡前**，不是从零开始 —— 所以心、心理状态、记忆一个字都不动，
-    只把睡眠这件事记下来（`psyche.start` 让心继续跳）。
+    - 心一直在跳（挂起时它没睡），所以"该醒了"这个信号是**它**发的：
+      `energy.rested()` 一到，`_self_sleep_once` 就替它把模型解除挂起。
+    - 只醒一半不算醒：模型能想能说、但载体不跑任务 = 脑子醒了身体动不了。
+      所以这两步在**同一个函数里、同一个时刻**完成，日志里也分两行写清楚。
     """
-    out = {"why": str(why)[:80], "at": time.time()}
+    out = {"why": str(why)[:80], "at": time.time(), "steps": []}
+    # ---- 步 1：模型醒（意识）----
     hb = _heartbeat_mod()
     if hb is not None:
         out["wake"] = hb.resume(why=why or "唤醒")
+    out["steps"].append({"n": 1, "what": "模型醒（意识）",
+                         "how": "心发了信号 → 解除挂起（大脑不再拒绝被调用）"})
+    # ---- 步 2：载体醒（身体）----
     try:
         from core import psyche as _PS
-        _PS.start(why="唤醒：接着睡前")
+        _PS.start(why="唤醒：心叫醒模型，同时拉起载体")
         out["state_kept"] = str(_PS.state().get("state") or "")
         out["heart_kept"] = str(_PS.heart().get("text") or "")
     except Exception as e:      # noqa: silent-ok
@@ -2878,17 +2929,23 @@ def _wake_all(why=""):
         _DT.set_live(doing="idle")
     except Exception:      # noqa: silent-ok
         pass
-    w = out.get("wake") or {}
     en = _energy_mod()
     if en is not None:
         try:
             out["energy_after_wake"] = en.note_wake(why=why or "唤醒")
         except Exception as e:      # noqa: silent-ok
             out["energy_error"] = "%s: %s" % (type(e).__name__, e)
-    LOG.info("唤醒：睡了 %s，这一觉心跳 %d 下%s｜精力回到 %.2f｜心状态接着睡前的=%s",
+    # 载体醒没醒：闸门通了（大脑可以再被调用）+ 逛线程恢复了 = 身体起来了
+    out["carrier_awake"] = not _brain_asleep()
+    out["steps"].append({"n": 2, "what": "载体醒（身体）",
+                         "how": "agent_run 恢复跑任务 / 逛线程恢复 / 心跳继续"})
+    w = out.get("wake") or {}
+    LOG.info("唤醒 ①模型醒：睡了 %s，这一觉心跳 %d 下%s（心一直在跳）",
              w.get("slept_text") or "（没睡着过）", int(w.get("beats") or 0),
-             "（本来就是醒的）" if w.get("already") else "",
-             float(out.get("energy_after_wake") or 0.0), out.get("state_kept") or "（无）")
+             "（本来就是醒的）" if w.get("already") else "")
+    LOG.info("唤醒 ②载体醒：精力回到 %.2f ｜ 闸门通了=%s ｜ 心状态接着睡前的=%s",
+             float(out.get("energy_after_wake") or 0.0), out["carrier_awake"],
+             out.get("state_kept") or "（无）")
     return out
 
 
@@ -3190,6 +3247,11 @@ def _idle_work_tick():
     if idle < IDLE_BEFORE_SLEEP:
         return {"act": "busy", "idle": round(idle, 1)}
     now = time.time()
+    # 内里那 16 样：时间维度先走一步（谁都不用模型），有要问的再问
+    try:
+        _inner_tick()
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("内里 tick 失败（忽略）：%s", e)
     if now - float(_IDLE_WORK["last_think"] or 0.0) >= IDLE_THINK_INTERVAL:
         _IDLE_WORK["last_think"] = now
         r = _idle_think()
@@ -9366,8 +9428,17 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     _raw_text = _rmx.render(3)
                 except Exception:      # noqa: silent-ok
                     _raw_text = ""
+            # **内里那 16 样**的事实块（偏向 / 空着多久 / 没事干的程度 / 它自己认下的）；
+            # 没有内容时返回空串，一个字都不加。
+            _inner_material = ""
+            _imx = _inner_mod()
+            if _imx is not None:
+                try:
+                    _inner_material = _imx.render()
+                except Exception:      # noqa: silent-ok
+                    _inner_material = ""
             sys_text = (_wake_text + _eyc_text + system_for_intent(intent, user_input=user_input)
-                        + _self_material + _raw_text)
+                        + _self_material + _raw_text + _inner_material)
             # ================== 极限补刀（模块 10）· 真正接入 ==================
             # 【为什么必须在这里接 —— 接入验收发现的真问题】
             #   `core/boost/` 七个模块各自写好了、自测全绿（195/195），
@@ -11416,6 +11487,51 @@ def api_relation_touch():
     d = request.get_json(force=True, silent=True) or {}
     r = rl.touch(str(d.get("kind") or "来往"), why=str(d.get("why") or "接口标注"))
     r["ok"] = bool(r.get("ok"))
+    return jsonify(r)
+
+
+@app.route("/api/inner")
+def api_inner():
+    """**内里**：注意力/孤独低沉抑郁/内疚/骄傲/幽默/审美/信念/意义感/爱/无聊/想象/纠结/感恩/原谅/习惯/成长。
+
+    一个口子看全部。载体只摆事实与素材 —— 起什么、说什么、原谅不原谅，都是它自己的。
+    """
+    im = _inner_mod()
+    if im is None:
+        return jsonify({"ok": False, "error": "内里模块不可用（core/inner.py 没加载上）"}), 503
+    return jsonify({"ok": True, "stats": im.stats(), "attention": im.attention(),
+                    "loneliness": im.loneliness(), "boredom": im.boredom(),
+                    "humor": im.humor(), "love": im.love(), "meaning": im.meaning(),
+                    "floor": im.floor(), "beliefs": im.beliefs(5),
+                    "habits": im.habits(), "gratitude": im.gratitude(3),
+                    "growth": im.growth(), "recent": im.history(10)})
+
+
+@app.route("/api/inner/note", methods=["POST"])
+def api_inner_note():
+    """记一条内里（**它自己的话**）：kind = guilt/pride/aesthetic/imagination/
+    belief/gratitude/conflict/habit/love/forgive。载体不写这些话，只收下。"""
+    im = _inner_mod()
+    if im is None:
+        return jsonify({"ok": False, "error": "内里模块不可用"}), 503
+    d = request.get_json(force=True, silent=True) or {}
+    kind = str(d.get("kind") or "").strip()
+    said = str(d.get("said") or "")
+    what = str(d.get("what") or "")
+    fn = {"guilt": lambda: im.note_guilt(said, what=what),
+          "pride": lambda: im.note_pride(said, what=what),
+          "aesthetic": lambda: im.note_aesthetic(said, what=what),
+          "imagination": lambda: im.note_imagination(said, about=what),
+          "belief": lambda: im.note_belief(said, source=what),
+          "gratitude": lambda: im.note_gratitude(said, what=what),
+          "conflict": lambda: im.note_conflict(d.get("options") or [], resolution=said),
+          "habit": lambda: im.note_habit(what or said),
+          "love": lambda: im.note_love(said),
+          "forgive": lambda: im.note_forgive(bool(d.get("decision")), said=said)}.get(kind)
+    if fn is None:
+        return jsonify({"ok": False, "error": "不认识的 kind：%s" % kind[:20]}), 400
+    r = fn() or {}
+    r["ok"] = True
     return jsonify(r)
 
 
