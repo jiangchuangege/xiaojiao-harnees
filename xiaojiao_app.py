@@ -2900,7 +2900,7 @@ def _wake_all(why=""):
 #     · "累"来自 `core/energy.py` 里那个数（它的状态里长出来的）；
 #     · "想休息"必须是**它自己在感知里说出来的**（下面 `_tired_decision` 只说事实，不劝）；
 #     · 载体只做两件事：问一句、照它说的执行。
-TIRED_WORDS = ("休息", "累", "睡")
+TIRED_WORDS = ()          # 【已废弃】载体**不再**扫关键词判断它想不想睡（见 `_tired_decision`）
 # 用户安静多久之后才谈得上"困了要睡"。**不是日程表**，是"手头没事了"的意思：
 #   用户正在连续说话时它不该突然睡过去（那不是休息，那是掉线）。
 # 【为什么从 20 秒收到 90 秒 —— 实测踩到的】20 秒太急了：连续几次对话之间本来就有
@@ -2942,30 +2942,29 @@ def _tired_decision():
         return out
     lv = float(en.level())
     out["level"] = lv
-    # 只给数，不给结论 —— "累"这个字由它自己说。
+    # 只给数，不给结论 —— "累不累""要不要睡"都由它自己说。
     # ⚠️ 连"越低越没力气"这种解释都不给：那就已经是载体在替它定性了。
     out["fact"] = "精力 %.0f%%（满 100%%）" % (lv * 100)
     try:
-        per = per_mod.perceive("我此刻的状态", llm_fn=_perceive_llm, extra=out["fact"])
+        r = per_mod.decide_sleep(llm_fn=_perceive_llm, extra=out["fact"])
     except Exception as e:      # noqa: silent-ok — 问不出来就不睡（绝不替它决定）
-        out["note"] = "感知失败：%s" % type(e).__name__
+        out["note"] = "问不出来：%s" % type(e).__name__
         return out
-    if not per.get("ok"):
-        out["note"] = "它没感知出什么（%s）" % per.get("parsed_by")
-        LOG.info("困意检查：精力 %.2f，但它没感知出什么 → 不起念头、不睡", lv)
-        return out
-    out["ok"] = True
-    try:
-        from core import psyche as _PS
-        h = _PS.arise(per, event="我此刻的状态")
-        said = str(h.get("text") or "")
-    except Exception as e:      # noqa: silent-ok
-        out["note"] = "起心失败：%s" % type(e).__name__
-        return out
+    out["raw"] = str(r.get("raw") or "")
+    out["decision"] = str(r.get("decision") or "")
+    said = str(r.get("said") or "")
     out["said"] = said
-    out["wants_rest"] = any(w in said for w in TIRED_WORDS)
-    LOG.info("它自己想休息吗：精力 %.2f ｜ 它说「%s」→ %s", lv, said[:60],
-             "想休息（这是它自己决定的）" if out["wants_rest"] else "还不想（载体不替它决定）")
+    # **载体只认它写下的那一栏**：「睡：要」→ 它决定睡；「睡：不要」或没写清楚 → 不睡。
+    out["wants_rest"] = (out["decision"] == "要")
+    # 它自己那句话照样起一次心（它心里是什么样，如实收下来）
+    if said:
+        try:
+            from core import psyche as _PS
+            _PS.arise({"meaning": said, "direction": "无"}, event="要不要睡：我自己下的决定")
+        except Exception:      # noqa: silent-ok
+            pass
+    LOG.info("它自己决定要不要睡：精力 %.2f ｜ 它写下「睡：%s」｜ 它说「%s」",
+             lv, out["decision"] or "（没写清楚=不睡）", said[:50])
     return out
 
 
@@ -9514,7 +9513,20 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   否则每一轮回答都会被这句话带偏。
             _hbw = _heartbeat_mod()
             _wake_line = _hbw.wake_line() if _hbw is not None else ""
-            if _wake_line and _self_state_question(user_input_ctx):
+            # ================== 「刚睡醒」当**状态**，不是当一句话 ==================
+            # 【为什么要单独做这一条】实测：醒来那句"我睡了 N 分"确实注入了，
+            #   但问它别的事时答案里**一点睡醒的痕迹都没有** —— 睡眠只是"它知道的一件事"。
+            #   规格要的是**底色**：醒来后一段时间里，做什么都带着"还没完全醒"的味。
+            # 【为什么用 prefill】本项目的实测结论：它唯一会"接续"的注入方式，
+            #   就是把半句放在**紧挨生成位置的最后一条**（见 docs/heartbeat.md）。
+            #   所以这里给的是**半句**（不是成品句），它自己接着往下说 —— 语气自然带出来。
+            _wake_tone = ""
+            if _wake_line and _hbw is not None and _hbw.within_tone_window():
+                _wake_tone = "（嗯……刚睡醒，脑子还有点懵，说话慢半拍。"
+            if _wake_tone:
+                _PREFILL_HOLD["text"] = _wake_tone
+                LOG.info("刚睡醒的底色：作为最后一条喂进去（半句，让它自己接）｜%s", _wake_tone)
+            elif _wake_line and _self_state_question(user_input_ctx):
                 _eyc_prefill = "（%s所以我这会儿" % _wake_line
             elif _eyc_text and _self_state_question(user_input_ctx):
                 _hp = {}
@@ -11259,7 +11271,7 @@ def api_selfsleep():
                     "sleeping": bool(hb is not None and hb.is_sleeping()),
                     "sleep_self_decided": bool(hb is not None
                                                and hb.status().get("sleep_self_decided")),
-                    "wants_rest_words": list(TIRED_WORDS),
+                    "wants_rest_words": [],
                     "recent_decisions": list(_SELF_SLEEP["decisions"]),
                     "checks": _SELF_SLEEP["checks"], "woke_self": _SELF_SLEEP["woke_self"]})
 

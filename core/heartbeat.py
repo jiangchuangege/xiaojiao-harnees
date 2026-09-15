@@ -42,7 +42,8 @@ import time
 __all__ = ["BEAT_INTERVAL", "WAKE_KEEP_S", "start", "stop", "is_alive", "beat",
            "suspend", "resume", "is_sleeping", "status", "state", "stats",
            "beats_between", "pending_wake", "consume_wake", "wake_line", "slept_text",
-           "render_wake", "path", "clear", "fmt_seconds"]
+           "render_wake", "path", "clear", "fmt_seconds", "within_tone_window",
+           "WAKE_TONE_S"]
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PATH = os.path.join(_ROOT, "logs", "psyche", "heartbeat.jsonl")
@@ -51,6 +52,9 @@ _PATH = os.path.join(_ROOT, "logs", "psyche", "heartbeat.jsonl")
 BEAT_INTERVAL = 5.0
 # 醒来之后多久之内，那句"我睡了多久"还算"刚醒"（够用户问一句「你刚才在干嘛」）。
 WAKE_KEEP_S = 600.0
+# **「刚睡醒」这个状态持续多久** —— 比"记得自己睡了"短得多，像人刚醒那几分钟：
+#   这段时间里它说什么都带着"还没完全醒"的味（载体用 prefill 把它带出来）。
+WAKE_TONE_S = 300.0
 
 _LOCK = threading.RLock()
 _STOP = threading.Event()
@@ -300,6 +304,20 @@ def wake_line():
     if time.time() - wake_at > WAKE_KEEP_S:
         return ""
     return render_wake(rec)
+
+
+def within_tone_window(now=None):
+    """**此刻是不是"刚睡醒"那一段**（`WAKE_TONE_S` 之内）。
+
+    这是"底色"的判据：不是"它记得自己睡了"，而是"它这会儿还没完全醒"。
+    """
+    t = float(now if now is not None else time.time())
+    with _LOCK:
+        wake_at = float(_STATE.get("wake_at") or 0.0)
+        kept = _STATE.get("_kept")
+    if not wake_at or not kept:
+        return False
+    return (t - wake_at) <= WAKE_TONE_S
 
 
 def beats_between(t0, t1):

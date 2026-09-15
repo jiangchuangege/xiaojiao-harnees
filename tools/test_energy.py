@@ -126,55 +126,46 @@ def group_c():
 
 
 def group_d():
-    print("\n[D] 决定在「想」里（载体一个劝它的字都没说）")
+    print("\n[D] 决定是它自己的（载体不读判据）")
     import xiaojiao_app as app
-    seen = {"prompt": ""}
 
-    def _fake_llm(prompt):
-        seen["prompt"] = prompt
-        return "意：有点沉，眼皮发涩。\n命：无\n向：无"
+    def _mk(raw):
+        def _f(prompt):
+            _mk.seen = prompt
+            return raw
+        return _f
 
     real = app._perceive_llm
     try:
-        app._perceive_llm = _fake_llm
+        app._perceive_llm = _mk("睡：不要\n说：我有点累，但还能继续。")
         EN.set_level(0.2, why="自测：压到累")
         out = app._tired_decision()
-    finally:
-        app._perceive_llm = real
-    p = seen["prompt"]
-    ck("问它了（拿它自己的感知做判据）", out.get("ok") is True, out.get("note"))
-    ck("载体把**事实**给了它（精力多少）", "精力" in p and "20%" in p, p[-60:].replace("\n", " "))
-    bad = [w for w in app.TIRED_WORDS if w in p]
-    ck("**提示词里没有「休息/累/睡」任何一个字**（不劝它）", bad == [], bad)
-    ck("它自己说的那句话被记下来了", out.get("said") == "有点沉，眼皮发涩。", out.get("said"))
-    ck("它没说想休息 → 判成「还不想」", out.get("wants_rest") is False, out.get("said"))
-    # 换一段它自己说"想休息"的
-    def _fake2(prompt):
-        seen["prompt"] = prompt
-        return "意：有点累了，想睡一会儿。\n命：无\n向：无"
+        p = _mk.seen
+        ck("**「累，但还能撑」→ 不睡**（旧版这里会被睡掉 —— 就是那个 bug）",
+           out.get("wants_rest") is False, out.get("said"))
+        ck("载体把**事实**给了它（精力多少）", "精力" in p and "20%." not in p and "20%" in p, p[:40])
+        ck("**载体不再扫关键词**（TIRED_WORDS 已废弃，是空表）",
+           list(app.TIRED_WORDS) == [], list(app.TIRED_WORDS))
+        ck("它写下的那一栏被如实收下", out.get("decision") == "不要", out.get("decision"))
+        ck("它自己那句话被记下来", out.get("said") == "我有点累，但还能继续。", out.get("said"))
 
-    try:
-        app._perceive_llm = _fake2
+        app._perceive_llm = _mk("睡：要\n说：撑不住了，得歇会儿。")
         out2 = app._tired_decision()
-    finally:
-        app._perceive_llm = real
-    ck("它自己说想休息 → 判成想休息", out2.get("wants_rest") is True, out2.get("said"))
-    import re as _re
-    _norm = lambda s: _re.sub(r"\d+", "#", str(s or ""))     # 只差"精力数字"（它在掉）
-    ck("两次拿到的提示词一模一样（结论不同只因它自己说法不同）",
-       _norm(p) == _norm(seen["prompt"]), "")
-    # 【边界如实标注】判据就是规格给的那三个词，查的是**它自己的话**。
-    #   它若用别的说法（"歇一会儿""困了"）—— 不在判据里就**不睡**，不替它扩大解释。
-    def _fake3(prompt):
-        return "意：有点睁不开眼，想歇一会儿。\n命：无\n向：无"
+        ck("**它说「想歇一会儿」也能睡**（不看词，只看它自己写下的那一栏）",
+           out2.get("wants_rest") is True, (out2.get("decision"), out2.get("said")))
 
-    try:
-        app._perceive_llm = _fake3
-        out3 = app._tired_decision()
+        app._perceive_llm = _mk("睡：不要\n说：还行。")
+        ck("它说「还行」→ 不睡", app._tired_decision().get("wants_rest") is False, "")
+
+        app._perceive_llm = _mk("随便说点别的，没有那一栏。")
+        ck("**它没写清楚 → 不睡**（载体不替它解释「这算不算要睡」）",
+           app._tired_decision().get("wants_rest") is False, "")
+        ck("它自己的话照样起一次心（心是它自己的）",
+           bool(PS.heart().get("text")), str(PS.heart().get("text"))[:20])
+        ck("问的是**它的决定**，不是让载体读它的话",
+           "你要不要现在休息" in p and "由你自己定" in p, "")
     finally:
         app._perceive_llm = real
-    ck("判据是规格那三个词（换成别的说法就不睡 —— 如实标注，不替它扩大解释）",
-       out3.get("wants_rest") is False, (out3.get("said"), app.TIRED_WORDS))
     EN.reset()
 
 
@@ -187,7 +178,7 @@ def group_e():
     HB.start(interval=0.1, why="自测")
 
     def _said(_p):
-        return "意：还行，就是有点闷。\n命：无\n向：无"
+        return "睡：不要\n说：还行，就是有点闷。"
 
     real = app._perceive_llm
     try:
@@ -203,7 +194,7 @@ def group_e():
        float(app._SELF_SLEEP.get("next_check_at") or 0) > time.time(), "")
 
     def _said2(_p):
-        return "意：累得撑不住了，想睡一会儿。\n命：无\n向：无"
+        return "睡：要\n说：累得撑不住了，想睡一会儿。"
 
     app._SELF_SLEEP["next_check_at"] = 0.0      # 模拟"过一会儿再问"
     try:

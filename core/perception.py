@@ -43,7 +43,7 @@
 import re
 
 __all__ = ["LIFE", "DIRECTIONS", "SELF_LINES", "TEMPERATURE", "self_background",
-           "perceive", "parse", "looks_like_echo", "stats"]
+           "perceive", "parse", "looks_like_echo", "stats", "DECISIONS", "decide_sleep"]
 
 # 感知这一次调用用的温度。**比对话低**，原因是实测出来的、不是拍的：
 #   同一套提问、同一批 8 句，在 0.7 上跑两遍会出现**完全不同的落点** ——
@@ -211,8 +211,71 @@ def looks_like_echo(raw):
     return hits >= 2
 
 
+# ================== 决定：由**它自己**下，载体只认它写下的那一栏 ==================
+# 【要修的错 —— 实测抓到的】
+#   旧版是：载体给它一个精力数字 → 收它感知到的一句话 → **载体在那句话里查关键词**
+#   （"休息"/"累"/"睡"，命中就当它想睡）。结果是两个都错：
+#     · "我有点累，但还能继续" → 命中"累" → 被睡了（它明明说还能撑）；
+#     · "想歇一会儿" → 一个词都不命中 → 反而不睡（它明明想歇）。
+#   也就是说：**睡不睡是载体读判据决定的，不是它自己决定的。**
+#
+# 【改法】把"要不要睡"变成**一次它自己的决定**，而不是载体对一段话的解读：
+#   · 载体只说事实（精力多少），**一个字都不劝**；
+#   · 它**自己写下一栏**：「睡：要 / 不要」；
+#   · 载体**只认它写下的那一栏** —— 不扫关键词、不替它解释"这算不算要睡"。
+#   这与 `parse()` 读它自己写下的「向：威胁」是同一条边界：
+#   读的是**它的结论/它的决定**，不是"从一句话里找词"。
+DECISIONS = ("要", "不要")
+_SLEEP_TASK = (
+    "你现在身上有一个事实（见上面）。",
+    "你要不要现在休息（睡一觉）？**这件事由你自己定**，没有别人替你定。",
+    "",
+    "只写两行：",
+    "睡：<要 / 不要>",
+    "说：<用你自己的话说一句：要就说你为什么想睡；不要就说你现在什么打算>",
+)
+
+
+def decide_sleep(llm_fn, extra="", doing=""):
+    """**问它自己要不要睡**，返回它**自己写下的那一栏**。
+
+    返回 `{"decision", "said", "raw", "ok"}`：
+      · `decision` —— 它写的「睡：要」/「睡：不要」；**没写清楚就是空串（= 不睡）**；
+      · `said`     —— 它自己那句话（它的心起什么由调用方用 `arise` 收下）。
+    ⚠️ 载体在这里**不解释、不猜、不查关键词**：它没把那一栏写清楚 → 就当它没决定要睡。
+    """
+    out = {"decision": "", "said": "", "raw": "", "ok": False}
+    prompt = "%s\n\n%s" % (self_background(doing, extra), "\n".join(_SLEEP_TASK))
+    try:
+        raw = str(llm_fn(prompt) or "").strip()
+    except Exception:      # noqa: silent-ok — 问不出来就当没决定
+        return out
+    out["raw"] = raw[:600]
+    if not raw or looks_like_echo(raw):
+        out["note"] = "回声（当没决定）"
+        return out
+    d_line, s_line = "", ""
+    for ln in re.split(r"[\r\n]+", raw):
+        s = ln.strip().lstrip("-·*# ").strip()
+        if not s:
+            continue
+        if not d_line and re.match(r"^(睡|休息|决定)\s*[:：]", s):
+            d_line = re.sub(r"^(睡|休息|决定)\s*[:：]\s*", "", s).strip()
+        elif not s_line and re.match(r"^(说|理由|为什么)\s*[:：]", s):
+            s_line = re.sub(r"^(说|理由|为什么)\s*[:：]\s*", "", s).strip()
+    # **只认它自己写下的那一栏**：写下「不要」就是不要，没写清楚就是不睡。
+    for w in DECISIONS:
+        if d_line.startswith(w):
+            out["decision"] = w
+            break
+    out["said"] = s_line or ("" if out["decision"] else raw[:200])
+    out["ok"] = bool(out["decision"])
+    return out
+
+
 def stats():
     """自检信息：这一层有哪些档、命有哪四样、以及它**不做什么**。"""
     return {"life": list(LIFE), "directions": list(DIRECTIONS),
-            "note": "感知层只把「这件事对它意味着什么」问出来并收下；"
-                    "判断由模型做，载体不查表、不替它规定感受"}
+            "decisions": list(DECISIONS),
+            "note": "感知层只把事实问出来、「要不要睡」由它自己写下那一栏；"
+                    "载体不查表、不扫关键词、不替它规定感受，也不替它决定"}
