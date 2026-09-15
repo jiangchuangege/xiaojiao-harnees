@@ -39,7 +39,7 @@ from core import model_scheduler as MS
 from core import phone_channel as PC
 
 __all__ = ["DOOR_OPEN", "DOOR_HALF", "DOOR_LOCKED", "start", "stop", "status",
-           "set_decision", "browse_once", "state"]
+           "set_decision", "browse_once", "state", "live", "set_live"]
 
 DOOR_OPEN = "open"
 DOOR_HALF = "half"
@@ -64,6 +64,47 @@ _STATE = {
     "last_visit": "",
     "asleep": False,
 }
+
+
+
+# ================== 逛线程的**实时上下文**（4D 的关键一环）==================
+# 【为什么需要它 —— 用户给的测试就是这条】
+#   规格里的例子：用户发消息"在干嘛呢" → 对话线程读到用户消息 + 逛线程此刻在看的东西
+#   → 调模型生成"哎我在外面逛呢，正好看到篇讲猫的文章，你要不要听听？"。
+#   注意这里有两样东西：
+#     ① **它主动写的 share**（电话通道）—— 只在它"想跟你说"的时候才有；
+#     ② **它此刻在看什么**（本结构）—— **一直都有**，不需要它主动开口。
+#   第一版只做了 ①，于是用户问"在干嘛"时，只要它没主动分享过，对话线程就一无所知。
+#   补上 ② 之后，"它正在看什么"才成为对话线程**随时可读**的事实。
+#
+# 【边界：只给事实，不给答案】这里存的是"它此刻在看什么"这种客观状态，
+#   怎么把这件事说给人听，仍然由模型自己组织语言（见 xiaojiao_app._browse_live_facts）。
+_LIVE = {
+    "doing": "idle",      # idle / deciding / browsing / storing / sharing
+    "topic": "",          # 此刻在看什么主题
+    "last_seen": "",      # 此刻看到的具体内容
+    "at": 0.0,
+    "rounds": 0,
+}
+
+
+def live():
+    """逛线程**此刻**在做什么（只读副本）。对话线程随时可以读它。"""
+    with _LOCK:
+        return dict(_LIVE)
+
+
+def set_live(doing=None, topic=None, last_seen=None):
+    """由逛线程在每一步更新（也供自测直接构造现场）。"""
+    with _LOCK:
+        if doing is not None:
+            _LIVE["doing"] = str(doing)
+        if topic is not None:
+            _LIVE["topic"] = str(topic)[:120]
+        if last_seen is not None:
+            _LIVE["last_seen"] = str(last_seen)[:400]
+        _LIVE["at"] = time.time()
+    return live()
 
 
 def state():
@@ -99,6 +140,8 @@ def browse_once(decide_fn=None, browse_fn=None, store_fn=None, share_fn=None):
     rec = {"ts": time.time(), "decision": None, "got": "", "stored": False, "shared": ""}
     with _LOCK:
         _STATE["rounds"] += 1
+        _LIVE["rounds"] = _STATE["rounds"]
+    set_live(doing="deciding")
     # ① 决策（模型自己定门的状态与想逛什么）
     try:
         dec = decide_fn() if callable(decide_fn) else {}
@@ -113,6 +156,7 @@ def browse_once(decide_fn=None, browse_fn=None, store_fn=None, share_fn=None):
         return rec                       # 门锁死 → 这一轮不出门，**如实记录没出门**
     # ② 出门逛（走调度器：后台优先级，用户一说话就让路）
     want = str(dec.get("want") or "")
+    set_live(doing="browsing", topic=want)
     try:
         got = MS.call(lambda: browse_fn(want) if callable(browse_fn) else "", tag="browse")
     except Exception as e:      # noqa: silent-ok — 逛失败不影响任何用户请求
@@ -121,10 +165,14 @@ def browse_once(decide_fn=None, browse_fn=None, store_fn=None, share_fn=None):
     got = str(got or "").strip()
     rec["got"] = got[:200]
     if not got:
+        set_live(doing="idle")
         return rec
     with _LOCK:
         _STATE["last_visit"] = got[:120]
+    # 逛到东西 → 记下"此刻在看什么"，这是对话线程随时可读的事实
+    set_live(doing="browsing", topic=want, last_seen=got[:400])
     # ③ 存进世界模型（脏东西在 browse_fn 内部就已经被 firewall 过滤过）
+    set_live(doing="storing")
     if callable(store_fn):
         try:
             store_fn(got)
@@ -143,6 +191,7 @@ def browse_once(decide_fn=None, browse_fn=None, store_fn=None, share_fn=None):
             with _LOCK:
                 _STATE["shared"] += 1
             PC.put(PC.KIND_SHARE, str(s), source="browse")
+    set_live(doing="idle")
     return rec
 
 
@@ -192,6 +241,7 @@ def status():
         alive = bool(th is not None and th.is_alive())
     return {"running": alive,
             "thread": th.name if th is not None else "",
+            "live": live(),
             **state(),
             "channel": PC.counts(),
             "scheduler": MS.stats()}

@@ -7477,11 +7477,27 @@ def _browse_action(want):
             return ""
     except Exception:      # noqa: silent-ok
         pass
+    # 【要给"人能读的内容"，不是一坨 JSON】用户给的例子是「正好看到篇讲猫的文章」——
+    #   对话线程要能说出**具体看到了什么**，塞一个 JSON 块进去它说不出来。
+    #   这里从探索记录里挑出可读的字段，挑不到就退回一行摘要（仍然比 JSON 好读）。
     try:
-        body = json.dumps(rec, ensure_ascii=False)
+        parts = []
+        for k in ("title", "topic", "text", "summary", "content", "body", "headline"):
+            v = rec.get(k)
+            if isinstance(v, str) and v.strip():
+                parts.append(v.strip()[:200])
+        if not parts:
+            steps = rec.get("steps") or {}
+            if isinstance(steps, dict):
+                for k2, v2 in list(steps.items())[:3]:
+                    if isinstance(v2, str) and v2.strip():
+                        parts.append("[%s] %s" % (k2, v2.strip()[:160]))
+        if not parts:
+            parts.append(json.dumps(rec, ensure_ascii=False)[:200])
+        body = " ｜ ".join(parts)[:400]
     except Exception:      # noqa: silent-ok
-        body = str(rec)
-    return body[:600]
+        body = str(rec)[:400]
+    return body
 
 
 def _browse_share(text):
@@ -7703,6 +7719,49 @@ def _self_state_facts():
     out.append("【怎么用】用户问「你在干嘛 / 能不能出去逛 / 你有自己的世界吗」时，"
                "**按上面这些事实，用你自己的话回答** —— 不要照抄这段文字，它只是给你的事实。")
     return "\n".join(out)
+
+
+def _browse_live_facts():
+    """把**逛线程此刻在看什么**作为事实交给模型（4D 的最后一步）。
+
+    【与 `_browse_relay` 的区别 —— 这正是用户指出的缺口】
+      · `_browse_relay` 读的是**电话通道**：只有逛线程"想跟你说"的时候才有内容；
+      · 这里读的是**逛线程的实时上下文**：它**此刻在看什么**，一直都有。
+    第一版只做了前者，于是用户问「在干嘛呢」时，只要它还没主动分享过，对话线程就一无所知 ——
+    而规格里的例子恰恰是「在干嘛呢」→「哎我在外面逛呢，正好看到篇讲猫的文章」。
+
+    【只给事实，不给答案】这里只说"它此刻在做什么、看到了什么"，
+    **怎么把这件事说给人听由模型自己组织语言**。上一版做成"载体返回固定文案"是错的：
+    那等于让载体替模型说话，而且模板还会把状态说错。
+    """
+    try:
+        from core import dual_thread as _DT
+        lv = _DT.live()
+        st = _DT.status()
+    except Exception as e:      # noqa: silent-ok — 读不到就不说这一段
+        LOG.debug("逛世界：读实时上下文失败（忽略）：%s", e)
+        return ""
+    doing = str(lv.get("doing") or "idle")
+    topic = str(lv.get("topic") or "").strip()
+    seen = str(lv.get("last_seen") or "").strip()
+    if doing == "idle" and not seen:
+        return ""                      # 没在逛、也没看到东西 → 不加任何东西
+    _doing_cn = {"idle": "待在家里（没在逛）", "deciding": "正在决定要不要出门、逛什么",
+                 "browsing": "正在外面逛", "storing": "正在把逛到的东西存进世界模型",
+                 "sharing": "正在考虑要不要跟你说点什么"}
+    lines = ["\n【你此刻正在做什么（后台逛线程的实时状态，是事实）】",
+             "· 状态：%s" % _doing_cn.get(doing, doing)]
+    if topic:
+        lines.append("· 它正在看的主题：%s" % topic[:100])
+    if seen:
+        lines.append("· 它**此刻看到的内容**：%s" % seen[:280])
+    if st.get("running") is not None:
+        lines.append("· 门的状态：%s ｜ 累计逛了 %s 轮"
+                     % (st.get("door") or "?", st.get("rounds") or 0))
+    lines.append("【怎么用】用户问「你在干嘛 / 在忙什么」时，"
+                 "**按上面这些事实、用你自己的话回答**；它正在看的内容值得说就顺带说一句。"
+                 "不要照抄这段文字，也不要编它没看到的东西。")
+    return "\n".join(lines) + "\n"
 
 
 def mind_done(mind, answer, truncated=False, skipped=False):
@@ -8295,6 +8354,10 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             # 逛线程是独立 daemon，它在外面逛；想跟用户说话就往电话通道里写。
             # 这里（对话线程）**看一眼**通道：有话就自然带一句，没话就什么都不加。
             # 用 `peek` 语义（`_browse_relay` 内部处理）：这一轮用不上就留着，下一轮还有机会。
+            # 逛线程的**实时上下文**（不只是它主动写的那条 share）—— 4D 的最后一步
+            _live_facts = _browse_live_facts()
+            if _live_facts:
+                sys_text += _live_facts
             _browse_say = _browse_relay()
             if _browse_say:
                 sys_text += ("\n【小焦刚才在外面逛到的（它想告诉你）】\n%s\n"
