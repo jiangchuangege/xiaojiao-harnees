@@ -7194,6 +7194,20 @@ def _rag_concurrent(query):
     if not cands:
         LOG.info("RAG 三源同时查：全空（记忆库/向量库/联网都没给东西）")
         return ""
+    # ---- 思考圈 ①：心理 → 大脑（**改"往哪想"**）----
+    #   只**重排**候选，不增删、不改写任何文本 —— 这是"改方向"而非"传消息"的硬证据：
+    #   上下文里一个字都不多，变的是"先冒哪一类"。
+    try:
+        from core import thinking_loop as _TL
+        cands, _lr = _TL.adjust_candidates(cands)
+        if _lr.get("moved"):
+            LOG.info("思考圈：心理[%s] → 改检索方向（偏 %s）｜把「%s」提到了第 %d 位",
+                     _lr["state"], "、".join(_lr["keywords"][:3]),
+                     _lr["moved"][0]["text"][:36], _lr["moved"][0]["to"])
+        else:
+            LOG.info("思考圈：心理[%s] → 检索方向未变（%s）", _lr["state"], _lr.get("note"))
+    except Exception as _e:      # noqa: silent-ok — 圈转不动也不能影响检索
+        LOG.debug("思考圈重排失败（忽略）：%s", _e)
     g = _rag_grade(cands, query)
     best = g["best"]
     LOG.info("RAG 三源同时查：候选 %d 条 · 各源耗时 %s · 并发总耗时 %.2fs（串行会是 %.2fs）",
@@ -8884,6 +8898,16 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                      str((_s_n.get("feeling") or {}).get("trigger"))[:40])
         except Exception as _e:      # noqa: silent-ok — 焊不上也绝不能影响已经答好的内容
             LOG.debug("神经总线焊入失败（忽略）：%s", _e)
+        # ---- 思考圈 ②：大脑 → 心理（**改状态**）----
+        #   不是"大脑发一条通知说它想通了"，而是载体读它的输出、改心理状态；
+        #   下一轮的检索方向与生成参数就跟着变 —— 圈因此转起来。
+        try:
+            from core import thinking_loop as _TL
+            _nst = _TL.after_thought(answer)
+            LOG.info("思考圈：大脑 → 心理（状态改为 %s，因为 %s）",
+                     _nst.get("state"), str(_nst.get("why"))[:40])
+        except Exception as _e:      # noqa: silent-ok — 改不了状态也绝不能影响已答好的内容
+            LOG.debug("思考圈改状态失败（忽略）：%s", _e)
         _spirit_learn(user_input_ctx, answer)
         return answer, True, info, needs_confirm, tool_trace
 

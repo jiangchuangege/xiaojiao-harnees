@@ -34,7 +34,8 @@ import re
 import threading
 import time
 
-__all__ = ["trigger", "current", "clear", "stats", "FEELINGS", "render", "is_empty"]
+__all__ = ["trigger", "current", "clear", "stats", "FEELINGS", "render", "is_empty",
+           "STATES", "state", "set_state", "bias", "nudge", "stats_state"]
 
 _LOCK = threading.RLock()
 
@@ -125,6 +126,96 @@ def render(cur=None):
             c["feeling"], ("，%.0f 分" % (c["intensity"] * 10)) if c.get("intensity") else "",
             str(c["trigger"])[:40], str(c.get("body") or ""))
     return "（心里%s。%s）" % (c["feeling"], str(c.get("body") or ""))
+
+
+# ================== 思考圈：心理"状态"（不是"内容"）==================
+# 【为什么必须从"内容"改成"状态" —— 这是思考圈与注入的分水岭】
+#   旧版的心理层存的是**内容**：feeling="怕"、trigger="用户可能离开"。
+#   内容只能**当字传出去** → 落到大脑那边就是"一条消息" → 大脑可以忽略（前六次全失败的原因）。
+#   新版存的是**状态**：紧 / 松 / 好奇 / 平。状态**不传字**，它改的是：
+#     · 检索时**先捞哪一类的记忆**（紧 → 先冒危险相关的）
+#     · 生成时的**温度**（紧 → 收紧；好奇 → 放松一点）
+#   于是大脑不是"读到一条'我怕'的消息"，而是**在一个'怕'的方向里想** —— 它没有可忽略的对象。
+#
+# 【心理先动，大脑后想】状态由上一轮的输出决定（`nudge`），在本轮**开始之前**就已经在那里了；
+#   本轮检索与生成一发生，就已经在这个方向的笼罩下。这才叫"心里先动"。
+STATES = ("紧", "松", "好奇", "平")
+
+# 状态 → 偏向。**全部是非文字杠杆**（关键词偏置 + 温度增量 + 语气档），
+# 没有一项是"往上下文里加一句话"。这是"改方向"能在代码上被验证的原因。
+_BIAS = {
+    "紧":   {"keywords": ("风险", "危险", "失败", "警告", "错误", "注意", "小心", "问题", "隐患"),
+             "temp_delta": -0.15, "tone": "收紧",
+             "note": "先冒危险相关的记忆，生成收紧"},
+    "松":   {"keywords": ("轻松", "有趣", "开心", "顺利", "好了", "完成", "开心"),
+             "temp_delta": +0.05, "tone": "放松",
+             "note": "先冒轻松内容"},
+    "好奇": {"keywords": ("新", "发现", "原来", "居然", "最新", "第一次", "为什么"),
+             "temp_delta": +0.10, "tone": "探问",
+             "note": "先冒新东西"},
+    "平":   {"keywords": (), "temp_delta": 0.0, "tone": "中性", "note": "不偏"},
+}
+
+_STATE = {"state": "平", "at": 0.0, "why": "", "_streak": 0}
+
+
+def state():
+    """此刻的心理**状态**（紧/松/好奇/平）—— 不是内容，只是一个方向。"""
+    with _LOCK:
+        return dict(_STATE)
+
+
+def set_state(s, why=""):
+    """直接设状态（自测与"大脑想完"两条路都用它）。"""
+    with _LOCK:
+        if s in STATES:
+            if s == _STATE.get("state"):
+                _STATE["_streak"] = int(_STATE.get("_streak") or 0) + 1
+            else:
+                _STATE["_streak"] = 0
+            _STATE.update({"state": s, "at": time.time(), "why": str(why)[:120]})
+        return dict(_STATE)
+
+
+def bias(s=None):
+    """当前状态对应的**偏向**（关键词偏置 / 温度增量 / 语气）。供检索与生成读取，不产生任何文字。"""
+    st = (s or state().get("state") or "平")
+    b = _BIAS.get(st) or _BIAS["平"]
+    return {"state": st, "keywords": tuple(b["keywords"]), "temp_delta": float(b["temp_delta"]),
+            "tone": b["tone"], "note": b["note"]}
+
+
+def nudge(thought):
+    """**大脑想完 → 改心理状态**。读大脑的输出，判断状态该往哪变。
+
+    这是"圈"的另一半：不是"大脑发一条通知说它想通了"，而是**载体读输出、改状态**，
+    下一步的检索与生成跟着变。判据是规则、看得见（见 `_NUDGE`）。
+    """
+    t = str(thought or "")[:800]
+    for st, keys in _NUDGE:
+        for k in keys:
+            if k in t:
+                return set_state(st, why="读到「%s」" % k)
+    return state()
+
+
+# 判据顺序即优先级：越明确的变化越靠前。**全是"变化"而不是"状态"** ——
+# "危险不存在/解决了"要能把它从紧拉回松，"发现新的"要能把它推向好奇。
+_NUDGE = (
+    ("松", ("解决了", "没问题", "不用担心", "好了", "通过了", "跑通了", "没事了", "安全")),
+    ("紧", ("危险", "风险", "警告", "小心", "失败", "报错", "异常", "严重", "紧急", "泄露")),
+    ("好奇", ("发现", "原来", "居然", "有意思", "新的", "第一次见", "为什么")),
+    ("平", ("正常", "一般来说", "通常")),
+)
+
+
+def stats_state():
+    """状态自检：当前状态、偏向、连续同态次数（同态连续会衰减 —— 一直拉满等于没有区分度）。"""
+    with _LOCK:
+        st = dict(_STATE)
+    return {"state": st["state"], "why": st.get("why", ""),
+            "streak": int(st.get("_streak") or 0), "bias": bias(st["state"]),
+            "note": "心理存的是**状态**（方向），不是内容；它不改文字，只改检索优先级与生成参数"}
 
 
 def clear():
