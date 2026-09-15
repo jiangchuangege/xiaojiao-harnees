@@ -316,8 +316,37 @@ def solve(text):
     return detect(text)
 
 
+def material(text):
+    """**原料**（给模型自己推的，不是给它照搬的话）。
+
+    规格：载体直算时不该返回"结果 + 一句解释"（那是成品，换种问法就崩），
+    而该返回 **结果 + 谁算的 + 它有没有参与 + 怎么来的**。
+    那条解释句仍然留在 `answer_text()` 里 —— 它现在的用处只剩**兜底**
+    （模型没应答、或把数字说错了，载体才用它顶上）。
+    """
+    r = detect(text)
+    if not r:
+        return {}
+    if r["kind"] in ("arithmetic", "arithmetic_cn", "arithmetic_llm"):
+        how = ("%s 的十进制乘法（%s）"
+               % (r.get("expr") or "", r.get("kind"))).strip()
+        if r["kind"] in ("arithmetic_cn", "arithmetic_llm"):
+            how = "中文算式「%s」翻成 `%s` 后的十进制乘法" % (text.strip()[:40], r.get("expr") or "")
+    else:
+        how = "组合数计算：%s" % (r.get("detail") or "")
+    return {"result": str(r.get("display") or r.get("value") or ""),
+            "source": "载体的计算器（直算，不经过你）",
+            "took_part": False,
+            "raw": str(r.get("expr") or r.get("detail") or ""),
+            "how": how, "kind": str(r.get("kind") or "")}
+
+
 def answer_text(text):
-    """给用户的直答文本（载体算出来的，带出处说明）。"""
+    """给用户的直答文本（载体算出来的，带出处说明）。
+
+    ⚠️ **这是成品，不是原料**：它现在的用处只剩"兜底"——
+    正常路径改成 `material()` 给原料、让模型自己组织（见 `core/raw.py`）。
+    """
     r = detect(text)
     if not r:
         return ""

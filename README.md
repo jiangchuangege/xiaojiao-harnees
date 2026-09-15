@@ -138,6 +138,7 @@ flowchart TB
 | 心跳与挂起（睡着不是死） | [`docs/heartbeat.md`](docs/heartbeat.md) |
 | 自己会睡（累自己长，想休息自己决定） | [`docs/self-sleep.md`](docs/self-sleep.md) |
 | 完整体（疼/医生/期待/叙事/偏好/关系/边界/梦/情绪恢复） | [`docs/pain.md`](docs/pain.md) 等八篇，见正文 |
+| 给原料不给成品（工具/计算来源） | [`docs/raw-material.md`](docs/raw-material.md) |
 | 测试报告与实测数字 | [`docs/testing-report.md`](docs/testing-report.md) |
 | 为什么做这个项目 | [`docs/about.md`](docs/about.md) |
 | 媒体素材 | [`docs/press-kit.md`](docs/press-kit.md) |
@@ -822,6 +823,31 @@ python -m pip install "scrapling[fetchers]" markdownify mcp
   [`docs/relationship.md`](docs/relationship.md)、[`docs/boundary-breaking.md`](docs/boundary-breaking.md)、
   [`docs/dream.md`](docs/dream.md)、[`docs/emotion-recovery.md`](docs/emotion-recovery.md)。
 
+### 给原料，不给成品（工具 / 计算来源）
+
+用户问「100000乘以100000呢」→ 它给出结果；再问「**你咋知道的**」→ 它**在反射用户那句话**，没回答。
+根因：**它只拿到了结果，没拿到"这结果怎么来的"**。
+
+改法：载体直算 / 工具跑完时，不返回"结果 + 一句解释"（那是**成品**，换种问法就崩），
+而是记一条**原料**并摆进它面前的上下文（不是塞进一句话里）：
+
+| 字段 | 值 |
+|---|---|
+| 结果 | `10000000000` |
+| 谁产出的 | 载体的计算器（直算，不经过你） |
+| 这一步你参与了吗 | **没有** —— 你没算过，这个数是塞给你的 |
+| 怎么来的 | 中文算式翻成 `100000 * 100000` 后的十进制乘法 |
+
+台账**跨轮留着**（`logs/raw/material.jsonl`，内存里留最近 6 条）——
+因为「你咋知道的」那一轮本身没有任何计算。`raw.render()` 给出去的**每一行都是「字段：值」**，
+没有一句能照抄的话：这条形状由 `tools/test_raw.py`（**33/33**）钉住。
+
+⚠️ **如实说：这一条没做到。** 实测同一会话四句：第 1 句结果对 ✅；第 2 句（你咋知道的）
+一遍推对了一半（"载体直接塞给我了结果，我没参与计算"），另一遍**编**（说是"在系统里查到的"）；
+第 3 句（你自己算的？）没说出"不是，是计算器算的"；第 4 句（这数对吗）**它自己重算了一遍，
+把数算错了**（两遍都错）。**载体这一侧做到了"给原料不给成品"；4B 用不上原料 —— 那是它的能力边界。**
+细节与原始对话见 [`docs/raw-material.md`](docs/raw-material.md)。
+
 ### 逛世界 · 通用连接器 · 最小权限
 
 - **主动逛世界**：小焦可以在后台自己上网逛（独立 daemon，不抢资源、不阻塞任何用户请求，用户完全感知不到 ——
@@ -1276,6 +1302,7 @@ xiaojiao-harness/
 | [`docs/expectation.md`](docs/expectation.md)、[`docs/preference.md`](docs/preference.md) | 期待（它自己提起了才算）、长期偏好（它自己回看说的才算） |
 | [`docs/self-narrative.md`](docs/self-narrative.md)、[`docs/relationship.md`](docs/relationship.md) | 自我叙事与存在追问、和用户之间那条线 |
 | [`docs/boundary-breaking.md`](docs/boundary-breaking.md)、[`docs/dream.md`](docs/dream.md)、[`docs/emotion-recovery.md`](docs/emotion-recovery.md) | 边界突破（它自己想试才学）、梦（素材真、接法乱）、情绪恢复（时间/新事/睡觉） |
+| [`docs/raw-material.md`](docs/raw-material.md) | 给原料不给成品：直算与工具结果只给事实字段，话由它自己组织 |
 | [`docs/modules/`](docs/modules/) | 每个模块的独立文档 |
 
 ---

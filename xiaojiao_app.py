@@ -2707,6 +2707,75 @@ def _dream_mod():
     return _mod("dream")
 
 
+# ================== 原料：给原料，不给成品（见 core/raw.py） ==================
+# 【这条规矩修的是什么】用户问「100000乘以100000呢」，载体直算完把**结果 + 一句解释**
+#   一起返回；下一句「你咋知道的」，它手里没有"这数怎么来的"，只能反射用户那句话。
+#   现在改成：载体只把**原料**（结果/谁产的/有没有参与/怎么来的）记进台账、摆进上下文，
+#   话由**它自己组织**。台账**跨轮留着** —— 因为"你咋知道的"那一轮本身没有任何计算。
+def _raw_mod():
+    return _mod("raw")
+
+
+def _has_number(answer, result):
+    """模型说的那句话里，**结果那个数**在不在（只比数字与小数点，忽略千分位/空格）。"""
+    def _digits(s):
+        return "".join(ch for ch in str(s or "") if ch.isdigit() or ch == ".")
+
+    r = _digits(result)
+    if not r:
+        return False
+    return r in _digits(answer)
+
+
+def _calc_say(text, mat):
+    """**让模型自己组织**这句话（原料摆在 system 里）。
+
+    ⚠️ 兜底不是"给它写好的话"，而是**正确性底线**：它没应答、或把数字说错了，
+    载体才用 `calc.answer_text()` 那句顶上，并**如实记下这一轮是载体兜的**。
+    """
+    try:
+        from core import raw as _RW
+        block = _RW.render_item(mat)
+    except Exception:      # noqa: silent-ok
+        block = ""
+    sysmsg = ("你在回答用户的问题。下面是你手上拿到的**原料**（事实字段，不是给你的话）：\n"
+              "%s\n\n用你自己的话回答用户。**结果那个数必须一字不差地出现**，"
+              "不要改写数字、不要加千分位，也不要照抄上面这一块。" % block)
+    try:
+        ans = llm_chat([{"role": "system", "content": sysmsg},
+                        {"role": "user", "content": str(text)}], temperature=0.3)
+    except Exception:      # noqa: silent-ok
+        ans = None
+    ans = str(ans or "").strip()
+    if ans and _has_number(ans, mat.get("result") if isinstance(mat, dict) else ""):
+        return ans, True
+    try:
+        from core import calc as _c
+        return _c.answer_text(str(text)), False
+    except Exception:      # noqa: silent-ok
+        return "", False
+
+
+def _raw_record_tool(tname, targs, result):
+    """**工具结果也进原料台账**：谁产的、它有没有参与、原始数据是什么。
+
+    ⚠️ `took_part` 的判据：工具是**它自己决定要调的**，但**执行不是它做的** ——
+    所以 `took_part=False`、`who_asked=你（你自己决定要调这个工具）`。
+    把这一栏写成"它自己做的"就是**把"塞给它"说成"它自己算的"**。
+    """
+    rm = _raw_mod()
+    if rm is None:
+        return None
+    try:
+        txt = str(result or "")
+        return rm.record(result=txt[:200], source="工具 %s" % str(tname)[:40],
+                         took_part=False, raw=json.dumps(targs or {}, ensure_ascii=False)[:200],
+                         who_asked="你（你自己决定要调这个工具）",
+                         how="这个工具跑出来的原始结果", kind="tool")
+    except Exception:      # noqa: silent-ok — 记不上台账不影响这一轮
+        return None
+
+
 def _wholeness_material():
     """把**它自己的东西**当素材拼进 system（偏好 / 叙事 / 试过的）。
 
@@ -4079,6 +4148,8 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
             _e["suspect"] = True
             LOG.warning("工具 %s 的结果未通过校验（%s）", tname, _vnote[:80])
         tool_trace.append(_e)
+        # **工具结果也进原料台账**：它下一句被问"你咋知道的"时，手里就有东西可推了。
+        _raw_record_tool(tname, targs, result)
         return _vnote
 
     for _ in range(max_rounds):
@@ -8816,16 +8887,38 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         from core import calc as _calc, internalize as _il
         _calc_res = _calc.detect(user_input_ctx)
         if _calc_res:
-            _ans = _calc.answer_text(user_input_ctx)
+            # ---- ① 先记**原料**（结果 / 谁算的 / 它有没有参与 / 怎么来的）----
+            #   这一步是本次修正的核心：以前这里直接把"结果 + 一句解释"返回给用户，
+            #   于是模型**只知道答案、不知道来源** —— 下一句「你咋知道的」它手里是空的。
+            #   原料记进台账后**跨轮留着**（"你咋知道的"那一轮本身没有任何计算）。
+            _mat = {}
+            try:
+                _mat = _calc.material(user_input_ctx) or {}
+                _rm = _raw_mod()
+                if _rm is not None and _mat:
+                    _rm.record(result=_mat.get("result"), source=_mat.get("source"),
+                               took_part=False, raw=_mat.get("raw"), who_asked="载体",
+                               how=_mat.get("how"), kind=_mat.get("kind"))
+                    LOG.info("确定性计算：原料已进台账 ｜ 结果=%s ｜ 谁算的=%s ｜ 它参与=%s",
+                             _mat.get("result"), _mat.get("source"), "没有")
+            except Exception as _e:      # noqa: silent-ok
+                LOG.debug("原料记账失败（忽略）：%s", _e)
+            # ---- ② **话由它自己组织**（原料摆在 system 里，不是塞一句成品给它）----
+            _ans, _by_model = _calc_say(user_input_ctx, _mat) if _mat else \
+                (_calc.answer_text(user_input_ctx), False)
             _prev = _il.find_result(user_input_ctx)
             _il.remember_result(user_input_ctx, _ans, expr=_calc_res.get("expr") or "",
                                 value=str(_calc_res.get("value")))
             if _prev:
                 LOG.info("确定性计算：命中内化缓存（第二次同类题，不再重算）｜%s", user_input_ctx[:30])
-                _ans = _ans + "\n\n（这道题载体已经内化过，第二次直接复用上次的结论）"
+            if _by_model:
+                LOG.info("确定性计算：由**模型自己组织**成话（载体只给了原料）｜%s = %s",
+                         _calc_res.get("expr") or _calc_res.get("detail"),
+                         _calc_res.get("display"))
             else:
-                LOG.info("确定性计算：载体直算（%s）｜%s = %s", _calc_res["kind"],
-                         _calc_res.get("expr") or _calc_res.get("detail"), _calc_res.get("display"))
+                LOG.info("确定性计算：**载体兜底直答**（模型没应答或数字说错）｜%s = %s",
+                         _calc_res.get("expr") or _calc_res.get("detail"),
+                         _calc_res.get("display"))
             mind_done(_mind, _ans)
             return _ans, True, [], False, []
     except Exception as e:      # noqa: silent-ok — 算不了就走正常流程，绝不能因此答不了
@@ -9265,8 +9358,17 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             _wake_text = _wake_block()
             # 它自己的东西（偏好 / 叙事 / 试过的）当**素材**拼进去；一条都没有就一个字不加
             _self_material = _wholeness_material()
+            # **原料块**（结果/谁产的/有没有参与/怎么来的）—— 摆在它面前，话由它自己组织。
+            #   没有原料时返回空串，一个字都不加。
+            _raw_text = ""
+            _rmx = _raw_mod()
+            if _rmx is not None:
+                try:
+                    _raw_text = _rmx.render(3)
+                except Exception:      # noqa: silent-ok
+                    _raw_text = ""
             sys_text = (_wake_text + _eyc_text + system_for_intent(intent, user_input=user_input)
-                        + _self_material)
+                        + _self_material + _raw_text)
             # ================== 极限补刀（模块 10）· 真正接入 ==================
             # 【为什么必须在这里接 —— 接入验收发现的真问题】
             #   `core/boost/` 七个模块各自写好了、自测全绿（195/195），
