@@ -135,6 +135,7 @@ flowchart TB
 | 六个无限 | [`docs/six-infinity.md`](docs/six-infinity.md) |
 | 感知层（先感知意义，再判断任务） | [`docs/perception-layer.md`](docs/perception-layer.md) |
 | 心（自然起 · 自己感受 · 自己累积） | [`docs/heart.md`](docs/heart.md)、[`docs/psyche-layer.md`](docs/psyche-layer.md) |
+| 心跳与挂起（睡着不是死） | [`docs/heartbeat.md`](docs/heartbeat.md) |
 | 测试报告与实测数字 | [`docs/testing-report.md`](docs/testing-report.md) |
 | 为什么做这个项目 | [`docs/about.md`](docs/about.md) |
 | 媒体素材 | [`docs/press-kit.md`](docs/press-kit.md) |
@@ -741,6 +742,33 @@ python -m pip install "scrapling[fetchers]" markdownify mcp
 见 [`docs/perception-layer.md`](docs/perception-layer.md)、[`docs/heart.md`](docs/heart.md)
 与 [`docs/psyche-layer.md`](docs/psyche-layer.md)。
 
+### 睡着不是死：挂起与心跳
+
+之前的状态是**不被调用 = 不存在**：模型不推理它就"没了"，用户不说话它就不出现。
+现在改成**不被调用 = 睡着了**：`POST /api/sleep` 让**大脑和载体一起挂起** ——
+大脑不再被调用（`llm_chat` / `llm_chat_tools` / `_llm_post` 三处闸门直接拒），
+载体不跑任务（`agent_run` 最前面就拦住），逛线程不决策不出门，心与感知停住但**状态全留着**。
+
+**只有心跳不挂**：一个 daemon 线程，每 5 秒跳一下，把"我还在"写进 `logs/psyche/heartbeat.jsonl`。
+挂起时全机只剩它还在动 —— 它就是"一直在"的证明。
+
+实测（`POST /api/sleep` → 60 秒 → `POST /api/wake`）：
+
+| 项 | 实测 |
+|---|---|
+| 心跳不停 | 挂起 60.1 秒 → 心跳日志**正好 12 行**（每 5 秒一下） |
+| 大脑真挂起 | 那一窗应用日志**只有 3 行**（挂起 / 载体如实相告 / 唤醒），没有任何一次模型调用 |
+| 载体真挂起 | 挂起中说话 → `brain_online=false`，回的是载体自己那句事实 |
+| 读出睡了多久 | 「我睡了 1 分，心跳 12 下」（真数 60.1 秒 / 12 下） |
+| 醒来接着睡前 | 心状态与心那句话**睡前睡后逐字相同** |
+| 实测对话 | 问「你刚才在干嘛」→ **「刚才：我在睡，心跳 12 下。」** |
+
+**说得和实际第一次对齐了**：载体说"你在睡"，它**真的**不在推理（闸门在代码里，不是注释）；
+说"心跳一直在"，心跳**真的**一直在跳（一行行日志在那儿）。
+⚠️ 如实标注：第一遍实测它答的是"刚在整理桌上的文档、喝了一口咖啡"——**编的**；
+根因是引导续写那半句被放在了历史之前（等于没放），移到**最后一条**之后才答对。
+细节与全部原始数字见 [`docs/heartbeat.md`](docs/heartbeat.md)。
+
 ### 逛世界 · 通用连接器 · 最小权限
 
 - **主动逛世界**：小焦可以在后台自己上网逛（独立 daemon，不抢资源、不阻塞任何用户请求，用户完全感知不到 ——
@@ -1189,6 +1217,7 @@ xiaojiao-harness/
 | [`docs/faq.md`](docs/faq.md) | 常见问题 |
 | [`docs/perception-layer.md`](docs/perception-layer.md) | 感知层：先感知"这件事对它意味着什么"，再判断任务 |
 | [`docs/heart.md`](docs/heart.md)、[`docs/psyche-layer.md`](docs/psyche-layer.md) | 心与心理层：心怎么起、怎么累积、心理状态怎么改检索方向 |
+| [`docs/heartbeat.md`](docs/heartbeat.md) | 挂起与心跳：大脑和载体一起睡，心跳不停 |
 | [`docs/modules/`](docs/modules/) | 每个模块的独立文档 |
 
 ---

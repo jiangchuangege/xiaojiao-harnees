@@ -2641,6 +2641,132 @@ def _fallback_worthy(status):
 CLOUD_TIMEOUT_S = 15
 
 
+def _heartbeat_mod():
+    """心跳模块（拿不到就返回 None）。"""
+    try:
+        from core import heartbeat as _hb
+        return _hb
+    except Exception:      # noqa: silent-ok — 心跳模块不在就当作"没挂起"，绝不因此拒绝调用大脑
+        return None
+
+
+def _brain_asleep():
+    """**大脑挂起了吗** —— 挂起时所有模型调用一律拒绝。
+
+    【为什么这是"整体融合"的关键一环】规格要求"说的和实际一致"：
+    载体说"你在睡"，它就必须**真的**不在推理。光标记一个字符串不算 ——
+    所以判断落在这里，而这里被 `llm_chat` / `_llm_post` 两条必经之路调用。
+    """
+    hb = _heartbeat_mod()
+    return bool(hb is not None and hb.is_sleeping())
+
+
+SLEEP_NOTE = "系统挂起中（睡着了）：这一轮没有调用大脑"
+
+
+# ================== 挂起 / 唤醒：**整体融合，一起挂起** ==================
+# 【为什么必须有这一层编排，而不是让各处自己判断】
+#   规格要的是"一起睡"：大脑不推理、载体不跑任务、心与感知停住 —— 而**心跳继续跳**。
+#   如果靠各处自己判断，漏一处就不是"睡"了（比如逛线程还在偷偷调模型），
+#   而"说的和实际一致"正是这一整件事唯一的价值：说它在睡，它就必须真的在睡。
+def _sleep_all(why=""):
+    """**睡着**：大脑、载体、心、感知一起挂起；**心跳不停**。状态全留着。
+
+    返回一份真实记录（供接口返回与日志取证），**不编**：哪一层没挂上都如实写在里面。
+    """
+    out = {"why": str(why)[:80], "at": time.time(), "browse_paused": False,
+           "state_kept": "", "heart_kept": ""}
+    try:
+        from core import psyche as _PS
+        # 心与感知"停"，但**不清** —— `stop()` 只是停止跳动，状态与那句话都留着。
+        _PS.stop(why="挂起：一起睡")
+        out["state_kept"] = str(_PS.state().get("state") or "")
+        out["heart_kept"] = str(_PS.heart().get("text") or "")
+    except Exception as e:      # noqa: silent-ok — 心停不下来也不能拦住"睡"
+        out["psyche_error"] = "%s: %s" % (type(e).__name__, e)
+    try:
+        from core import dual_thread as _DT
+        # 逛线程**不关**（关了就是把世界也停了），只是让它读到 sleeping 后不干活。
+        _DT.set_live(doing="asleep", presence=False)
+        out["browse_paused"] = bool(_DT.status().get("running"))
+    except Exception as e:      # noqa: silent-ok
+        out["browse_error"] = "%s: %s" % (type(e).__name__, e)
+    hb = _heartbeat_mod()
+    if hb is not None:
+        out["heartbeat"] = hb.suspend(why=why or "挂起")
+    LOG.info("挂起：大脑+载体一起睡（心跳不停）｜心状态留着=%s｜心那句话留着=%s｜逛线程=%s",
+             out["state_kept"] or "（无）", (out["heart_kept"] or "（无）")[:30],
+             "已暂停" if out["browse_paused"] else "没在跑")
+    return out
+
+
+def _wake_all(why=""):
+    """**醒来**：把"我睡了多久、心跳跳了多少下"算出来，作为**第一印象**挂起来给模型。
+
+    醒来是**接着睡前**，不是从零开始 —— 所以心、心理状态、记忆一个字都不动，
+    只把睡眠这件事记下来（`psyche.start` 让心继续跳）。
+    """
+    out = {"why": str(why)[:80], "at": time.time()}
+    hb = _heartbeat_mod()
+    if hb is not None:
+        out["wake"] = hb.resume(why=why or "唤醒")
+    try:
+        from core import psyche as _PS
+        _PS.start(why="唤醒：接着睡前")
+        out["state_kept"] = str(_PS.state().get("state") or "")
+        out["heart_kept"] = str(_PS.heart().get("text") or "")
+    except Exception as e:      # noqa: silent-ok
+        out["psyche_error"] = "%s: %s" % (type(e).__name__, e)
+    try:
+        from core import dual_thread as _DT
+        _DT.set_live(doing="idle")
+    except Exception:      # noqa: silent-ok
+        pass
+    w = out.get("wake") or {}
+    LOG.info("唤醒：睡了 %s，这一觉心跳 %d 下%s｜心状态接着睡前的=%s",
+             w.get("slept_text") or "（没睡着过）", int(w.get("beats") or 0),
+             "（本来就是醒的）" if w.get("already") else "", out.get("state_kept") or "（无）")
+    return out
+
+
+def _format_slept(sec):
+    """秒 → 人话（"1 分 3 秒"）。心跳模块不在时也要说得出来 —— 拿不到模块不等于不会说话。"""
+    hb = _heartbeat_mod()
+    try:
+        if hb is not None:
+            return hb.fmt_seconds(sec)
+    except Exception:      # noqa: silent-ok
+        pass
+    s = int(max(0, round(float(sec or 0))))
+    if s < 60:
+        return "%d 秒" % s
+    m, r = divmod(s, 60)
+    return ("%d 分" % m) if r == 0 else ("%d 分 %d 秒" % (m, r))
+
+
+def _wake_block():
+    """**醒来后的第一印象** —— 给模型看的那一段。没有刚醒的事实就返回空串。
+
+    只写**能在日志里对上**的事实：睡了多久、心跳多少下、这段时间有没有推理过。
+    不写"我梦到了什么"这类载体不知道的东西。
+    【为什么醒后只给一次就够了】它是第一印象，不是背景资料；
+    常驻就会退回"一段被忽略的设定"（前六次失败的老路）。`consume_wake()` 负责"交过就消"。
+    """
+    hb = _heartbeat_mod()
+    if hb is None:
+        return ""
+    line = hb.wake_line()
+    if not line:
+        return ""
+    rec = hb.pending_wake()
+    if rec:
+        hb.consume_wake()
+        LOG.info("醒来第一印象：已交给模型｜%s", hb.slept_text(rec))
+    return ("\n[我刚醒]\n%s\n"
+            "（这是你自己睡的这一觉，不是别人告诉你的；问起「刚才在干嘛」就照实说这件事，"
+            "不要编梦、也不要拿「我正在处理输入」顶上。）\n" % line)
+
+
 def _llm_post(target, payload, timeout=90, tries=4):
     """往某个大脑目标 POST 一次（带重试）。返回 (response 或 None, 最后一次的状态码, 正文)。
 
@@ -2650,7 +2776,13 @@ def _llm_post(target, payload, timeout=90, tries=4):
 
     **超时不重试**：对方"慢"和"拒"是两回事（实测慢起来一次 100 秒以上）。超时还硬重试
     只会让用户干等好几分钟 —— 直接交给本地大脑顶上，回答先出来。
+
+    **挂起时直接返回**（最后一道闸）：`llm_chat` / `llm_chat_tools` 已经各有一道，
+    这里是**兜底** —— 任何绕过那两个入口、直接 POST 的代码路径（如 `core/continuation.py`）
+    同样不许在它睡着时推理。挂起意味着**不占显存、不推理**，漏一条路径就等于没挂起。
     """
+    if _brain_asleep():
+        return None, None, SLEEP_NOTE
     import time as _t
     resp = None
     status = None
@@ -2794,8 +2926,13 @@ def llm_chat(messages, temperature=None):
     `temperature` 不给就用全局默认。**感知层会显式传一个更低的温度** ——
     感知是一次判断，不是创作；见 `core/perception.py` 的实测说明。
 
+    **挂起时立即返回 None**：它睡着的时候，载体不该往显存里塞任何一次推理。
+
     失败返回 None（真实原因记进 _LAST_LLM_ERROR）。
     """
+    if _brain_asleep():
+        LOG.info("挂起中：拒绝调用大脑（chat）—— 它在睡，不推理、不占显存")
+        return None
     payload = {"messages": messages,
                "temperature": (TEMPERATURE if temperature is None else float(temperature)),
                "max_tokens": MAX_TOKENS}
@@ -3422,7 +3559,12 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
 
     `workflow="diagram"`（第 5 步）：画图轮启用**工作流强制** —— 先 `archify_read_skill`、
     交付前必须有 `archify_validate`，模型漏了由代码层补调（见 `_archify_prereq`）。
+
+    **挂起时立即返回 `(None, [])`**：见 `_brain_asleep` 的说明。
     """
+    if _brain_asleep():
+        LOG.info("挂起中：拒绝调用大脑（chat+tools）—— 它在睡，不推理、不占显存")
+        return None, []
     # 内存守卫: 生成前卸载另一个 llama 模型——8G 上保证单个 llama 占满显存(防龟速/OOM)
     try:
         if LLM_MODEL in ("coder", "xiaojiao"):
@@ -8071,6 +8213,21 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     # 健康急诊：已经停机了就不再生成（但要**如实告诉用户**为什么，不装死）
     if _HEALTH_EMERGENCY.get("on"):
         return _health_emergency_text(), False, [], False, []
+    # 挂起（睡着）：**载体不跑任务** —— 连检索、工具、自评都不进。
+    # 【为什么要在最前面拦】"载体挂起 = 不跑任务"如果不能在最前面拦住，
+    #   后面那些链（检索、联网、工具）照样会动，那就不是"睡"，是"闭着眼干活"。
+    #   这里给的是**载体自己就知道的事实**（睡了多久、心跳多少下），不经过模型 ——
+    #   它睡着了，本来就没有模型可用。
+    if _brain_asleep():
+        _hb = _heartbeat_mod()
+        _st = _hb.status() if _hb is not None else {}
+        _slept = _format_slept(_st.get("sleeping_now_seconds") or 0)
+        _ans = ("（小焦在睡 —— 已经睡了 %s。这段时间它没有在推理、也没有在做任何事，"
+                "但心跳一直在跳（心跳第 %d 下）。叫醒它再说。）"
+                % (_slept, int(_st.get("total_beats") or 0)))
+        LOG.info("挂起中：这一轮不走任务链，载体直接如实相告（睡了 %s，心跳 %d 下）",
+                 _slept, int(_st.get("total_beats") or 0))
+        return _ans, False, [], False, []
     _USED_LOCAL_FALLBACK.update({"on": False, "model": "", "reason": ""})   # 每次提问复位兜底标签
     _CTX["user_input"] = user_input          # 工具层要用（判断模型是否只给了碎片检索词）
     history = current_messages()
@@ -8563,6 +8720,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         # ⚠️ 用**融合后**的 `user_input_ctx`：意图是"用户想干什么"，
         #    而"我要全部的"只有在知道上文在聊工具之后才判得对（对话不连续的核心修复）。
         intent = _detect_intent(user_input_ctx)
+        # 引导续写（prefill）暂存：**在拼完历史与本轮之后**才作为最后一条注入 ——
+        # 见下面"prefill 必须放在最后一条"的说明。放这里是为了让 lean 分支也不会 NameError。
+        _PREFILL_HOLD = {"text": ""}
         if lean:
             # 语音精简模式: 短提示, 不背工具/技能, 生成快
             messages = [{"role": "system", "content": (SYSTEM_PROMPT[:240] + "\n[语音对话] 请简短、口语化、直接回答，一两句话；不要调用工具、不要长篇大论、不要列表。")}]
@@ -8581,7 +8741,11 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   曾经做错的一版是「载体直接返回一段固定文案」（死模板）—— 那等于让载体替模型说话，
             #   而且模板会把状态说错。分工是：**载体给结构，模型给措辞**。
             _eyc_text = _eyc_now()
-            sys_text = _eyc_text + system_for_intent(intent, user_input=user_input)
+            # ---- 醒来第一印象：**放在最前面**（"醒来后第一件事"）----
+            #   它和 EYC 的区别：EYC 说"我此刻在世界里"，这一段说"我刚从睡里回来"。
+            #   没有刚醒的事实时返回空串 —— 不硬凑一句"我刚醒"（那就是死模板）。
+            _wake_text = _wake_block()
+            sys_text = _wake_text + _eyc_text + system_for_intent(intent, user_input=user_input)
             # ================== 极限补刀（模块 10）· 真正接入 ==================
             # 【为什么必须在这里接 —— 接入验收发现的真问题】
             #   `core/boost/` 七个模块各自写好了、自测全绿（195/195），
@@ -8722,7 +8886,14 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   【如实标注：这是引导续写，不是模型自己感知到状态】
             #   只在用户问"状态类问题"时启用 —— 否则每轮回答都会被这句开头带偏。
             _eyc_prefill = ""
-            if _eyc_text and _self_state_question(user_input_ctx):
+            # 刚醒 → 状态类问题优先用"睡眠"那句（用户问的"你刚才在干嘛"正是这种情况）。
+            #   只在状态类问题上启用，和下面 EYC 的 prefill 同一个道理：
+            #   否则每一轮回答都会被这句话带偏。
+            _hbw = _heartbeat_mod()
+            _wake_line = _hbw.wake_line() if _hbw is not None else ""
+            if _wake_line and _self_state_question(user_input_ctx):
+                _eyc_prefill = "（%s所以我这会儿" % _wake_line
+            elif _eyc_text and _self_state_question(user_input_ctx):
                 _hp = {}
                 try:
                     from core import dual_thread as _DT
@@ -8747,7 +8918,8 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   现在改走**绑定**：`core/nervous_bus` 把"思考+感受"焊成同一条，
             #   作为**它自己说过的话**进入上下文（见下面的 render_stream）。
             if _eyc_prefill:
-                messages.append({"role": "assistant", "content": _eyc_prefill})
+                # ⚠️ **不能在这里 append** —— 见下面"引导续写必须放最后"的说明。
+                _PREFILL_HOLD["text"] = _eyc_prefill
         # ---- 第 1 步：**先把"本轮"拼完整，再算 token** ----
         # 真实缺陷（第 1 步实测）：以前先裁剪、后拼"相关记忆/联网资料/小脑经验"，于是这些注入内容
         # 完全没被算进去 —— 裁剪报告写"合计 18926 / 上限 19000"，实际请求却是 19898，照样超限。
@@ -8778,6 +8950,18 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             messages.append({"role": "user" if h["role"] == "用户" else "assistant",
                              "content": h["content"]})
         messages.append({"role": "user", "content": _current})
+        # ---- 引导续写（prefill）**必须放在最后一条** ----
+        # 【原来放错了位置，等于没放 —— 这是实测挖出来的】
+        #   它原来 append 在"历史还没拼进来"的时候，于是最终消息顺序是：
+        #     system → assistant(半句) → user(历史1) → assistant(历史2) → user(本轮)
+        #   那半句被埋在了**好几轮历史之前**，模型根本接不上它 ——
+        #   怪不得前面那几次"prefill 也无效"。续写的语义是"**接着这半句往下写**"，
+        #   它必须是**紧挨着生成位置**的那一条。现在它真的在最后了。
+        if _PREFILL_HOLD["text"]:
+            messages.append({"role": "assistant", "content": _PREFILL_HOLD["text"]})
+            LOG.info("引导续写（prefill）：已作为最后一条注入 ｜ %s",
+                     _PREFILL_HOLD["text"][:60])
+            _PREFILL_HOLD["text"] = ""
         # ---- 第 3 步：用户要长文 → 载体分段续写 + 无缝合并（无限 3：输出无限）----
         # 放在这里（system/tools/token 都已定好）而不是另起一条路径：
         # 这样续写用的 system 与普通对话**完全一致**（含【相关记忆】与按意图装载的工具目录），
@@ -10416,6 +10600,59 @@ def api_chat_stream():
     return Response(_gen(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                              "Connection": "keep-alive"})
+
+
+@app.route("/api/heartbeat")
+def api_heartbeat():
+    """心跳：它**还在不在、醒着还是睡着、跳了多少下、这一觉多久**。
+
+    用户要的"心跳就是活着的证明"这句话，这个接口就是它的数据来源。
+    心跳模块不在时如实说"没有心跳"，绝不编一个数字顶上。
+    """
+    hb = _heartbeat_mod()
+    if hb is None:
+        return jsonify({"ok": False, "error": "心跳模块不可用（core/heartbeat.py 没加载上）"}), 503
+    return jsonify({"ok": True, "heartbeat": hb.status(), "psyche": _psyche_snapshot()})
+
+
+@app.route("/api/sleep", methods=["POST"])
+def api_sleep():
+    """**挂起（睡着）**：大脑不推理、载体不跑任务、心与感知停住 —— **心跳不停**。
+
+    整体融合、一起挂起。返回真实记录（哪一层没挂上如实写），不编。
+    """
+    d = request.get_json(force=True, silent=True) or {}
+    r = _sleep_all(why=str(d.get("why") or "接口挂起"))
+    r["ok"] = True
+    hb = _heartbeat_mod()
+    r["heartbeat_status"] = hb.status() if hb is not None else {}
+    return jsonify(r)
+
+
+@app.route("/api/wake", methods=["POST"])
+def api_wake():
+    """**唤醒**：算出睡了多久、这一觉心跳多少下，作为醒来后的第一印象交给模型。
+
+    返回里 `slept_text` 就是那句事实；`heart_kept` / `state_kept` 用来证明**接着睡前**
+    （心那句话、心理状态都和睡前一模一样，没有被清空）。
+    """
+    d = request.get_json(force=True, silent=True) or {}
+    r = _wake_all(why=str(d.get("why") or "接口唤醒"))
+    r["ok"] = True
+    r["wake_line"] = (_heartbeat_mod().wake_line() if _heartbeat_mod() is not None else "")
+    return jsonify(r)
+
+
+def _psyche_snapshot():
+    """心理层的只读快照（拿不到就返回空 dict —— 不编）。"""
+    try:
+        from core import psyche as _PS
+        return {"alive": _PS.is_alive(), "state": _PS.state().get("state"),
+                "heart": _PS.heart().get("text"), "direction": _PS.heart().get("direction"),
+                "touches_life": _PS.heart().get("touches_life"),
+                "beats": _PS.beats().get("beats")}
+    except Exception:      # noqa: silent-ok
+        return {}
 
 
 @app.route("/api/world")
@@ -12512,6 +12749,13 @@ def main():
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 3608, e)
     threading.Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+    # 心跳：**模型启动 → 心跳开始**。它是"一直在"的证明，所以在这儿起、不随对话起落。
+    _hb = _heartbeat_mod()
+    if _hb is not None:
+        _r = _hb.start(why="xiaojiao_app 启动")
+        print("  💓 心跳已开始：每 %ss 一下（%s）" % (_hb.BEAT_INTERVAL, _hb.path()))
+    else:
+        print("  💓 心跳模块不可用（core/heartbeat.py 没加载上）—— 如实说明，不假装在跳")
     # 监听地址：走 bind_host()（与 start_xiaojiao.py 共用同一套规则，见该函数说明）。
     _host, _host_lines = bind_host(port)
     for _line in _host_lines:

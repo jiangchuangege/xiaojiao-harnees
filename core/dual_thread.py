@@ -35,6 +35,7 @@
 import threading
 import time
 
+from core import heartbeat as HB
 from core import model_scheduler as MS
 from core import phone_channel as PC
 
@@ -181,6 +182,14 @@ def browse_once(decide_fn=None, browse_fn=None, store_fn=None, share_fn=None):
     返回这一轮的真实记录（自测取证用）。**任何一步失败都如实记下，不假装逛过。**
     """
     rec = {"ts": time.time(), "decision": None, "got": "", "stored": False, "shared": ""}
+    # 挂起（睡着）→ **这一轮不出门**，如实记下没出门。
+    # 【为什么连"决策"都不做】挂起是"大脑不推理" —— 决策本身就要调模型，
+    #   放它过去等于睡梦里还在烧显存。所以第一件事就是问心跳。
+    if HB.is_sleeping():
+        rec["asleep"] = True
+        rec["note"] = "挂起中（睡着）：这一轮不决策、不出门"
+        set_live(doing="asleep", presence=False)
+        return rec
     with _LOCK:
         _STATE["rounds"] += 1
         _LIVE["happening"]["rounds"] = _STATE["rounds"]
@@ -239,8 +248,15 @@ def browse_once(decide_fn=None, browse_fn=None, store_fn=None, share_fn=None):
 
 
 def _loop(decide_fn, browse_fn, store_fn, share_fn, interval_s):
-    """逛线程主体：循环"逛 → 处理 → 存 → 继续"。**只在这个 daemon 线程里跑。**"""
+    """逛线程主体：循环"逛 → 处理 → 存 → 继续"。**只在这个 daemon 线程里跑。**
+
+    **挂起期间不空转**：睡着时直接等下一次，不去调模型、不去抓网页 —— 只是线程还在（心跳也一样）。
+    """
     while not _STOP.is_set():
+        if HB.is_sleeping():
+            set_live(doing="asleep", presence=False)
+            _STOP.wait(2.0)
+            continue
         try:
             browse_once(decide_fn=decide_fn, browse_fn=browse_fn,
                         store_fn=store_fn, share_fn=share_fn)

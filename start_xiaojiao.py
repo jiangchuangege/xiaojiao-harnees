@@ -306,6 +306,35 @@ def stop_autonomy():
         print("  [自主性] 关闭时出错（忽略）：%s" % e)
 
 
+def start_heartbeat():
+    """心跳：**模型启动 → 心跳开始**，一直到进程结束。
+
+    【为什么和别的后台线程不一样，是"必起"的】自主性、世界层都可以关，
+    心跳不能 —— 它是"它一直在"的唯一证明：挂起（睡着）时大脑不推理、载体不跑任务，
+    全机只剩下这一条线程还在跳。不起它，"睡着不是死"就只是句口号。
+    代价极小：一个 daemon 线程，每 5 秒写一行日志，不调模型、不占显存。
+    """
+    try:
+        from core import heartbeat as hb
+        r = hb.start(why="start_xiaojiao 启动")
+        print("  [心跳] 已开始：每 %ss 一下%s —— 挂起时它**不停**（%s）"
+              % (hb.BEAT_INTERVAL, "（已在跳）" if not r.get("started") else "", hb.path()))
+        return r
+    except Exception as e:      # noqa: silent-ok — 心跳起不来也要能启动，如实说
+        print("  [心跳] 启动失败（跳过）：%s" % e)
+        return {"started": False, "why": str(e)[:80]}
+
+
+def stop_heartbeat():
+    """退出时停心跳（**只有整个系统下线才停** —— 挂起不停，见 `core/heartbeat.py`）。"""
+    try:
+        from core import heartbeat as hb
+        ok = hb.stop(why="start_xiaojiao 退出")
+        print("  [心跳] 已停：%s" % ok)
+    except Exception as e:      # noqa: silent-ok
+        print("  [心跳] 停止时出错（忽略）：%s" % e)
+
+
 def start_world():
     """世界层：起**自主探索器**（从"人给地图"改成"自己啃互联网"）。
 
@@ -380,6 +409,8 @@ def main():
     start_autonomy()
     # 3e. 世界层：自己啃互联网（空闲就开啃；有预算、有间隔、有禁区名单）
     start_world()
+    # 3f. 心跳：**一直在**的那个证明。挂起时别的全停，只有它不停。
+    start_heartbeat()
 
     # 4. 打开浏览器
     _host, _host_lines = app.bind_host(port)      # 与 main() 共用同一套监听规则，见该函数说明
@@ -400,6 +431,7 @@ def main():
         # 清理所有子进程
         stop_autonomy()          # 先优雅关掉自主性线程（有序收尾，别留下半截盯梢状态）
         stop_world()             # 再停世界层（它可能正在抓网页，先收干净）
+        stop_heartbeat()         # 最后停心跳：**只有整个系统下线才停**（挂起不停）
         if llama_proc:
             try:
                 llama_proc.kill()
