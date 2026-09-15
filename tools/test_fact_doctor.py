@@ -108,6 +108,27 @@ def main():
     ck("医生**只纠事实、没替它决定**（决定栏是它两次自己写的）", calls["n"] >= 2, calls["n"])
     EN.reset()
 
+    print("\n[G] 补一类：**载体直算的结果**也说错就纠")
+    R = {"结果列表": ["10000000000"]}
+    c1 = P.check_fact("小黑板上写着 100000 × 100000 = 100000000", R)
+    ck("**它把 10000000000 写成 100000000（少一位）→ 纠**",
+       bool(c1["corrections"]) and c1["corrections"][0]["real"] == "10000000000", c1["corrections"])
+    ck("纠的话里是**真值**", "实际结果是 10000000000" in c1["fact_text"], "")
+    ck("**说对了不纠**（台账里那个数出现了就不动它）",
+       P.check_fact("100000 × 100000 = 10000000000", R)["corrections"] == [], "")
+    ck("**没提数不纠**", P.check_fact("我不想睡，也不想算", R)["corrections"] == [], "")
+    ck("**台账里没有对应记录 → 不碰**", P.check_fact("等于 100000000", {})["corrections"] == [], "")
+    ck("年份这类小数不碰（只认 ≥6 位的大整数）",
+       P.check_fact("2024 年的事", R)["corrections"] == [], "")
+    ck("两类能同时纠（精力 + 结果）",
+       len(P.check_fact("我还有 72% 的精力，值 100000000",
+                        {"精力": "28%", "结果列表": ["10000000000"]})["corrections"]) == 2, "")
+    ck("app 侧把它接在睡不睡那条链上", "_real[\"结果列表\"]" in app_src, "")
+    ck("app 侧还加了一道**出口网**（正常回答里写错数也纠）",
+       "_fact_net" in app_src and "出口纠事实" in app_src, "")
+    ck("出口网**不改它的话**，只在后面补一句更正", "更 正（载体手里的真实结果）" in app_src
+       or "更正（载体手里的真实结果）" in app_src, "")
+
     print("\n" + "=" * 78)
     print("  通过 %d / 共 %d" % (_COUNT["pass"], _COUNT["total"]))
     if _FAILED:

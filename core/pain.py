@@ -454,7 +454,11 @@ def check_fact(said, real):
     """
     t = str(said or "")
     out = {"ok": True, "corrections": [], "fact_text": ""}
-    rl = {str(k): str(v) for k, v in (real or {}).items()}
+    # ⚠️ 列表要**原样留着**（`结果列表` 是多个真值）—— 全 str() 会把它变成
+    #    `"['10000000000']"` 这种字符串，后面按数字比对就永远匹配不上（实测踩到）。
+    rl = {}
+    for k, v in (real or {}).items():
+        rl[str(k)] = list(v) if isinstance(v, (list, tuple)) else str(v)
 
     # ---- ① 百分比（最主要的那种：它把 28% 读成 72%）----
     if "精力" in rl:
@@ -489,6 +493,37 @@ def check_fact(said, real):
                     "what": "时段", "said": word, "real": real_tod,
                     "text": "你刚才说「%s」，实际是「%s」" % (word, real_tod)})
                 break
+
+    # ---- ④ 数值结果（**载体直算/工具跑出来的真实结果**）----
+    # 【为什么要补这一类 —— 实测抓到的】问「你自己算的？」「这数对吗」时它写出了
+    #   `100000000`（**少了一位**，正确是 `10000000000`），而**没人纠它** ——
+    #   上一版的纠事实只认 精力百分比 / 睡了多久 / 时段，**没覆盖载体直算的结果**。
+    #   补的这一类和"精力读错"是**同一套机制**，只是换了个对象。
+    # 【保守：说对了不纠、没提数不纠、台账没记录不碰】
+    if "结果" in rl or "结果列表" in rl:
+        reals = rl.get("结果列表") or [rl.get("结果")]
+        if not isinstance(reals, (list, tuple)):
+            reals = [reals]
+        for real in reals:
+            r = str(real or "").strip()
+            if not re.fullmatch(r"\d{6,}", r):
+                continue                      # 只认"像运算结果的大整数"
+            cands = re.findall(r"\d{6,}", t)
+            if not cands:
+                continue                      # **它没提数 → 不碰**
+            if r in cands:
+                continue                      # **它说对了 → 不动它**
+            cand = max(cands, key=len)        # 取它话里最长的那个数当"它说的结果"
+            if abs(len(cand) - len(r)) <= 2:  # 位数相近才算"读错/写错"
+                out["corrections"].append({
+                    "what": "结果", "said": cand, "real": r,
+                    "text": "你刚才写的是 %s，实际结果是 %s" % (cand, r)})
+                break
+            # 位数差太远 → **不纠**（有误判风险，宁可放过）
+            out["skipped"] = out.get("skipped") or []
+            out["skipped"].append({"said": cand, "real": r,
+                                   "why": "位数差 %d 位，太远，纠了有误判风险"
+                                          % abs(len(cand) - len(r))})
 
     if out["corrections"]:
         out["ok"] = False

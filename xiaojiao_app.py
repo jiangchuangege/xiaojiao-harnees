@@ -3164,6 +3164,15 @@ def _tired_decision():
         _pm = _pain_mod()
         if _pm is not None and said:
             _real = {"精力": "%.0f%%" % (lv * 100)}
+            # **载体直算的结果也纳入纠事实**（实测：它把 10000000000 写成 100000000 没人纠）
+            try:
+                _rmk = _raw_mod()
+                _rows = _rmk.recent(3) if _rmk is not None else []
+                _rs = [str(x.get("result") or "").strip() for x in _rows]
+                if [x for x in _rs if x]:
+                    _real["结果列表"] = [x for x in _rs if x]
+            except Exception:      # noqa: silent-ok
+                pass
             _rev = _pm.fact_review(said, _real)
             if _rev.get("corrected"):
                 LOG.info("医生纠事实：**它读错了** —— %s", "；".join(
@@ -6242,6 +6251,43 @@ def _new_degen_detector():
     except Exception as e:      # noqa: silent-ok — 检测器拿不到就退化成"不检测"，绝不中断推流
         LOG.debug("退化检测器不可用（忽略）：%s", e)
         return None
+
+
+def _fact_net(answer):
+    """**出口纠事实**：它写了一个和"载体直算的真实结果"对不上的数 → 在后面补一句更正。
+
+    【为什么放在出口】问「你自己算的？」「这数对吗」**不走睡不睡那条链**
+    （那是 `_tired_decision` 的流程），它写错数是在**正常回答里**。
+    所以这里在**所有路径的唯一出口**（聊天接口）过一道网：
+    **不改它的话**，只在后面**补一句事实**（医生只给事实、不改它的话）。
+
+    ⚠️ 补了更正 **不等于"它自己改对了"** —— 那句话是载体补的，不许说成它改的。
+    """
+    try:
+        text = str(answer or "")
+        if not text:
+            return answer, ""
+        rm, pm = _raw_mod(), _pain_mod()
+        if rm is None or pm is None:
+            return answer, ""
+        raws = [str(r.get("result") or "").strip() for r in rm.recent(3)]
+        raws = [r for r in raws if r]
+        if not raws:
+            return answer, ""
+        chk = pm.check_fact(text, {"结果列表": raws})
+        if chk.get("corrections"):
+            note = ("\n\n—— 更正（载体手里的真实结果）：%s"
+                    % "；".join(c["text"] for c in chk["corrections"]))
+            LOG.info("纠事实（出口）：**它写错了结果** —— %s",
+                     "；".join(c["text"] for c in chk["corrections"])[:100])
+            return text + note, note
+        if chk.get("skipped"):
+            LOG.info("纠事实（出口）：**不纠**（位数差太远，纠了有误判风险）—— %s",
+                     "；".join("%s vs %s" % (s["said"], s["real"]) for s in chk["skipped"])[:100])
+        return answer, ""
+    except Exception as e:      # noqa: silent-ok — 纠不了不能影响回答
+        LOG.debug("出口纠事实失败（忽略）：%s", e)
+        return answer, ""
 
 
 def _degeneration_net(text, where=""):
@@ -11405,6 +11451,9 @@ def api_chat():
     answer, _net = _degeneration_net(answer, where="/api/chat")
     if _net:
         LOG.warning("出口解毒（/api/chat）：%s", _net)
+    # **出口纠事实**：它写了一个和"载体直算的真实结果"对不上的数 → 补一句更正
+    #   （医生只给事实、不改它的话；补了更正 ≠ 它自己改对了）
+    answer, _fact_note = _fact_net(answer)
     # 把占位小焦消息更新为真实回答（含最后那句提示）
     answer_final = answer
     if not answer_final:
