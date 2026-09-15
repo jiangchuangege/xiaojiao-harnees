@@ -126,6 +126,12 @@ flowchart LR
 | **偏好** | `core/preference.py` 里攒成堆的心 | **它自己回看说的那句**才算偏好 | [`preference.md`](preference.md) |
 | **叙事 / 存在追问** | `core/narrative.py` 摆它自己的经历 | **它自己讲的**才记；问句记成存在追问 | [`self-narrative.md`](self-narrative.md) |
 | **"我试试"** | 元认知判 C（它自己没把握） | **它自己说想试**才去学 | [`boundary-breaking.md`](boundary-breaking.md) |
+| **元认知类七项**（工具来源 / 我是谁 / 我为什么在 / 我变了 / 值不值 / 能不能学会 / 我喜欢什么） | 载体只给**原料**（不直接进上下文） | **它自己辨**出来的那句才进上下文 | [`meta-via-chain.md`](meta-via-chain.md) |
+
+**最后一行是通用原则**：凡是"回头看自己"的信息，**都不直接摆进上下文**，
+一律走 `perceive → arise → think → say`。
+实测规律：**感受类**走这条链就能用；**元认知类**直接摆事实就用不了 ——
+不是内容问题，是**走没走那条链**的问题。
 
 **回落**：心起了不会一直停在那儿 —— 时间上自己降、新事冲淡、睡一觉重置一部分。
 见 [`emotion-recovery.md`](emotion-recovery.md)。
