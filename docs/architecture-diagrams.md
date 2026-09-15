@@ -398,15 +398,13 @@ flowchart TB
 
 ---
 
-## 图 11 · 极限补刀七项（让 4B 在载体里逼近大模型）
+## 图 11 · 极限补刀五项（让 4B 在载体里逼近大模型）
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
     G["共同公式<br/>① 把不确定的东西结构化<br/>② 用大模型当教师蒸馏进结构<br/>③ 4B 只执行一小步<br/>④ 每次结果存回结构，越用越大"]
 
-    G --> D1["10.1 元推理模板库<br/>core/boost/reasoning.py<br/>30+ 种推理类型：归纳/演绎/反证/回溯/第一性原理…"]
-    G --> D2["10.2 长链因果<br/>core/boost/causal.py<br/>因果图 + 环检测 + 矛盾检测 + 回溯"]
     G --> D3["10.3 跨领域联想<br/>core/boost/analogy.py<br/>领域向量 + 结构映射：电路≈水管·免疫≈安全"]
     G --> D4["10.4 模糊意图<br/>core/boost/vague.py<br/>该反问才反问 + 3~5 个候选 + 多假设并行"]
     G --> D5["10.5 创造性<br/>core/boost/creative.py<br/>多视角采样 + 创意算子 + 可复现随机种子"]
@@ -425,7 +423,7 @@ flowchart TB
     style RES fill:#5cb85c,color:#fff
 ```
 
-**这张图要说的一句话**：七项**都遵守同一个公式**——
+**这张图要说的一句话**：这几项**都遵守同一个公式**——
 结构由载体维护，模型只走一小步，走完把结果存回去，于是越用越大。
 缺了"存回去"那一步，前三条就退化成普通的提示词工程。
 
@@ -442,7 +440,7 @@ flowchart TB
     subgraph S2["流量精度 —— 不写进权重，每轮现算，可以无限叠"]
         P1["① 采样精度<br/>同题跑 N 次<br/>落点 core/health/degeneration.py + core/boost/creative.py"]
         P2["② 校验精度<br/>输出后检查对错<br/>落点 core/metacognition/"]
-        P3["③ 聚合精度<br/>多答案投票 / 加权<br/>落点 core/central/ 冲突仲裁"]
+        P3["③ 聚合精度<br/>多答案投票 / 加权<br/>落点 _resolve_llm_key + _history_summary_line"]
         P4["④ 记忆精度<br/>外挂向量库<br/>落点 core/memory_vec.py + core/memory_deep.py"]
         P5["⑤ 工具精度<br/>插件补模型不会的<br/>落点 77 个工具"]
     end
@@ -488,41 +486,9 @@ gaps 那一框写出来不好看，但文档的作用是让人知道离目标还
 
 ---
 
-## 图 14 · 多智能体协作（一个模型切多角色）
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
-flowchart TB
-    M["同一个模型 + 不同提示词 = 不同角色<br/>角色是提示词，提示词在载体里 → 换火种不用改角色"]
-    M --> R1["规划者：只输出步骤，不许执行"]
-    M --> R2["执行者：只做当前这一步"]
-    M --> R3["审稿者：只找问题，不许重写"]
-    M --> R4["事实检查者：逐条给「有据 / 无据」"]
-    M --> R5["总结者：只压缩，不加新信息"]
-    M --> R6["仲裁者：只排序 + 给理由"]
-    R1 --> J{"启用判据"}
-    R2 --> J
-    R3 --> J
-    R4 --> J
-    R5 --> J
-    R6 --> J
-    J -->|简单| J1["1 个角色<br/>执行者"]
-    J -->|中等| J2["2 个角色<br/>执行 + 审稿"]
-    J -->|复杂| J3["3–5 个角色<br/>规划 + 执行 + 审稿 + 事核 + 总结"]
-    J -->|超复杂| J4["多角色 + 用户确认<br/>不擅自串五轮"]
-    J4 --> COST["时间成本：5 角色串行 = 5 倍<br/>它必须是复杂任务的补救，不是默认流程"]
-    style M fill:#2d6cdf,color:#fff
-    style J fill:#f0ad4e,color:#fff
-    style COST fill:#d9534f,color:#fff
-```
-
-**这张图要说的一句话**：不是多个模型同时跑，是**一个模型穿六件衣服**，载体决定穿哪几件。
-默认全穿的结果是"小焦变慢了"——那是拿工程师的偏好替代用户的偏好。
-角色定义与调度**尚未落地**，现在真正在跑的多视角只有人格层与元认知两个。
-
 ---
 
-## 图 15 · 自我改进闭环（能改的和不能改的）
+## 图 14 · 自我改进闭环（能改的和不能改的）
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
@@ -555,7 +521,7 @@ flowchart LR
 
 ---
 
-## 图 16 · 全局工作空间（公共黑板 · 实际落地在 core/central/）
+## 图 15 · 全局工作空间（公共黑板 · 实际落地在 core/central/）
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
@@ -585,7 +551,7 @@ flowchart TB
 
 ---
 
-## 图 17 · 小脑定位（感官 + 记忆索引器官 · 空间 v3）
+## 图 16 · 小脑定位（感官 + 记忆索引器官 · 空间 v3）
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 360, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
@@ -623,7 +589,7 @@ flowchart TB
 
 ---
 
-## 图 18 · 意图理解交给模型（载体给信息，模型做判断）
+## 图 17 · 意图理解交给模型（载体给信息，模型做判断）
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
@@ -656,7 +622,7 @@ flowchart TB
 
 ---
 
-## 图 19 · 并发与状态一致性
+## 图 18 · 并发与状态一致性
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
@@ -691,7 +657,7 @@ flowchart TB
 
 ---
 
-## 图 20 · 可观测性（四个层次 · 现状如实标）
+## 图 19 · 可观测性（四个层次 · 现状如实标）
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%

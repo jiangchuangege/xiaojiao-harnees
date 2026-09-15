@@ -254,6 +254,121 @@ def _ask_brain(prompt):
         return None
 
 
+# ===== 载体确定性闸门：**同一话题、不同地点**（实测抓到的真缺陷）=====
+# 【实测症状】用户问「山东菏泽这周会下雨吗？」，库里存的是「江淮地区这两天会下雨吗？」。
+#   小脑是字级模型，"地区 + 天气"这种**同类话题**实测余弦 0.954，
+#   而真正跑题的「我上周去黄山玩了」只有 0.725 —— top1 领先 0.230 ≥ RERANK_GAP，
+#   精排因此被判成"排名不含糊"直接跳过，"江淮降雨"被逐字注入 system：
+#   模型等于拿**别的地方**的天气去回答菏泽的问题（用户原话："扯到江淮降雨"）。
+# 【为什么这一层必须由载体做】"提问里的地点和记忆里的地点是不是同一个"是**确定性判断**，
+#   字符串层面就能判；交给概率模型判反而引入不确定性、还要多花一次模型调用。
+#   规则粗糙的代价是**漏检**（保守放行），不是误杀 —— 与 rerank 的失败路径同一条自律。
+# 【为什么只做地点这一层】地点最容易"同类不同物"地混进来（江淮 ≠ 菏泽，但都属"某地"）；
+#   反义（喜欢/讨厌）语义复杂、规则判不了，仍然交给大脑精排。
+_PLACE_PROVINCES = frozenset((
+    "北京", "天津", "上海", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江",
+    "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南",
+    "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾",
+    "内蒙古", "广西", "西藏", "宁夏", "新疆", "香港", "澳门",
+))
+_PLACE_REGIONS = frozenset((
+    "江淮", "江南", "江浙", "华北", "华南", "华东", "华中", "华西", "东北", "西南",
+    "西北", "中原", "黄淮", "长江", "黄河", "珠江", "淮河", "汉江", "长三角",
+    "珠三角", "京津冀", "粤港澳", "川渝", "云贵", "岭南", "塞北", "关中", "胶东",
+))
+_PLACE_LEXICON = _PLACE_PROVINCES | _PLACE_REGIONS
+# 行政后缀式：靠后缀回扫取词，抓"菏泽市/历下区"这类字面上没有词典条目的地名。
+_PLACE_SUFFIXES = ("省", "市", "县", "区", "州", "盟", "旗", "地区", "流域", "一带",
+                   "平原", "高原", "盆地", "半岛", "山脉", "群岛", "沙漠")
+# 回扫取词时不许落在词首/词中的虚指字（"这个地区""哪个城市"里的"个/哪"不是地名）。
+_PLACE_STOP_LEAD = set("这那哪某个的了是我你他她它们在到去来住从向和与及之其")
+
+
+def _place_tokens(text):
+    """载体自己认「地域词」：词典（省 / 大区 / 流域）+ 行政后缀式。纯规则，**不调模型**。
+
+    只回答一件事："这段话里提到了哪个地方"。判不出来就返回**空集合** ——
+    空集合表示"这次不做地域判断"（保守放行），绝不猜。
+    """
+    t = str(text or "")
+    if not t:
+        return set()
+    out = {w for w in _PLACE_LEXICON if w in t}
+    for sfx in _PLACE_SUFFIXES:
+        for m in re.finditer(re.escape(sfx), t):
+            for ln in (3, 2, 1):          # 往前取 1~3 个汉字当候选地名
+                s = m.start() - ln
+                if s < 0:
+                    continue
+                chunk = t[s:m.start()]
+                if not chunk or not all("\u4e00" <= c <= "\u9fff" for c in chunk):
+                    continue
+                if any(c in _PLACE_STOP_LEAD for c in chunk):
+                    continue
+                out.add(chunk + sfx)
+                break
+    return out
+
+
+def _same_place(a, b):
+    """两个地名是不是"同一个地方"：完全相同，或一个是另一个的子串（山东 vs 山东菏泽）。"""
+    return a == b or a in b or b in a
+
+
+def _place_overlap(q_places, text):
+    """这条记忆里有没有提到提问点名的地方。"""
+    if not q_places:
+        return False
+    m = _place_tokens(text)
+    return any(_same_place(a, b) for a in q_places for b in m)
+
+
+# 市级及以下的行政后缀。判"层级"用：省级/大区级对不上才能断定"确实是别处"。
+_PLACE_SUB_SUFFIXES = ("市", "县", "区", "州", "盟", "旗")
+
+
+def _place_level(tok):
+    """这个地名词属于哪一级：`省`（省级行政区）/ `区`（大区、流域）/ `市`（市级及以下）。
+
+    **为什么要分层级**：一级地名对不上，不代表两个地方不同。
+    `菏泽市` 属于 `山东`，但字面上既不相等也不互相包含 —— 没有地理库就判不出这层隶属关系。
+    所以只有**两边都是省级或大区级**且对不上时，才能断定"问的是一处、说的是另一处"。
+    """
+    if tok in _PLACE_PROVINCES:
+        return "省"
+    if tok in _PLACE_REGIONS:
+        return "区"
+    for sfx in _PLACE_SUB_SUFFIXES:
+        if tok.endswith(sfx):
+            return "市"
+    return "市"          # 后缀式抓到的词一律按市级及以下处理（保守）
+
+
+def _place_conflict(q_places, text):
+    """提问点了地名，这条记忆**只在说另一处地方** → 冲突，必须剔掉。
+
+    两条保守规则，都是为了"宁可漏检，不可误杀"：
+
+    ① 记忆里**完全没提地名**时不判冲突："我不吃辣"这种记忆对"北京哪家川菜好"仍然有用，
+       不能因为它没提地名就丢掉。
+
+    ② 记忆里提的是**市级及以下**地名时不判冲突。实测踩到过这个坑：问「山东菏泽这周会下雨吗？」
+       时，`_place_tokens` 从提问里只认出 `山东`（"菏泽"没有行政后缀），
+       而记忆「菏泽市明天有中雨」认出的是 `菏泽市` —— 两者字面对不上，
+       第一版据此把这条**完全正确的记忆剔掉了**，反倒留下了认不出地名的
+       「我上周去黄山玩了」。**丢掉对的、留下无关的**，比不过滤更坏。
+       判不出隶属关系时就不剔，把"谁更相关"交回给大脑精排。
+    """
+    if not q_places:
+        return False
+    m = _place_tokens(text)
+    if not m:
+        return False
+    if any(_same_place(a, b) for a in q_places for b in m):
+        return False
+    return any(_place_level(b) in ("省", "区") for b in m)
+
+
 def rerank(query, hits, judge=None):
     """**载体二次判断**：让大脑从 top-K 里挑出真相关的，滤掉反义 / 无关。
 
@@ -270,12 +385,30 @@ def rerank(query, hits, judge=None):
     try:
         if not RERANK:
             return hits, "精排开关关闭，全部保留"
-        if len(hits) < RERANK_MIN_HITS:
+        n0 = len(hits)
+        # ---- ① 载体确定性剔除：问了 A 地，这条只在说 B 地（零成本，不调模型）----
+        # 实测：这一层挡下的正是"问菏泽、答江淮"那条链（见上面 _place_tokens 的说明）。
+        q_places = _place_tokens(query)
+        if q_places:
+            kept = [h for h in hits if not _place_conflict(q_places, h.get("text"))]
+            if len(kept) != len(hits):
+                hits = kept
+                if not hits:
+                    return hits, ("保留 0/%d 条（候选记忆提到的地点与「%s」全都对不上 → "
+                                  "这次不注入：宁可说不知道，也不拿别处的事回答）"
+                                  % (n0, "、".join(sorted(q_places))))
+        # 提问点了地名时**不许跳过精排** —— "同类话题、不同主体"恰恰是 top1 领先的典型形状
+        # （实测那条就是领先 0.230 仍被跳过）。所以地名词在时，多花一次判官调用是值得的。
+        if len(hits) < RERANK_MIN_HITS and not (q_places and hits):
             return hits, "候选不足，跳过"
         # 排名不含糊就不精排（见 RERANK_GAP 的说明：这一条同时守住了"精度"和"检索延迟 <100ms"）
-        gap = float(hits[0].get("decayed") or 0) - float(hits[1].get("decayed") or 0)
-        if gap >= RERANK_GAP:
-            return hits, "top1 领先 %.3f，排名不含糊 → 跳过精排" % gap
+        # 注意：只在**候选 ≥ 2 条**时才算分差 —— 地域闸门可能只留下 1 条候选，
+        # 那时 hits[1] 不存在（第一版就是在这里抛 IndexError，被下面的 except 吞成
+        # "精排异常，全部保留" —— 又是"静默失效"，所以这里显式写清条数判据）。
+        if len(hits) >= 2:
+            gap = float(hits[0].get("decayed") or 0) - float(hits[1].get("decayed") or 0)
+            if gap >= RERANK_GAP and not q_places:
+                return hits, "top1 领先 %.3f，排名不含糊 → 跳过精排" % gap
         cand = hits[:RERANK_MAX]
         listing = "\n".join("%d. %s" % (i + 1, (h.get("text") or "").replace("\n", " ")[:120])
                             for i, h in enumerate(cand))
@@ -286,10 +419,19 @@ def rerank(query, hits, judge=None):
         picked = [int(x) for x in re.findall(r"\d+", out)]
         keep = [cand[i - 1] for i in picked if 1 <= i <= len(cand)]
         if not keep:
+            # 提问点了地名、候选里**一条都没提到那个地方**时，判官的"全不相关"是对的 ——
+            # 这时"保守保留"等于把别处的事硬塞给用户，所以尊重判官、如实不注入。
+            # 其余情况仍保守保留（判官偶尔矫枉过正，不能让它把记忆清空）。
+            if q_places and not any(_place_overlap(q_places, h.get("text")) for h in hits):
+                return [], ("保留 0/%d 条（判官判为全不相关，且候选里没有一条提到「%s」→ "
+                            "不注入）" % (len(hits), "、".join(sorted(q_places))))
             return hits, "判官判为全不相关 → 保守保留（不轻易清空记忆）"
         # 尾部没让判官看的那些（超过 RERANK_MAX 的）按原顺序接在后面
         keep = keep + [h for h in hits[len(cand):]]
-        return keep, "保留 %d/%d 条" % (len(keep), len(hits))
+        note = "保留 %d/%d 条" % (len(keep), len(hits))
+        if len(hits) != n0:
+            note += "（另 %d 条因地点对不上被剔掉）" % (n0 - len(hits))
+        return keep, note
     except Exception:      # noqa: silent-ok — 精排是加分项，出错必须放行全部
         return hits, "精排异常，全部保留"
 

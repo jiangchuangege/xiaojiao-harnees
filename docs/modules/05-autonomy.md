@@ -681,7 +681,7 @@ idle 任务的行为可以直接观察：
 | 文档 | 内容 |
 |---|---|
 | [`../design-philosophy.md`](../design-philosophy.md) | 第四节（自主性）、第二十一节（并发与状态一致性） |
-| [`../architecture-diagrams.md`](../architecture-diagrams.md) | 图 8（自主性 + 世界层）、图 19（并发与状态一致性） |
+| [`../architecture-diagrams.md`](../architecture-diagrams.md) | 图 8（自主性 + 世界层）、图 18（并发与状态一致性） |
 | [`06-world.md`](06-world.md) | 世界层：主动探索的落点 |
 | [`../architecture.md`](../architecture.md) | 系统总体架构 |
 | [`../testing-report.md`](../testing-report.md) | 测试报告与口径 |

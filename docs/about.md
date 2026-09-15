@@ -238,8 +238,6 @@ flowchart LR
 
 | 项 | 落点 | 作用 |
 | --- | --- | --- |
-| 元推理模板库 | `core/boost/reasoning.py` | 归纳、演绎、反证、回溯、第一性原理等 30 种以上推理类型 |
-| 长链因果 | `core/boost/causal.py` | 因果图、环检测、矛盾检测与回溯 |
 | 跨领域联想 | `core/boost/analogy.py` | 领域向量与结构映射 |
 | 模糊意图 | `core/boost/vague.py` | 该反问才反问，给出候选与多假设并行 |
 | 创造性 | `core/boost/creative.py` | 多视角采样与可复现的随机种子 |

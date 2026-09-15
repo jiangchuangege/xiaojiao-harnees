@@ -64,8 +64,8 @@
 | 无限 | 核心实现 | 状态 | 实测来源 |
 | --- | --- | --- | --- |
 | ① 记忆无限 | `core/embedder.py` `core/memory_vec.py` `core/retriever.py` | 已实现 + 已实测 | `tools/test_memory_recall.py`、`logs/memory_retrieval.log` |
-| ② 输入无限 | `core/input_splitter.py` | 已实现 + 已实测 | `logs/xiaojiao.log`、`logs/_step4_unit.py`、`tools/test_input_infinity.py` |
-| ③ 输出无限 | `core/continuation.py` | 已实现 + 已实测 | `logs/_step3_run.log`、`logs/_step3_unit.py`、`tools/test_longform_quality.py` |
+| ② 输入无限 | `core/input_splitter.py` | 已实现 + 已实测 | `logs/xiaojiao.log`、`tools/test_input_infinity.py` |
+| ③ 输出无限 | `core/continuation.py` | 已实现 + 已实测 | `logs/_step3_run.log`、`tools/test_longform_quality.py` |
 | ④ 工具无限 | `_intent_tool_names` `_FULL_CORE_TOOLS` `_plan_tools` `_tool_index` | 已实现 + 已实测（不删不暂缓 + 按意图装载 + 下一轮按名装载） | `tools/check_prompt_size.py`、`tools/test_tool_infinity_live.py` |
 | ⑤ 感知无限 | `on_progress` 不带片号、SSE 只推正文 | 主要部分已落地 + 已实测；日志与报错文案的措辞统一仍属**设计目标** | `xiaojiao_app.py` 的 `api_chat_stream`、`tools/test_perception_infinity.py` |
 | ⑥ 单次永不超 | `_estimate_tokens` `_plan_tools` `_fit_context` `_max_context_tokens` | 已实现 + 已实测；0.8 倍告警、超限报错口径、统一日志行仍属**设计目标** | `logs/context_fit.log`、`tools/test_single_request_limit.py` |
@@ -202,7 +202,7 @@
 
 1. **按段落边界切，绝不切在句中**。语义完整性比「刚好凑满 5000 token」重要得多；半句单独喂给模型，它会当成残缺输入去猜。
 2. **段落本身超长 → 退到句边界**（`_SENT_SPLIT` 按 `。！？!?；;…` 切）；**单句还超长 → 才硬切**。
-3. **硬切要留 0.85 的字符余量**。字符数到 token 是线性估计，边界上会差几个 token。`logs/_step4_unit.py` 实测：不留余量时切出来 `5010 > 5000`——差一点点也是超。
+3. **硬切要留 0.85 的字符余量**。字符数到 token 是线性估计，边界上会差几个 token。切片正确性单测实测：不留余量时切出来 `5010 > 5000`——差一点点也是超。
 4. **粘合开销必须算进累加**。每多粘一段就多一个换行分隔。同一份单测实测：只累加各段自己的 token，`sum=4988` 拼出来实际是 `5003`。
 5. **最后一道保险不能省**：收尾逐片复验，任何一片仍超限就硬切。这样「每片 ≤ max_chunk」才是不变量，而不是「通常成立」。
 6. **`split_task` 把「要求」和「内容」分开**，只对内容切片，每片带同一条要求去处理。判据是启发式的：第一段 `_estimate` ≤ 200 token 且总段数 ≥ 3；或第一段字符数 ≤ 60 且总段数 ≥ 2。找不到明显指令时用一句通用要求兜底。
@@ -716,7 +716,7 @@ spec 判据：你好 → chat 合计 693 < 3000
 
 | 判据 | 实测 |
 | --- | --- |
-| 意图 / 裁剪 / 永不超上下文 / 无违规措辞自检 | `python logs/_step1_selftest.py` → 通过 32 / 失败 2（见下方说明） |
+| 意图 / 裁剪 / 永不超上下文 / 无违规措辞自检 | 输入无限自检 → 通过 32 / 失败 2（见下方说明） |
 | 30 轮 × 3 意图最大合计 | 4985 ≤ 19224 |
 | 上下文长度校准 | llama-server 收 `-c 20000` 实给 20224（向上取整到 256 的倍数），`brain.llama.ctx` 已改成 20224，`GET /props` 复测 n_ctx = 20224 |
 | 永不超上下文（真 HTTP） | `python tools/test_single_request_limit.py` → 12/12 通过；连问 100 轮，错误 0，全部 HTTP 200，耗时 544s（均 5.4s/轮），限速退避 0 次 |
@@ -747,7 +747,7 @@ spec 判据：你好 → chat 合计 693 < 3000
 
 同一脚本以 `--no-model` 只跑检索侧（不调模型，竞争更少）：命中率同为 5/5，gold 分同为 0.700 · 0.772 · 0.671 · 0.862 · 0.650，向量检索延迟平均 5.2ms / 最大 7.5ms，含精排平均 39.8ms / 最大 176.2ms。
 
-20 轮无关对话冲淡的实测（`logs/_step2_live.py`，通过 6 / 失败 0）：问「我叫什么」仍检索命中「张三」**3 条 / 739 token**，该次检索耗时 8.1ms。
+20 轮无关对话冲淡的实测（通过 6 / 失败 0）：问「我叫什么」仍检索命中「张三」**3 条 / 739 token**，该次检索耗时 8.1ms。
 
 #### 8.1.3 第 3 步 · 输出无限
 
@@ -764,7 +764,7 @@ spec 判据：你好 → chat 合计 693 < 3000
 | 「写 10000 字」 | 4 段、11800 字、耗时 164.9s |
 | 段号严格递增 | `[1,2,3]`（修复前实测出现 `[1,2,2]` 竞态） |
 
-离线单测 `python logs/_step3_unit.py`（用假模型，不调真模型）：通过 27 / 失败 0。长文质量回归 `python tools/test_longform_quality.py`：通过 29 / 共 29。逐项判据：
+离线单测（用假模型，不调真模型）：通过 27 / 失败 0。长文质量回归 `python tools/test_longform_quality.py`：通过 29 / 共 29。逐项判据：
 
 | 判据 | 实测 |
 | --- | --- |
@@ -791,7 +791,7 @@ spec 判据：你好 → chat 合计 693 < 3000
 长输入切片：552682 token → 拆成 112 片处理 / 输出 17137 字 / 耗时 521.9s（产出存 logs/_chunks/）
 ```
 
-切片正确性单测：`python tools/test_input_infinity.py` → 通过 27 / 共 27；`python logs/_step4_unit.py` → 通过 15 / 失败 0。逐项判据：
+切片正确性单测：`python tools/test_input_infinity.py` → 通过 27 / 共 27；切片正确性单测 → 通过 15 / 失败 0。逐项判据：
 
 | 判据 | 实测 |
 | --- | --- |

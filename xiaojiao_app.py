@@ -2688,6 +2688,7 @@ def _llm_error_text(body):
     return s[:80]
 
 
+
 def _note_llm_error(tag, status=None, body=""):
     """记下**真实**失败原因：状态码 + 中文解释 + 服务端原话（打码后、收拾成人话）。"""
     global _LAST_LLM_ERROR
@@ -5569,6 +5570,14 @@ def merge_context(user_text, history, n=5):
     if not cur:
         return base
     prevs = _recent_user_turns(history, n=n)
+    # 【必须把"当前这句话"从候选上文里剔掉 —— 这是一处真实缺陷的修复】
+    #   真实入口下，用户这句话**已经先被写进会话历史**了，于是 `prevs[-1]` 就是它自己：
+    #     「我要全部的」→ prev 也是「我要全部的」→ `_topic_of` 抽出「全部」
+    #     → 融合成 **「我要全部的全部」**（实测复现，服务端日志一字不差）。
+    #   而直接调 `merge_context` 的单元测试里历史不含当前句，所以测出来是绿的
+    #   （「我要全部的工具」）—— 又一次"函数是对的，不等于接入是对的"。
+    #   剔掉之后，'all / more / continue / 指代' 四类补全都拿得到**真正的前一句**。
+    prevs = [p for p in prevs if p.strip() != cur]
     prev = prevs[-1] if prevs else ""
 
     # ---------- 1. 继续类：整句就是"接着上次" ----------
@@ -6698,6 +6707,524 @@ def _note_tool_path(tool_trace, path=""):
         pass
 
 
+
+def _selfrate_llm(prompt):
+    """给元认知自评用的一次大脑调用（只要一句话的档位）。
+
+    为什么单独抽一个函数而不是内联 lambda：自测要能**替换掉它**，
+    否则每跑一次自测都要真调一次模型（慢且不稳定）。
+    """
+    try:
+        return llm_chat([{"role": "user", "content": prompt}]) or ""
+    except Exception:      # noqa: silent-ok — 没模型就等同"没把握"，由 selfrate 内部降级
+        return ""
+
+
+def _spirit_recall(query):
+    """精神记忆召回：把之前**想明白的一句话认知**取回来当**素材**。
+
+    【和普通记忆的区别】`_retrieve_memory` 取的是"发生过什么"（经历），
+    这里取的是"学到了什么"（认知：知识 / 方法 / 诊断经验）。
+    经历让模型想起当时的场景，认知让模型直接站到上次的高度上 —— 后者才是"越用越强"。
+
+    【为什么必须写明"这是素材，不是答案"】召回来的是一句话认知（比如"遇到地区类问题
+    必须先锁定同一地点再比对"），它不是对用户这一问的回答。如果不加说明就塞进 system，
+    模型很容易把它当结论复述出来 —— 那就成了拿旧话敷衍。所以注入文本里显式写死这条。
+
+    【失败一律返回空串】精神记忆取不到只是少一份参考，**绝不能因此答不了**。
+    """
+    try:
+        from core import spirit_memory as _sm
+        hits = _sm.recall(query, k=3)
+        if not hits:
+            return ""
+        _KIND_CN = {"knowledge": "知识", "method": "方法", "diagnosis": "诊断经验"}
+        lines = ["【以前想明白的（**素材，不是答案**）】",
+                 "下面是载体以前积累的一句话认知。它们**不是**对本次提问的回答：",
+                 "请把它们当参考，**自己重新组织语言**回答用户，不要原样复述。"]
+        for h in hits:
+            lines.append("- [%s %.3f] %s" % (_KIND_CN.get(h["kind"], h["kind"]), h["sim"], h["text"]))
+        LOG.info("精神记忆召回：%d 条｜%s", len(hits), " / ".join(h["text"][:24] for h in hits))
+        return "\n".join(lines) + "\n"
+    except Exception as e:      # noqa: silent-ok — 取不到认知只是少一份参考
+        LOG.debug("精神记忆召回跳过（忽略）：%s", e)
+        return ""
+
+
+def _spirit_judge(a, b):
+    """相似度 ≥0.6 时，问大脑这两条认知**是不是同一件事**。
+
+    【为什么必须真的问一次】小脑是字级模型，"先确认单位再算" 与 "先锁定地点再比"
+    这类**句式相同、内容不同**的方法，字面余弦很容易冲过 0.6。此时若不对照大脑，
+    `remember()` 会走"无判官 → 保守当同题"的分支，把一条**新方法**当成重复丢掉 ——
+    保守分支的代价本就是丢信息，能用判官消掉就该消掉。
+
+    【判不出来就抛异常】`should_merge()` 会捕获异常并退回保守分支。这里**不猜**：
+    猜错等于替大脑做了它该做的判断。
+    """
+    _p = ("下面两条认知，说的是不是同一件事？\nA：%s\nB：%s\n"
+          "只回答两个字：`同题` 或 `不同`。" % (str(a)[:120], str(b)[:120]))
+    out = (_selfrate_llm(_p) or "").strip()
+    if not out:
+        raise ValueError("判官没有应答")
+    if "不同" in out:
+        return False
+    if "同" in out:
+        return True
+    raise ValueError("判官没给出可用答案：%s" % out[:30])
+
+
+def _spirit_learn(user_input, answer):
+    """学习闭环的落库端：把这一轮**能留下来的一句话认知**存进精神记忆库。
+
+    【为什么用模型提炼、而不是把回答存进去】回答是**一次性的措辞**，存下来等于
+    把随机输出当事实（记忆污染）。要留下的是**提炼过的认知**，这件事需要理解语义 ——
+    所以让 4B 提炼成一句话（`knowledge` / `method` / `diagnosis` 三类），
+    再由 `spirit_memory.remember()` 的护栏把关（超长 / 问答对 / 带答案字段一律拒收）。
+
+    【为什么提炼不出来就不存】`remember()` 的护栏会拒；这里再兜一层：模型没给出
+    可用的一行，就直接放弃这一轮。**宁可少记，绝不记错** —— 少记一条只是没学到。
+    """
+    try:
+        from core import spirit_memory as _sm
+        _prompt = (
+            "下面是一轮对话。请判断：**这一轮里有没有值得长期记住的一句话认知**？\n\n"
+            "【用户】%s\n【回答】%s\n\n"
+            "如果有，只输出两行，第一行是类别（knowledge / method / diagnosis 三选一），"
+            "第二行是**一句话**（不超过 60 字，陈述句，不要问答格式，不要复述上面的回答）：\n"
+            "knowledge = 关于用户或世界的事实性认知\n"
+            "method = 这类事该怎么办的做法或判据\n"
+            "diagnosis = 出了什么错、怎么定位、怎么修好的\n\n"
+            "如果这一轮没有值得长期记住的东西，只输出 `none` 四个字母。"
+            % (str(user_input)[:300], str(answer)[:600]))
+        out = (_selfrate_llm(_prompt) or "").strip()
+        if not out or out.lower().startswith("none"):
+            LOG.info("学习闭环：这一轮没有可留存的认知（模型判 none）")
+            return None
+        _lines = [x.strip() for x in out.split("\n") if x.strip()]
+        kind = (_lines[0].lower().strip(":： ") if _lines else "")
+        text = (_lines[1] if len(_lines) > 1 else "")
+        if kind not in _sm.KINDS or not text:
+            LOG.info("学习闭环：模型输出不合格式，丢弃｜%s", out[:80])
+            return None
+        r = _sm.remember(kind, text, source="对话自动提炼", llm_judge=_spirit_judge)
+        LOG.info("学习闭环：%s → %s（%s）", kind, r["action"], r.get("why", "")[:60])
+        return r
+    except Exception as e:      # noqa: silent-ok — 学不到只是这一轮没积累，不能影响回答
+        LOG.debug("学习闭环跳过（忽略）：%s", e)
+        return None
+
+
+def _rule_selfrate(question):
+    """元认知自评的**第一级：载体规则**。返回 `(档位, 理由)`；判不出来返回 `None`。
+
+    【为什么要两级】自评要花一次模型调用，而**有些情况载体自己就能判死**：
+    问"最新 / 实时 / 今天"这类会变的事实、或者问句缺宾语根本没说清要什么 ——
+    这些不用问模型也知道**没把握**，先花钱问一遍是浪费，而且模型有可能反过来自称"有把握"。
+
+    【为什么规则只敢判 C，不敢判 A】判 C 错了的代价是"多查一次"（慢一点）；
+    判 A 错了的代价是"用自信的语气答错"。两个代价不对等，所以规则这一级**只确认没把握，
+    绝不确认有把握** —— A/B 一律交给模型自己评（见 `_selfrate_llm`）。
+    这与 `metacognition.route()` 里"?→use_tool"是同一条自律。
+    """
+    q = str(question or "").strip()
+    if not q:
+        return None
+    _LIVE = ("最新", "实时", "现在", "目前", "今天", "今日", "昨天", "明天", "本周", "这周",
+             "刚才", "刚刚", "股价", "汇率", "比分", "票房", "热搜", "排名")
+    if any(w in q for w in _LIVE):
+        return "C", "问的是会变的事实（命中实时性词），载体自己拿不到当前值"
+    # 缺宾语的短问句："帮我搞一下" / "那个呢" —— 没说清对象，谈不上有把握
+    if len(q) <= 12 and not any(c.isdigit() for c in q):
+        _TAIL = ("呢", "吗", "吧", "么")
+        _VAGUE = ("搞", "弄", "看", "办", "整", "来", "做")
+        if any(q.endswith(t) for t in _TAIL) and len(q) <= 6:
+            return "C", "问句过短且只带语气词，缺宾语"
+        if any(v in q for v in _VAGUE) and len(q) <= 8 and "怎么" not in q and "为什么" not in q:
+            return "C", "只给了动作没给对象，谈不上有把握"
+    return None
+
+
+def _switch_hint(question):
+    """C 档时给模型的**手段链指令**：不许直接认输，按顺序换手段。
+
+    【为什么 C 档不是"认输"】C 的含义是"这一问按现在这条路答不好"，不是"答不了"。
+    载体能做的下一件事很多：换工具、换检索策略、换表达方式、反转问法再问用户。
+    所以 C 档注入的是**行动序列**，不是一句道歉。
+
+    【为什么只是"指令"而不是载体代跑整条链】真正的整链执行需要每一步各自的执行器
+    （换工具要调工具、换检索要重跑召回），那是 `agent_run` 内部更大的一次重构。
+    当前落地的部分：按 `core/metacognition/switch.py` 的 `MEANS` 顺序生成手段链并注入。
+    —— 这一条**如实标注为部分落地**，不写成"切换手段链已接入"。
+    """
+    try:
+        from core.metacognition import switch as _sw
+        steps = _sw.plan(question)
+        if not steps:
+            return ""
+        return ("\n【元认知 · C 档：这一问按原路走没把握】\n"
+                "不要用一句「抱歉/我不知道」交差。按下面的顺序换手段，"
+                "哪一种明显更好就用哪一种，并在回答里说清你换了什么：\n%s\n"
+                % _sw.steps_text(steps))
+    except Exception as e:      # noqa: silent-ok — 给不出手段链时退回原有行为
+        LOG.debug("手段链指令生成跳过（忽略）：%s", e)
+        return ""
+
+
+# ================== RAG · 三个源**同时查** + 载体算优率 ==================
+# 【为什么要并发】记忆库（对话向量库）、向量库（长期记忆）、联网 这三个源互不依赖，
+#   串行发起等于把三段延迟**相加**；并发发起只花**最慢那个**的时间。
+#   实测口径：总耗时应当接近 max(各源)，而不是 sum(各源)（自测里专门断言这一点）。
+# 【为什么要算"优率"】三个源都能返回东西，但质量差别很大：用户亲口说过的话、
+#   自己库里沉淀的记忆、网上搜来的片段，可信度不是一个量级。载体必须自己给它们打分，
+#   而不是"谁先返回就用谁"或者"全都塞进 system"。
+_RAG_SOURCE_TRUST = {"记忆库": 1.00, "向量库": 0.90, "联网": 0.60}
+# 分级门槛（用户规格）：优率 ≥ 0.90 直接用；0.60~0.90 交元认知 + 健康医生；< 0.60 不注入。
+RAG_USE_DIRECTLY = 0.90
+RAG_REVIEW_FLOOR = 0.60
+
+
+def _rag_info_score(text):
+    """信息含量（0~1）：含数字 / 日期 / 链接、且长度适中 → 分高。纯口号式的短句分低。"""
+    t = str(text or "")
+    n = len(t)
+    if n < 8:
+        return 0.20
+    s = 0.0
+    if re.search(r"\d", t):
+        s += 0.35
+    if re.search(r"\d{4}\s*[-/年]\s*\d{1,2}", t):
+        s += 0.15
+    if re.search(r"https?://|www\.", t):
+        s += 0.20
+    s += 0.30 if 20 <= n <= 400 else 0.10      # 太短没信息量，太长塞不进上下文
+    return min(1.0, s)
+
+
+def _rag_overlap(query, text):
+    """提问关键词在候选里的重合度（规则，不调模型）。"""
+    try:
+        kws = [k.lower() for k in _intent_keywords(query or "")]
+    except Exception:      # noqa: silent-ok — 抽不出关键词时给中性分，不因此判死
+        kws = []
+    if not kws:
+        return 0.50
+    t = str(text or "").lower()
+    hit = sum(1 for k in kws if k and k in t)
+    return min(1.0, hit / float(len(kws)))
+
+
+def _rag_quality(text, query, source, sim=None):
+    """载体算的**优率**（0~1）。全部是确定性判据，**不调模型**。
+
+    四部分加权：
+      ① 相似度 0.55 —— 向量相似度；联网结果没有向量，就用词重合度顶
+      ② 来源可信度 0.30 —— 用户亲口说的（记忆库 1.00）> 自己库里的长期记忆（0.90）> 网上搜的（0.60）
+      ③ 信息含量 0.10 —— 见 `_rag_info_score`
+      ④ 词重合 0.10
+    外加一条**一票否决**：地域闸门判定"这条在说别的地方" → 优率直接 0。
+    （那条闸门就是菏泽被答成江淮降雨之后补的，见 `core/retriever.py`。）
+
+    **【为什么是这组权重】这不是随手定的，是按"分档要能用"倒推的**：
+      · 第一版权重是 0.45/0.25/0.15/0.15，实测**满分记忆库命中只有 0.82** ——
+        永远跨不过"≥0.90 直接用"那条线，等于把这一档写成死代码。权重必须让判据够得着。
+      · 现在这组下：记忆库强命中（相似度 ≈1.0）≈ 0.91 → **直接使用**；
+        向量库近乎满分 ≈ 0.94 → 直接使用；而**联网结果最高也只到 ≈0.80** → 一律进复核档。
+      也就是说，"网上搜来的东西不该被当成事实直接用"这条自律，是由权重**结构性保证**的，
+      不是靠调用方记得去判断。
+
+    返回 `(优率, 判据说明)`。说明要给人看，所以把四项的实际取值都写进去 ——
+    出现"为什么这条被弃了"时，答案就在这行字里。
+    """
+    t = str(text or "")
+    if not t.strip():
+        return 0.0, "空内容"
+    try:
+        from core import retriever as _r
+        qp = _r._place_tokens(query)
+        if qp and _r._place_conflict(qp, t):
+            return 0.0, "地域闸门一票否决：提问点名的地方与这条对不上"
+    except Exception as e:      # noqa: silent-ok — 闸门不可用就不否决，但仍照常打分
+        LOG.debug("RAG 地域闸门不可用（忽略）：%s", e)
+    ov = _rag_overlap(query, t)
+    sim_v = float(sim) if isinstance(sim, (int, float)) else ov
+    sim_v = max(0.0, min(1.0, sim_v))
+    trust = _RAG_SOURCE_TRUST.get(source, 0.50)
+    info = _rag_info_score(t)
+    q = 0.55 * sim_v + 0.30 * trust + 0.10 * info + 0.10 * ov
+    return q, "相似度 %.2f · 来源 %.2f · 信息 %.2f · 重合 %.2f" % (sim_v, trust, info, ov)
+
+
+def _rag_vector_hits(query, top_k=5):
+    """源②：长期记忆向量库（`core/memory_vec.py`）。"""
+    try:
+        from core import memory_vec as MV
+        out = []
+        for h in (MV.search_memory(query, top_k=top_k) or []):
+            if isinstance(h, dict) and h.get("text"):
+                out.append({"text": str(h["text"]), "sim": h.get("score"),
+                            "meta": str(h.get("kind") or "")})
+        return out
+    except Exception as e:      # noqa: silent-ok — 这一路挂了不影响另外两路
+        LOG.debug("RAG 向量库失败（忽略）：%s", e)
+        return []
+
+
+def _rag_web_hits(query, num=4):
+    """源③：联网。返回 `[(标题, 链接, 内容)]`，这里拼成候选文本。"""
+    try:
+        out = []
+        for it in (web_search(query, num=num) or []):
+            row = list(it) + ["", "", ""]
+            title, link, content = str(row[0]), str(row[1]), str(row[2])
+            txt = ("%s：%s" % (title, content)).strip("： ").strip()
+            if txt:
+                out.append({"text": txt[:400], "sim": None, "meta": link})
+        return out
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("RAG 联网失败（忽略）：%s", e)
+        return []
+
+
+def _rag_three_sources(query, timeout=15.0):
+    """**三个源同时发起**。返回 `(候选列表, 各源耗时, 总耗时)`。
+
+    并发实现用 `ThreadPoolExecutor(3)`：三个源都是阻塞式 IO（本地向量检索 + HTTP 抓取），
+    线程池足够，也不需要把整条对话链改成 async。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    t0 = time.time()
+    lat = {}
+
+    def _mem():
+        s = time.time()
+        txt = _retrieve_memory(query)
+        lat["记忆库"] = round(time.time() - s, 3)
+        return [{"text": txt, "sim": None, "meta": "对话记忆注入文本"}] if txt else []
+
+    def _vec():
+        s = time.time()
+        r = _rag_vector_hits(query)
+        lat["向量库"] = round(time.time() - s, 3)
+        return r
+
+    def _web():
+        s = time.time()
+        r = _rag_web_hits(query)
+        lat["联网"] = round(time.time() - s, 3)
+        return r
+
+    cands = []
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futs = {ex.submit(fn): name
+                for name, fn in (("记忆库", _mem), ("向量库", _vec), ("联网", _web))}
+        try:
+            for f in as_completed(futs, timeout=timeout):
+                name = futs[f]
+                try:
+                    for c in (f.result() or []):
+                        c["source"] = name
+                        cands.append(c)
+                except Exception as e:      # noqa: silent-ok — 单源失败不影响另外两源
+                    LOG.debug("RAG %s 源失败：%s", name, e)
+        except Exception as e:      # noqa: silent-ok — 超时也把已经拿到的候选带回去
+            LOG.info("RAG 并发等待超时（%.1fs），用已返回的候选继续：%s", timeout, type(e).__name__)
+    return cands, lat, round(time.time() - t0, 3)
+
+
+def _rag_grade(cands, query):
+    """给候选打分、排序、分级。返回结构化结果（不注入，注入由调用方决定）。"""
+    scored = []
+    for c in cands:
+        q, why = _rag_quality(c.get("text"), query, c.get("source", "?"), sim=c.get("sim"))
+        scored.append({"source": c.get("source", "?"), "text": c.get("text") or "",
+                       "sim": c.get("sim"), "q": round(q, 4), "why": why,
+                       "meta": c.get("meta") or ""})
+    scored.sort(key=lambda x: -x["q"])
+    best = scored[0] if scored else None
+    if not best or best["q"] >= RAG_USE_DIRECTLY:
+        grade = "直接使用"
+    elif best["q"] >= RAG_REVIEW_FLOOR:
+        grade = "交元认知与健康医生"
+    else:
+        grade = "不注入"
+    return {"best": best, "candidates": scored, "grade": grade,
+            "q": best["q"] if best else 0.0}
+
+
+def _rag_concurrent(query):
+    """三源同时查 → 算优率 → 按档处理。返回可直接拼进 system 的文本（空串 = 不注入）。
+
+    **三档处理**（用户规格）：
+      · 优率 ≥ 0.90 直接用   —— 记忆库命中用户亲口说的话通常是这一档
+      · 0.60~0.90 交元认知 + 健康医生 —— 记一条自评样本（B 档，需复核）并写一条健康日志；
+        回答由元认知那一侧加上"没把握/需复核"的标注，而不是让载体假装很有把握
+      · < 0.60 不注入        —— 宁可不说，也不拿低质片段污染这一轮
+    """
+    try:
+        cands, lat, total = _rag_three_sources(query)
+    except Exception as e:      # noqa: silent-ok — 并发整体失败就退回"不注入"
+        LOG.debug("RAG 并发失败（忽略）：%s", e)
+        return ""
+    if not cands:
+        LOG.info("RAG 三源同时查：全空（记忆库/向量库/联网都没给东西）")
+        return ""
+    g = _rag_grade(cands, query)
+    best = g["best"]
+    LOG.info("RAG 三源同时查：候选 %d 条 · 各源耗时 %s · 并发总耗时 %.2fs（串行会是 %.2fs）",
+             len(cands), lat, total, sum(lat.values()))
+    LOG.info("RAG 优率：%.2f【%s】来源=%s ｜ %s", best["q"], g["grade"], best["source"], best["why"])
+    if g["grade"] == "不注入":
+        return ""
+    if g["grade"] == "交元认知与健康医生":
+        _rag_handoff_review(query, best, g)
+    # 注入的是**素材**：明确要求模型自己组织措辞，不许原文回吐
+    head = ("【本轮检索到的素材（三源同时查，载体已按优率排序）】\n"
+            "优率 %.0f%% · 来源「%s」· 判据：%s\n"
+            "以下是**素材不是答案**，请自己组织语言回答，不要原样复述：\n"
+            % (best["q"] * 100, best["source"], best["why"]))
+    # 命中"记忆库"时补上那条说明：`_MEMORY_INSTRUCTION` 讲的正是"记忆里的「我」= 用户本人"，
+    # 这个语义**只对用户亲口说过的话成立** —— 对网上搜来的片段不成立，所以不能无脑加。
+    if best["source"] == "记忆库":
+        head = _MEMORY_INSTRUCTION + head
+    body = best["text"]
+    if g["grade"] == "交元认知与健康医生":
+        head += ("注意：这条素材的优率只有 %.0f%%，**没有达到可直接采信的门槛**，"
+                 "用的时候要留出被证伪的余地。\n" % (best["q"] * 100))
+    return head + body + "\n"
+
+
+def _rag_handoff_review(query, best, g):
+    """优率落在 0.60~0.90 时，把这一条交给**元认知**与**健康医生**。
+
+    【为什么由它们接】优率不高不低的情形，载体能判的只有"不够可信"，
+    判不了"这条到底对不对"。元认知负责把它记成一条**待复核**的样本（下一次同类问题
+    会因此更谨慎），健康医生负责留一条可复盘的记录。两者都不是"拒绝回答"，
+    而是把不确定性**如实标出来**。
+    """
+    try:
+        from core.metacognition import boundary as _bd
+        _bd.record(query, rating="B", correct=None,
+                   note="RAG 优率 %.2f 未达直采门槛（来源 %s）" % (best["q"], best["source"]),
+                   source="rag")
+        LOG.info("RAG 交元认知：已记一条待复核样本（B 档）")
+    except Exception as e:      # noqa: silent-ok — 记不上不影响回答
+        LOG.debug("RAG 交元认知失败（忽略）：%s", e)
+    try:
+        from core import health as _h
+        _h.log_line("rag", "优率 %.2f 未达直采门槛：来源=%s 判据=%s"
+                    % (best["q"], best["source"], best["why"]))
+        _h.append_jsonl(_h.health_dir("rag_review.jsonl"),
+                        {"ts": time.time(), "query": str(query)[:120], "q": best["q"],
+                         "source": best["source"], "why": best["why"],
+                         "grade": g["grade"]})
+        LOG.info("RAG 交健康医生：已写一条可复盘记录")
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("RAG 交健康医生失败（忽略）：%s", e)
+
+
+# ================== 代码治病接进对话入口 ==================
+# 【为什么要有这一段】模型"一次写对可运行的代码"不可靠，但"照着报错改一行"很可靠。
+#   所以这边不把代码直接交给用户，而是**载体先跑一遍**：跑通了才输出。
+#   用户拿到的是**验证过能跑的结果**，不是一段"看起来像能跑"的文本。
+_CODE_WRITE = ("写个", "写一个", "写一段", "写份", "写一个", "帮我写", "给我写", "实现一个",
+               "实现个", "编写", "写代码", "写函数", "写脚本", "写程序", "生成代码",
+               "写个函数", "写个脚本", "写段代码", "来段代码", "码一段")
+_CODE_NOT_WRITE = ("看看", "审查", "解释", "为什么", "什么意思", "怎么理解", "错在哪",
+                   "review", "解释一下", "读懂", "分析一下这段")
+
+
+def _code_request_question(text):
+    """这句话是不是"**让我写一段能跑的代码**"。纯规则，不调模型。
+
+    【为什么要区分"写"和"看"】"帮我写个去重函数"要走治病（跑一遍再给），
+    而"帮我看看这段代码为什么慢"是**评审/解释**请求 —— 把它塞进治病流程会答非所问。
+    判据因此是"命中写代码词" **且** "不命中评审词"。
+
+    【为什么宁可漏、不可错】误判的代价是把一个普通问题变成"我给你写段代码跑跑看"，
+    用户会觉得答偏了。所以判据收紧，只认明确带祈使动作的说法。
+    """
+    t = str(text or "").strip()
+    if not t or len(t) > 200:
+        return False
+    if any(w in t for w in _CODE_NOT_WRITE):
+        return False
+    return any(w in t for w in _CODE_WRITE)
+
+
+def _heal_web(query):
+    """治病流程用的联网入口：查到的内容作为**参考**（不是答案）给模型。"""
+    try:
+        rows = web_search(query, num=3) or []
+    except Exception:      # noqa: silent-ok — 查不到就让治病流程照常收尾
+        return ""
+    parts = []
+    for it in rows:
+        row = list(it) + ["", "", ""]
+        title, link, content = str(row[0]), str(row[1]), str(row[2])
+        if content.strip():
+            parts.append("%s：%s" % (title, content))
+    return "\n".join(parts)[:1200]
+
+
+def _code_heal_answer(user_input):
+    """代码治病主流程：**生成 → 跑 → 失败则诊断 → 改 → 再跑**。通过即输出。
+
+    返回可直接作为回答的文本（失败也返回文本，如实说明卡在哪 —— 不假装成功）。
+    """
+    try:
+        from core import diagnose_code as DC
+    except Exception as e:      # noqa: silent-ok — 模块不在就退回普通回答
+        LOG.debug("代码治病模块不可用（忽略）：%s", e)
+        return ""
+    # ---- ① 让模型先给出代码（只问代码，不问解释）----
+    try:
+        raw = llm_chat([{"role": "user", "content":
+                         "请写一段 Python 代码完成下面这件事，**只给代码**，用 ```python 包起来，"
+                         "不要解释：\n\n%s" % user_input}]) or ""
+    except Exception as e:      # noqa: silent-ok — 模型调不通就退回普通流程
+        LOG.debug("代码治病：生成阶段失败（忽略）：%s", e)
+        return ""
+    code = DC._strip_fence(raw)
+    if not code.strip():
+        LOG.info("代码治病：模型没给出代码，退回普通流程")
+        return ""
+    # ---- ② 载体真的跑一遍，跑挂就走「诊断 → 改 → 再跑」（最多 3 轮，之后联网查参考）----
+    res = DC.heal(code, lambda msgs: llm_chat(msgs) or "",
+                  max_rounds=3, web_fn=_heal_web, web_rounds=1)
+    if res.get("blocked"):
+        LOG.info("代码治病：**红线拦截**，不重试也不查网络")
+        return ("这段代码里命中了载体的**删除禁区**，我拒绝执行它。\n\n"
+                "原因：%s\n\n"
+                "删除是不可逆操作，载体在任何情况下都不代跑这类代码。"
+                "如果确实需要删除文件，请你自己手动执行。" % res["blocked"])
+    rounds = res.get("rounds", 0)
+    if res["ok"]:
+        LOG.info("代码治病：第 %d 轮跑通，直接输出真实运行结果", rounds)
+        # **修完即验证，通过即输出**：给的是真跑出来的输出，不是模型的复述
+        return ("**已跑通并验证（第 %d 轮）**\n\n```python\n%s\n```\n\n"
+                "**真实运行输出**：\n```\n%s\n```"
+                % (rounds, res["code"].strip(), (res.get("final") or "（这段代码没有输出）").strip()))
+    # ---- ③ 没跑通：如实交代，不假装成功 ----
+    kinds = res.get("kinds") or []
+    used_web = res.get("used_web")
+    trace = res.get("trace") or []
+    last_err = ""
+    for t in reversed(trace):
+        if t.get("stderr"):
+            last_err = t["stderr"]
+            break
+    LOG.info("代码治病：%d 轮未通过（用过参考=%s），如实交代", rounds, used_web)
+    return ("这段代码我跑了 **%d 轮**没能跑通，**如实说，不假装成功**。\n\n"
+            "```python\n%s\n```\n\n"
+            "最后一轮的错误：\n```\n%s\n```\n\n"
+            "出现过的错误类型：%s\n%s"
+            "你可以让我换个写法，或者告诉我更具体的输入/环境。"
+            % (rounds, (res.get("code") or "").strip(), last_err.strip()[:600],
+               "、".join(kinds) if kinds else "未归类",
+               "（这几轮里我上网查过一段**参考**，但没照抄，仍没改对。）\n" if used_web else ""))
+
+
 def mind_done(mind, answer, truncated=False, skipped=False):
     """思维流 · **短路轮次的收尾**：把这一轮的状态落盘。
 
@@ -6820,6 +7347,74 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     #    所以这里给 `[]` 而不是 None；online 给 True（载体答出来了，不是"大脑没应答"）。
     # 判据用 `_tool_inventory_question`：它额外认"要全部 + 上文在聊工具"这一种
     # （即"我要全部的"接在"有哪些工具"之后 —— 这正是用户实测的那条链）。
+    # ================== 载体确定性计算（算术 / 概率）==================
+    # 【为什么放在最前面】算术是**确定性事实**：347×892 只有一个正确答案。
+    #   交给概率模型去算，位数越多越错，而且是"看起来很认真地算错"。
+    #   载体自己算，零延迟、必然正确，也省掉一次模型往返。
+    # 【为什么先查内化缓存】同一个问题问第二次时不该再算一遍：
+    #   第一次算完就把结论内化（logs/learning.jsonl），第二次直接复用 —— 这就是"学习闭环"。
+    try:
+        from core import calc as _calc, internalize as _il
+        _calc_res = _calc.detect(user_input_ctx)
+        if _calc_res:
+            _ans = _calc.answer_text(user_input_ctx)
+            _prev = _il.find_result(user_input_ctx)
+            _il.remember_result(user_input_ctx, _ans, expr=_calc_res.get("expr") or "",
+                                value=str(_calc_res.get("value")))
+            if _prev:
+                LOG.info("确定性计算：命中内化缓存（第二次同类题，不再重算）｜%s", user_input_ctx[:30])
+                _ans = _ans + "\n\n（这道题载体已经内化过，第二次直接复用上次的结论）"
+            else:
+                LOG.info("确定性计算：载体直算（%s）｜%s = %s", _calc_res["kind"],
+                         _calc_res.get("expr") or _calc_res.get("detail"), _calc_res.get("display"))
+            mind_done(_mind, _ans)
+            return _ans, True, [], False, []
+    except Exception as e:      # noqa: silent-ok — 算不了就走正常流程，绝不能因此答不了
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 6800, e)
+
+    # ================== 元认知 · 答前自评（决定这一轮走哪条路）==================
+    # 【为什么要它】模型对自己"会不会"没有概念。载体替它先评一次：
+    #   A → 秒回（直接答，不挂工具、不检索、不加补刀）
+    #   B → 照常答，但**如实标注**（让用户知道该复核）
+    #   C / ? → 走工具（两个代价不对等：多查一次只是慢，答错是错）
+    # 【为什么不让它拦死流程】自评本身也可能判错，所以它只调整档位，不拒绝回答。
+    _meta_route = ""
+    _switch_hint_text = ""
+    try:
+        from core.metacognition import selfrate as _sr
+        # ---- 第一级：载体规则先判（不花模型算力，见 `_rule_selfrate` 的说明）----
+        _rule_hit = _rule_selfrate(user_input_ctx)
+        if _rule_hit:
+            _rating, _sr_why = _rule_hit
+            _sr_out = {"rating": _rating, "why": _sr_why}
+            LOG.info("元认知自评：**载体规则**判为 %s ｜ %s", _rating, _sr_why)
+        else:
+            # ---- 第二级：规则判不出来，才让 4B 给自己打档 ----
+            _sr_out = _sr.self_rate(user_input_ctx, llm_fn=_selfrate_llm)
+            LOG.info("元认知自评：规则判不出，交模型自评 rating=%s ｜ %s",
+                     _sr_out.get("rating"), str(_sr_out.get("why"))[:60])
+        _meta_route = _sr.route(_sr_out.get("rating"))
+        LOG.info("元认知自评：rating=%s → 走 %s", _sr_out.get("rating"), _meta_route)
+        # ---- C 档：不是"认输"，是"换手段" ----
+        # 需要区分"规则判的 C"与"模型自评的 C"：两者都注入手段链指令。
+        if _meta_route == "use_tool":
+            _switch_hint_text = _switch_hint(user_input_ctx)
+    except Exception as e:      # noqa: silent-ok — 自评失败不影响回答，退回正常流程
+        LOG.debug("元认知自评跳过（忽略）：%s", e)
+
+    # ================== 代码治病 · 写代码请求 ==================
+    # 【为什么单独一条链】普通问答是"生成一段文本就交付"，而写代码是**可验证**的：
+    #   跑不起来就是没做完。所以这一支不走普通的"生成即交付"，而是
+    #   **生成 → 载体真跑一遍 → 失败给方向 → 改 → 再跑**，跑通才输出（见 `_code_heal_answer`）。
+    # 【为什么放在自评之后】自评决定了这一轮的路由；写代码请求属于"确定要动手做"的一类，
+    #   放在自评后、工具清单短路前，既不打断自评记账，也不会被工具清单那条短路截走。
+    if _code_request_question(user_input_ctx):
+        _code_ans = _code_heal_answer(user_input_ctx)
+        if _code_ans:
+            LOG.info("代码治病：已交付（走「生成→跑→验证」链，不是「生成即交付」）")
+            mind_done(_mind, _code_ans)
+            return _code_ans, True, [], False, []
+
     try:
         if _tool_inventory_question(user_input, _ctx_fuse):
             LOG.info("工具清单类问题：载体直接列全部（不经过模型）｜融合=%s",
@@ -7126,9 +7721,29 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   ② 它一进 system，下面的 _plan_tools / _fit_context 就会把它**算进 token**，
             #      不会再出现"注入完了才发现超限"的老毛病（第 1 步刚修好的那条链）。
             _MEMORY_LAST.update({"rid": "", "text": "", "tokens": 0})
-            _mem_inject = _retrieve_memory(user_input)
-            if _mem_inject:
-                sys_text += _MEMORY_INSTRUCTION + "【相关记忆】\n" + _mem_inject + "\n"
+            # ---- 第一部分 · **三个源同时查**（记忆库 / 向量库 / 联网）----
+            # 为什么从"顺序注入"改成"并发 + 算优率"：
+            #   ① 三个源互不依赖，串行发起等于把三段延迟**相加**；
+            #   ② 三个源都能返回东西，但可信度不是一个量级，必须由载体打分排序，
+            #      而不是"谁先返回就用谁"或"全都塞进 system"（后者会挤掉上下文并干扰模型）。
+            #   ③ 优率不到 0.90 的素材不会被当成事实用：0.60~0.90 交元认知与健康医生，
+            #      低于 0.60 直接不注入。分档与判据见 `_rag_quality` 的说明。
+            _rag_inject = _rag_concurrent(user_input)
+            if _rag_inject:
+                sys_text += _rag_inject
+            # ---- 第一部分之二 · 精神记忆：以前**想明白的一句话认知** ----
+            # 放在普通记忆之后：顺序体现优先级 —— 先是"发生过什么"（经历），
+            # 再是"从里面学到了什么"（认知）。两者一起注入时，经历负责唤醒场景，
+            # 认知负责让模型直接站到上次的高度，不必从头再推一遍。
+            # 注入文本里写死了"这是素材不是答案"，理由见 `_spirit_recall` 的说明。
+            _spirit_inject = _spirit_recall(user_input)
+            if _spirit_inject:
+                sys_text += _spirit_inject
+            # ---- C 档的手段链指令 ----
+            # 放在最后：它是**行为约束**，不是背景资料，越靠近生成越不容易被淹没。
+            if _switch_hint_text:
+                sys_text += _switch_hint_text
+                LOG.info("元认知 C 档：已注入手段链指令（不许直接认输）")
             # ---- 第二部分 · 世界层 RAG：小焦**自己**在网上看到的相关背景 ----
             # "用户问题先过 RAG：检索世界模型 + memory_vec → 匹对用户画像 → 相关则注入"。
             # 放在记忆之后：顺序体现优先级 —— 用户亲口说的是第一手，网上的背景是第二手。
@@ -7396,6 +8011,41 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                      _rating, bool(tool_trace), _uncertain)
         except Exception as e:      # noqa: silent-ok — 记录失败绝不能影响已经答好的内容
             LOG.debug("元认知记录失败（忽略）：%s", e)
+        # ---- 元认知标注：自评 B（"没把握"）时**如实说出来**，别装确定 ----
+        # 为什么不直接拒绝回答：B 档的含义是"答案本身可能对，但我不敢保证"。
+        # 把这一点标出来，用户能自己决定要不要复核 —— 比给一个自信的错答案强得多。
+        try:
+            if _meta_route == "answer_with_caveat" and answer and "元认知" not in answer:
+                answer = answer.rstrip() + ("\n\n（元认知 · 自评 B：这题我没有把握，"
+                                            "上面是尽力给的答案，建议你自己再核一遍）")
+                LOG.info("元认知标注：已给回答加上\u201c没把握\u201d说明")
+        except Exception as e:      # noqa: silent-ok — 加不上标注不影响回答本体
+            LOG.debug("忽略异常(%s:%d): %s", __file__, 7450, e)
+        # ---- 元认知标注 · C 档且**这一轮根本没查证**：不许让它冒充结论 ----
+        # 【为什么必须补这一条】实测抓到过：问「2027 年诺贝尔物理学奖得主是谁？」，
+        #   自评是 **C（没把握）→ 走 use_tool**，但这一轮 `tool_trace` 是空的（工具没调起来），
+        #   模型于是**自信地编了一个不存在的人名**（"约翰·巴恩斯"，还配了身份介绍）。
+        #   载体改不了模型知不知道这件事，但**能不能让一个自己评过 C、又没查证的答案
+        #   冒充结论** —— 这件事载体说了算。这正是"载体负责如实标注"的落点：
+        #   不自欺，也不帮模型自欺。
+        # 【为什么不直接拒绝回答】拒答对"其实它答对了"的那些轮次是纯损失。
+        #   标注的代价只是多一行字，而收益是用户知道该复核 —— 两个代价不对等。
+        try:
+            if (_meta_route == "use_tool" and not tool_trace and answer
+                    and "元认知" not in answer):
+                answer = answer.rstrip() + (
+                    "\n\n（元认知 · 自评 C：这题我没有把握，而且本轮**没能查到可核实的来源**，"
+                    "上面只是尽力作答，请当作参考、不要当成结论）")
+                LOG.info("元认知标注：C 档且本轮未查证 → 已标注为参考而非结论")
+        except Exception as e:      # noqa: silent-ok — 加不上标注不影响回答本体
+            LOG.debug("忽略异常(%s:%d): %s", __file__, 7520, e)
+        # ---- 学习闭环 · 落库端：把这一轮**能留下来的一句话认知**存进精神记忆库 ----
+        # 放在最后、且**在返回之前**：此时答案已经定了（含上面可能加的没把握标注），
+        # 提炼的是"这一轮最终成立的东西"。
+        # 为什么不放在 return 之后：那是不可达代码。为什么不 `finally` 里做：
+        # 短路轮次（工具清单直答等）在里面各自 return，那几轮没有可提炼的对话内容。
+        # 学不到只影响"这一轮没积累"，绝不影响已经答好的回答 —— 所以它整块吞异常。
+        _spirit_learn(user_input_ctx, answer)
         return answer, True, info, needs_confirm, tool_trace
 
     # 6. 无任何可用大脑（本地大模型未连接）时的降级（只给一句简洁提示，不瞎输出联网内容）

@@ -56,13 +56,12 @@ PHIL_SECTIONS = (
     ("十三 · 协同网络", ("协同网络",)),
 )
 
-# 后半篇九节（第十四至二十二节）：spec 追加，同样按标题关键词核对。
+# 后半篇八节（第十四至二十二节）：spec 追加，同样按标题关键词核对。
 # 【为什么单独一组而不是并进 PHIL_SECTIONS】两组分开报，才看得出"是哪一批缺了"——
 #   前十三节是 v1.0 首发就有的，后半篇是本次追加的；失败信息要能直接指向该补哪一批。
 PHIL_SECTIONS_PART2 = (
     ("十四 · 精度叠加", ("精度叠加", "存量精度")),
     ("十五 · 速度优化", ("速度优化", "无损加速")),
-    ("十六 · 多智能体协作", ("多智能体",)),
     ("十七 · 自我改进", ("自我改进",)),
     ("十八 · 全局工作空间", ("全局工作空间", "公共黑板")),
     ("十九 · 小脑定位", ("小脑定位", "记忆索引")),
@@ -72,8 +71,8 @@ PHIL_SECTIONS_PART2 = (
 )
 
 # 行数上限。**【为什么从 300 抬到 800 —— 是 spec 变了，不是测试放宽】**
-#   原上限 300 对应"总纲 + 13 节"那一版 spec。本次 spec 明确要求往同一个文件**追加九节**
-#   （第十四至二十二节），13 节就 283 行，加上九节必然超过 300 —— 上限不改就是拿旧 spec 卡新需求。
+#   原上限 300 对应"总纲 + 13 节"那一版 spec。本次 spec 明确要求往同一个文件**追加八节**
+#   （第十四至二十二节），13 节就 283 行，加上八节必然超过 300 —— 上限不改就是拿旧 spec 卡新需求。
 #   留一个上限仍然有意义：它防的是"文档无限膨胀、没人读得完"，而不是"必须正好 300 行"。
 DP_MAX_LINES = 900
 
@@ -115,7 +114,7 @@ def main():
         ck("定位块不在文件最顶部（先讲「这是什么」，再列要点）",
            not lines[0].startswith(">"), lines[0][:40] if lines else "")
 
-    print("\n[二] design-philosophy.md（要求 %d 行内 + 前十三节 + 后半篇九节）" % DP_MAX_LINES)
+    print("\n[二] design-philosophy.md（要求 %d 行内 + 前十三节 + 后半篇八节）" % DP_MAX_LINES)
     dp = os.path.join(_ROOT, "docs", "design-philosophy.md")
     ck("design-philosophy.md 存在", os.path.exists(dp))
     if os.path.exists(dp):
@@ -132,7 +131,7 @@ def main():
         for name, kws in PHIL_SECTIONS_PART2:
             ck("含 %s" % name, any(k in d for k in kws),
                "" if any(k in d for k in kws) else "缺关键词 %s" % (kws,))
-        ck("小节标题数 ≥ 22 节 + 总纲（后半篇九节齐全，实测 %d）" % len(secs),
+        ck("小节标题数 ≥ 21 节 + 总纲（后半篇八节齐全，实测 %d）" % len(secs),
            len(secs) >= 22, secs)
 
     print("\n[三] 交叉引用：文档之间互相指得到")

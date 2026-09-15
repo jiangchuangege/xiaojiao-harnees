@@ -1,4 +1,4 @@
-# 小焦 · 后半篇九节技术实现文档
+# 小焦 · 后半篇八节技术实现文档
 
 > 本文档是 [`docs/design-philosophy.md`](../design-philosophy.md) 后半篇（第十四至二十二节）的展开版。
 > 设计哲学回答"为什么这么做"，本文档回答"代码在哪、怎么调、哪里没做完、坏了怎么查"。
@@ -11,13 +11,13 @@
 
 | 项 | 内容 |
 |---|---|
-| 文档名称 | 小焦 · 后半篇九节技术实现文档 |
+| 文档名称 | 小焦 · 后半篇八节技术实现文档 |
 | 适用版本 | v1.0 |
 | 最后更新 | 2026-09-14 |
 | 维护者 | 小焦项目 |
-| 文档状态 | 已发布。九节全部完成代码核对；其中七节存在与设计文档不符之处或已知缺陷，已逐条列出 |
+| 文档状态 | 已发布。八节全部完成代码核对；各节与设计文档不符之处或已知缺陷已逐条列出 |
 | 覆盖范围 | 设计哲学第十四节至第二十二节 |
-| 图册对照 | [`docs/architecture-diagrams.md`](../architecture-diagrams.md) 图 12 至图 20 |
+| 图册对照 | [`docs/architecture-diagrams.md`](../architecture-diagrams.md) 图 12 至图 19 |
 | 术语约定 | 载体指 `core/` 与本仓库主程序构成的全部非模型代码；火种指可替换的推理模型 |
 
 ---
@@ -26,17 +26,16 @@
 
 1. [第十四节 · 精度叠加](#第十四节--精度叠加载体给模型附加等效精度)
 2. [第十五节 · 速度优化](#第十五节--速度优化只做无损加速)
-3. [第十六节 · 多智能体协作](#第十六节--多智能体协作一个模型切多角色)
-4. [第十七节 · 自我改进](#第十七节--自我改进)
-5. [第十八节 · 全局工作空间](#第十八节--全局工作空间公共黑板)
-6. [第十九节 · 小脑定位](#第十九节--小脑定位感官与记忆索引器官)
-7. [第二十节 · 意图理解交给模型](#第二十节--意图理解交给模型不做规则分流)
-8. [第二十一节 · 并发与状态一致性](#第二十一节--并发与状态一致性)
-9. [第二十二节 · 可观测性](#第二十二节--可观测性)
+3. [第十七节 · 自我改进](#第十七节--自我改进)
+4. [第十八节 · 全局工作空间](#第十八节--全局工作空间公共黑板)
+5. [第十九节 · 小脑定位](#第十九节--小脑定位感官与记忆索引器官)
+6. [第二十节 · 意图理解交给模型](#第二十节--意图理解交给模型不做规则分流)
+7. [第二十一节 · 并发与状态一致性](#第二十一节--并发与状态一致性)
+8. [第二十二节 · 可观测性](#第二十二节--可观测性)
 
 ---
 
-## 九节实现状态总表
+## 八节实现状态总表
 
 状态口径：已落地指功能已接入运行主流程并有实测产物；部分落地指代码存在但只覆盖设计的一部分，
 或只被测试调用而未接入主流程；设计未落地指仓库中没有对应实现。
@@ -45,7 +44,6 @@
 |---|---|---|---|---|
 | 十四 | 精度叠加 | 部分落地（五项中三项完整、一项部分、一项未落地） | 权重改不了，就在模型外面叠校验与检索 | `core/health/degeneration.py`、`core/metacognition/`、`core/memory_vec.py`、`core/memory_deep.py`、`plugins/` |
 | 十五 | 速度优化 | 部分落地（五项中三项已落地、一项半落地、两项未落地） | 只做无损加速，不拿质量换速度 | `core/mind_stream/inject.py`、`core/boost/__init__.py`、`core/health/heal.py` |
-| 十六 | 多智能体协作 | 设计未落地 | 角色定义与调度均无代码，运行时没有多角色 | 无。相邻能力见 `core/persona/`、`core/metacognition/` |
 | 十七 | 自我改进 | 设计未落地 | `logs/self_improve/` 目录与写入路径都不存在 | 无。相邻能力见 `core/metacognition/boundary.py`、`core/memory_deep.py` |
 | 十八 | 全局工作空间 | 已落地（订阅侧偏薄） | 中央状态与事件总线都在跑，但订阅者只有两个 | `core/central/__init__.py`、`logs/central/events.jsonl`、`GET /api/central` |
 | 十九 | 小脑定位 | 已落地（边界明确） | 空间 v3 已上线，长文区分度与召回率均有自测数字 | `core/embedder.py`、`core/retriever.py`、`tools/test_embedder_long.py` |
@@ -53,16 +51,15 @@
 | 二十一 | 并发与状态一致性 | 已落地（最终一致） | 后台线程加锁加对账，唤醒条件受配置门控 | `core/autonomy/`、`core/memory_vec.py`、`core/memory_deep.py`、`core/mind_stream/state.py` |
 | 二十二 | 可观测性 | 部分落地（日志层完整、面板未落地） | 日志齐，指标与追踪只覆盖一角 | `logs/`、`GET /api/central`、`GET /metrics` |
 
-### 九节状态全景
+### 八节状态全景
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
 flowchart TB
-    ROOT["后半篇九节 · 实现状态"]
+    ROOT["后半篇八节 · 实现状态"]
 
     ROOT --> A["十四 精度叠加<br/>部分落地"]
     ROOT --> B["十五 速度优化<br/>部分落地"]
-    ROOT --> C["十六 多智能体协作<br/>设计未落地"]
     ROOT --> D["十七 自我改进<br/>设计未落地"]
     ROOT --> E["十八 全局工作空间<br/>已落地"]
     ROOT --> F["十九 小脑定位<br/>已落地"]
@@ -74,7 +71,6 @@ flowchart TB
     A --> A2["未落地：同题跑 N 次并择一的完整流水线"]
     B --> B1["已落地：智能路由、并行预取"]
     B --> B2["未落地：语义缓存、批处理、投机解码、跨请求 KV 复用"]
-    C --> C1["运行时只有一套人格与一份历史档案，没有多角色调度"]
     D --> D1["机制可改数据，不可改流程"]
     E --> E1["发布 4 类主题，订阅 2 个"]
     F --> F1["512 维、截断 1024 字、尾窗 32 字、标定 α=0.15"]
@@ -85,7 +81,6 @@ flowchart TB
     style ROOT fill:#2d6cdf,color:#fff
     style A fill:#f0ad4e,color:#fff
     style B fill:#f0ad4e,color:#fff
-    style C fill:#d9534f,color:#fff
     style D fill:#d9534f,color:#fff
     style E fill:#5cb85c,color:#fff
     style F fill:#5cb85c,color:#fff
@@ -94,7 +89,7 @@ flowchart TB
     style I fill:#f0ad4e,color:#fff
 ```
 
-**图 0 · 九节实现状态全景**
+**图 0 · 八节实现状态全景**
 
 一句话说明：三个绿色块是完整可用的部分，橙色块是覆盖不全的部分，红色块是完全没有实现的部分。
 
@@ -371,7 +366,6 @@ flowchart TB
     style E fill:#5cb85c,color:#fff
     style B2 fill:#5cb85c,color:#fff
     style A fill:#d9534f,color:#fff
-    style C fill:#d9534f,color:#fff
     style B1 fill:#f0ad4e,color:#fff
     style GAP fill:#f0ad4e,color:#fff
 ```
@@ -499,190 +493,6 @@ print(BO.dispatch("今天天气不错").get("kind"))             # none
 | 上下文被工具 schema 挤爆 | 意图子集为空，回落到了核心集 | 查日志"意图 %s 的工具子集一个都不存在" |
 
 ---
-
-# 第十六节 · 多智能体协作（一个模型切多角色）
-
-## 摘要
-
-设计设想的形态是同一个模型配不同提示词，形成规划者、执行者、审稿者、事实检查者、总结者、
-仲裁者六类角色，由载体按任务复杂度调度。本次代码核对结论：六类角色的定义、提示词模板、
-调度接口在仓库中都不存在。运行时与"多视角"沾边的只有人格层的形式矩阵与元认知的历史档案判断。
-
-## 背景与问题
-
-多智能体的一种常见做法是为每类角色配一个独立模型。这条路与本项目"模型是可替换火种"的前提冲突：
-换一次模型就要重新配置一遍协作关系。
-另一种做法是把角色还原成提示词，由同一个模型轮流扮演，角色随提示词留在载体里，换模型不用改角色。
-本项目选择后者，代价是串行角色会成倍拉长响应时间。
-
-## 设计目标
-
-| Goals | Non-Goals |
-|---|---|
-| 角色是提示词，跟着载体走，不随模型变化 | 为每个角色配一个独立模型 |
-| 按任务复杂度决定启用几个角色 | 把多角色做成所有任务的默认路径 |
-| 单角色任务保持单次生成的延迟水平 | 在不告知用户的情况下串行五轮 |
-| 角色数量与职责边界明确，可单独验收 | 用"提示词里有几个人称"当作多角色已落地的证据 |
-
-## 架构与原理
-
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 44, "rankSpacing": 58, "useMaxWidth": true}}}%%
-flowchart TB
-    M["同一个火种配不同提示词<br/>等于不同角色<br/>角色随载体走，换模型不改角色"]
-
-    M --> R1["规划者<br/>只输出步骤，不执行"]
-    M --> R2["执行者<br/>只做当前一步"]
-    M --> R3["审稿者<br/>只找问题，不重写"]
-    M --> R4["事实检查者<br/>逐条给有据或无据"]
-    M --> R5["总结者<br/>只压缩，不加新信息"]
-    M --> R6["仲裁者<br/>只排序与给理由"]
-
-    R1 --> J["按复杂度选角色数"]
-    R2 --> J
-    R3 --> J
-    R4 --> J
-    R5 --> J
-    R6 --> J
-
-    J --> J1["简单 1 个角色"]
-    J --> J2["中等 2 个角色"]
-    J --> J3["复杂 3 至 5 个角色"]
-    J --> J4["超复杂 多角色加用户确认"]
-
-    J1 --> NOW["本次核对：以上道路全部未实现<br/>六类角色在仓库中没有定义"]
-    J2 --> NOW
-    J3 --> NOW
-    J4 --> NOW
-
-    NOW --> EXIST["运行时真实存在的能力<br/>core/persona 一套人格<br/>core/metacognition 一份历史档案"]
-    EXIST --> LIM["两者都不构成多角色<br/>人格层不切换角色<br/>档案层不做多视角作答"]
-
-    style M fill:#2d6cdf,color:#fff
-    style J fill:#2d6cdf,color:#fff
-    style NOW fill:#d9534f,color:#fff
-    style EXIST fill:#f0ad4e,color:#fff
-    style LIM fill:#f0ad4e,color:#fff
-```
-
-**图 3 · 多角色设计形态与运行时现状**
-
-一句话说明：上半部分是设计目标，下半部分标出该目标没有实现，以及运行时实际存在的两项相邻能力。
-
-代码位置索引：角色定义无代码位置；相邻能力见 `core/persona/__init__.py` 与
-`core/metacognition/boundary.py`。多视角提示词采样的实现位于 `core/boost/creative.py`。
-
-### 运行时真实存在的两项能力
-
-第一项是人格层。`core/persona/__init__.py` 提供一套人格规则与表达形式矩阵，
-`strip_flavor()` 做硬后处理删除空壳套话，`pick_form()` 按用户要求在列表、表格、分步、代码块、
-纯口语、普通段落之间选形式。这套机制在同一轮回答内不切换角色。
-
-第二项是元认知的历史档案。`core/metacognition/boundary.py` 按同类问题的历史样本判断
-"这类问题该不该直接走工具"。它读的是数据，不做多视角作答。
-`core/metacognition/crosscheck.py` 里的 5 个角度模板具备多视角形态，
-但该模块没有接入主流程，只在测试中被调用。
-
-多视角提示词采样位于另一条路径。`core/boost/creative.py` 内置 12 个视角与 12 个创意算子，
-`resample(question, n)` 用两层稳定哈希从 12 个视角里选出 n 个，为每个视角配一句"它会先问什么"，
-再拼接成 n 段提示词。产物是提示词，不是角色实例。
-
-## 接口与实现
-
-### 角色定义
-
-无。仓库中检索不到规划者、执行者、审稿者、事实检查者、总结者、仲裁者这六类角色的定义，
-也没有角色名、角色提示词模板或角色调度表。
-
-### 人格层接口
-
-```python
-# core/persona/__init__.py
-FORM_WORDS = {"list": (...), "table": (...), "steps": (...), "code": (...), "chat": (...)}
-
-def pick_form(user_text, answer=""):
-    """判断该用哪种表达形式。用户明确要求优先于语气判断。"""
-
-def form_hint(form):
-    """把形式翻成给模型的一句硬要求，拼进提示词。"""
-
-def strip_flavor(text):
-    """删除 AI 套话，返回 (新文本, 删掉的命中列表)。"""
-
-def persona_block(extra=""):
-    """返回 PERSONA_RULES 加 extra 的提示词块。"""
-```
-
-形式判据的优先级为：用户明确要求列表、表格、步骤或代码时照给；
-用户没要求但语气属于闲聊时给纯口语；其余给普通段落。
-`FORM_WORDS` 的 `chat` 词表包含"累""烦""开心""难过""无聊""在吗""陪""聊聊""说说"等词。
-
-### 多视角提示词接口
-
-```python
-# core/boost/creative.py
-PERSPECTIVES = [...]      # 实测 12 项，名称依次为 孩子、工程师、诗人、产品经理、黑客、老人、
-                          # 外星人、银行家、老师、医生、厨师、侦探
-OPERATORS = [...]         # 实测 12 项创意算子
-
-def resample(question, n=5):
-    """多视角采样。返回 list[dict]，每条含 perspective、name、lens、focus、prompt 五个键。"""
-
-def apply_operator(op_id, seed=""):
-    """套用一个创意算子，返回变换后的提示词。"""
-
-def random_seeds(question, n=3):
-    """为同一问题给出 n 个可复现的随机种子。"""
-```
-
-`resample` 的 n 会先夹取到 1 到 12 之间，再按互质步长轮转选取，保证同一问题取到同一批视角、
-不同问题取到不同视角。视角内部的提问句同样用哈希轮转，避免每个视角永远只问第一句。
-
-## 使用示例
-
-```python
-# -*- coding: utf-8 -*-
-import sys
-sys.stdout.reconfigure(encoding="utf-8")
-sys.path.insert(0, r"<仓库目录>")
-
-from core.boost import creative as CR
-
-rs = CR.resample("给我几个不同的开场白", n=3)
-print(len(rs))                          # 3
-for r in rs:
-    print(r["name"], r["focus"])        # 三个不同的视角名与各自的提问句
-
-# 可复现性：同一问题两次取到同一批视角
-a = [s["perspective"] for s in CR.resample("同一个问题", n=4)]
-b = [s["perspective"] for s in CR.resample("同一个问题", n=4)]
-print(a == b)                           # True
-
-from core.persona import pick_form
-print(pick_form("给我列 5 条"))          # list
-print(pick_form("今天好累"))             # chat
-```
-
-## 边界与限制
-
-1. 六类角色没有定义。设计哲学第十六节列出的角色表在仓库中没有对应实现。
-2. 没有调度接口。仓库中不存在按任务复杂度选择角色数的函数。
-3. `core/persona/` 是一套人格，不是多角色。它在同一轮内只产出一种表达形式。
-4. `core/metacognition/` 已接入的部分是历史档案查询，不是多视角作答。
-   `cross_check()` 具备多视角形态但未接入主流程。
-5. `core/boost/creative.py` 的 12 个视角是多视角提示词采样，产物是提示词而不是独立智能体。
-   它与设计里的"角色"不是同一件事，不能互相代替。
-6. 若将来实现该机制，串行 N 个角色会把响应时间放大到 N 倍。这条代价在设计文档中已经写明，
-   落地时必须带启用判据与用户确认，不能默认开启。
-
-## 故障排查
-
-| 现象 | 可能原因 | 排查动作 |
-|---|---|---|
-| 期待多角色协作但没看到 | 该机制未实现，属预期行为 | 确认需求，走 `core/boost/creative.py` 的多视角路径或健康系统的治疗重试 |
-| 多视角采样结果重复 | n 超过视角总数 12，或问题为空串 | 用 `len(CR.PERSPECTIVES)` 取实际上限，并检查传入的 question |
-| 闲聊回答被写成分点列表 | `pick_form` 判成了 list 或 table | 用 `pick_form(用户原话)` 复现，检查 `FORM_WORDS` 是否命中误判词 |
-| 空壳套话仍然出现 | `strip_flavor` 只删精确短语，长回答里的新变体不在表内 | 打印 `strip_flavor(回答)` 的第二个返回值，看命中了哪些短语 |
 
 ---
 
@@ -1973,9 +1783,8 @@ for k, v in c.most_common():
 | 7 | 全局工作空间"所有模块都能读自己关心的" | 主程序安装的订阅者只有两个：`app.memory_state` 与 `app.boost_state`。`metacognition.checked` 与 `tool.invoked` 只有发布者 | 本文档补充订阅侧的实测分布 |
 | 8 | 可观测性指标层"插件侧有熔断计数与调用指标，模块侧没有统一采集口" | 该描述成立，并且已有两个端点：`GET /metrics` 与 `GET /api/scrapling/metrics`，数据源都是抓取插件 | 本文档补充端点名与覆盖范围 |
 | 9 | 小脑的白化对比数据在两处文档中不同：`core/embedder.py` 模块头写近义项从 0.770 降到 0.533，设计哲学写从 0.814 降到 0.533 | 本次自测输出的近义对余弦为 0.814 | 本文档以当场自测为准，并在第十九节的边界中记录该出入 |
-| 10 | 多智能体一节的现状描述为"真正在跑的多角色只有人格层与元认知两个视角" | 人格层是一套人格与形式矩阵，不切换角色；元认知中具备多视角形态的 `cross_check()` 未接入主流程，接入的是历史档案判断 | 本文档改标为设计未落地，并分别说明相邻能力的实际形态 |
-| 11 | 自我改进一节的日志路径 `logs/self_improve/records.jsonl` | 该目录不存在，仓库中也没有引用该路径的代码 | 与设计文档一致，本文档标注设计未落地 |
-| 12 | 工具数量表述为"77 个工具插件" | 77 是 `all_tool_names()` 返回的工具名总数，其中登记在插件路由表里的是 63 个；`plugins/` 目录当前 19 个文件，注册插件 16 个 | 本文档区分三个数字的含义 |
+| 10 | 自我改进一节的日志路径 `logs/self_improve/records.jsonl` | 该目录不存在，仓库中也没有引用该路径的代码 | 与设计文档一致，本文档标注设计未落地 |
+| 11 | 工具数量表述为"77 个工具插件" | 77 是 `all_tool_names()` 返回的工具名总数，其中登记在插件路由表里的是 63 个；`plugins/` 目录当前 19 个文件，注册插件 16 个 | 本文档区分三个数字的含义 |
 
 另有一处不影响结论但值得记录的显示缺陷：
 `core/autonomy/__init__.py` 的 `start_all()` 返回 `enabled`、`scheduler`、`learner`、`watcher` 四个键，
