@@ -3976,10 +3976,63 @@ def run_tool(name, args, force=False):
                  name, _summarize_args_for_log(name, args))
         return ("（本轮 `%s` 对同一目标已经调用过一次，这里直接复用上次的结果，没有重复执行）\n%s"
                 % (name, _dup))
+    # ================== 「写」别乱动手：当场说 vs 落地成文件 ==================
+    # 【实测抓到的】用户说「写一段自我介绍」→ 判据**正确地**没让它进代码治病链，
+    #   但**模型自己去建了个 `self_intro.txt`**。用户要的是"当场说一段"，它却动手建了文件。
+    #   根因和之前那个同源：「写」在中文里太常见（写代码/写文件/写故事/写诗/写自我介绍…），
+    #   而模型只学会"写 = 动手"，不知道"写 = 当场说"。
+    # 【放在这里】`run_tool` 是工具的**唯一入口** ——
+    #   和"删除红线""本轮去重"同层：不管模型怎么想，这一道都拦得住。
+    #   **不是删工具、不是改提示词**，是载体层拦一道；判不出来就**不拦**（保守）。
+    if _wants_content_not_file(_CTX.get("user_input") or "") is True \
+            and name in ("write_file", "append_file", "save_to"):
+        LOG.info("「写」闸：判为**要内容**（当场说）→ 不放行 %s ｜ 用户：%s",
+                 name, str(_CTX.get("user_input"))[:40])
+        return ("（**不要建文件**：用户要的是**当场把内容说出来**，不是要一个文件。"
+                "请直接把要写的内容作为回答输出；如果用户确实想要文件，他会明确说"
+                "「存成 xxx.txt」或给一个路径。）")
     _res = _run_tool_impl(name, args, force=force)
     _res = _weather_fallback(name, args, _res)
     _round_remember(name, args, _res)
     return _res
+
+
+# ================== 「写」别乱动手：要内容 vs 要文件 ==================
+# 「写」在中文里太常见：写代码、写文件、写故事、写诗、写自我介绍……
+# 模型只学会"写 = 动手"，于是「写一段自我介绍」被它建成了 self_intro.txt。
+# 这道闸只判一件事：**用户是"要内容"，还是"要文件"？**
+#   要文件（命中任一条）→ 照常走 write_file；
+#   要内容（命中内容名 且 没有要文件标记）→ **不放行 write_file**，让它当场说；
+#   判不出来 → **保守：不拦**（宁可多建一次，也不误拦真文件请求）。
+_FILE_MARKS = ("C:\\", "C:/", "D:\\", "D:/", "\\", "/", "桌面", "文件夹", "目录",
+               "保存到", "保存为", "存到", "存为", "存下来", "存起来", "另存",
+               "写个文件", "建个文件", "新建文件", "生成一个文件", "生成文件", "建一个文件",
+               "导出", "下载", "保存成", "存成", "写成文件", "落盘")
+_FILE_EXT = (".txt", ".md", ".markdown", ".py", ".html", ".htm", ".json", ".csv",
+             ".xml", ".yaml", ".yml", ".js", ".css", ".log", ".docx", ".xlsx", ".pdf")
+# "写一段/写一篇/写一首/写个" + 内容名 = 要内容
+_CONTENT_VERBS = ("写一段", "写一篇", "写一首", "写篇", "写首", "写个", "写一个", "来一段",
+                  "来一篇", "来一首", "来篇", "来首", "来个", "说一段", "讲一个", "讲个",
+                  "编一个", "编个", "作一首", "作首", "赋一首")
+_CONTENT_NOUNS = ("自我介绍", "诗", "诗歌", "故事", "童话", "小说", "文章", "作文",
+                  "日记", "文案", "祝福语", "笑话", "段子", "散文", "台词", "旁白",
+                  "打油诗", "顺口溜", "谜语", "对联", "情书", "演讲稿", "推文", "说说",
+                  "歌词", "剧本", "开场白", "结束语", "寄语", "短句", "文案")
+
+
+def _wants_content_not_file(text):
+    """判**要内容**（True）/ **要文件**（False）/ **判不出来**（None，保守不拦）。"""
+    t = str(text or "").strip()
+    if not t:
+        return None
+    low = t.lower()
+    if any(m in t for m in _FILE_MARKS) or any(e in low for e in _FILE_EXT):
+        return False                      # 明确要文件
+    hit_verb = any(v in t for v in _CONTENT_VERBS)
+    hit_noun = any(n in t for n in _CONTENT_NOUNS)
+    if hit_verb and hit_noun:
+        return True                       # 写一段 + 内容名，且没有文件标记 → 要内容
+    return None                           # 判不出来 → 不拦
 
 
 def _weather_fallback(name, args, res):
