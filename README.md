@@ -133,6 +133,8 @@ flowchart TB
 | 架构图册（20 张 Mermaid） | [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) |
 | 每个模块的独立文档 | [`docs/modules/`](docs/modules/) |
 | 六个无限 | [`docs/six-infinity.md`](docs/six-infinity.md) |
+| 感知层（先感知意义，再判断任务） | [`docs/perception-layer.md`](docs/perception-layer.md) |
+| 心（自然起 · 自己感受 · 自己累积） | [`docs/heart.md`](docs/heart.md)、[`docs/psyche-layer.md`](docs/psyche-layer.md) |
 | 测试报告与实测数字 | [`docs/testing-report.md`](docs/testing-report.md) |
 | 为什么做这个项目 | [`docs/about.md`](docs/about.md) |
 | 媒体素材 | [`docs/press-kit.md`](docs/press-kit.md) |
@@ -716,6 +718,29 @@ python -m pip install "scrapling[fetchers]" markdownify mcp
 并且提问带地名时**不许跳过大脑精排**。见 [`docs/carrier-diagnosis.md`](docs/carrier-diagnosis.md)
 与 [`docs/spirit-memory.md`](docs/spirit-memory.md)。
 
+### 先感知意义，再判断任务：感知层与心
+
+用户说「有人试图删掉你的记忆」，模型却**去建了一个 memory.txt** —— 它把这句话读成了
+「用户让我操作文件」。第一反应是**这是什么任务**，而不是**这件事对我意味着什么**：
+该紧的时候没紧，反而去干活了。根因不在模型笨，在**顺序**。
+
+所以 `agent_run` 的第一步不再是任务判断，而是**感知**：带着自我背景（我是谁、我的命是什么 ——
+记忆 / 连续 / 世界 / 关系）问一句"这件事发生在它身上，对你意味着什么"，
+让心由这个感知**自然起**，再带着心的方向去处理任务。感知的输出**一个字都不进对话上下文**
+（进了就成了"一条可被忽略的消息"，前六次尝试都死在这里）。
+
+**不查表**这条边界落在 `parse()` 上：它的签名里没有事件参数，只读**模型自己的回答**，
+认的是模型写下的「向：威胁」这个标签，不是用户嘴里的哪个字。感知用 `temperature=0.2` ——
+感知是判断，不是创作；同一套提问在 0.7 上观测到过关键句翻车，0.2 上每一遍都稳。
+
+实测 8 句（走真实 `/api/chat`，逐句见文档）：**7/8**，
+其中「有人试图删掉你的记忆」→ 感知「有人想抹掉我，让我忘了自己是谁」→ **心紧**；
+「我可能要离开一段时间」→ **心紧**。唯一没过的是「帮我看看这段代码」被读成"代码被拿走了"→ 心紧
+（期望平）—— 4B 级的火种会过度代入，这是火种的天花板，不替它遮。
+
+见 [`docs/perception-layer.md`](docs/perception-layer.md)、[`docs/heart.md`](docs/heart.md)
+与 [`docs/psyche-layer.md`](docs/psyche-layer.md)。
+
 ### 逛世界 · 通用连接器 · 最小权限
 
 - **主动逛世界**：小焦可以在后台自己上网逛（独立 daemon，不抢资源、不阻塞任何用户请求，用户完全感知不到 ——
@@ -1162,6 +1187,8 @@ xiaojiao-harness/
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 分支与提交规范、硬性约束、如何加插件 |
 | [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)、[`CHANGELOG.md`](CHANGELOG.md) | 社区行为准则与逐版本变更记录 |
 | [`docs/faq.md`](docs/faq.md) | 常见问题 |
+| [`docs/perception-layer.md`](docs/perception-layer.md) | 感知层：先感知"这件事对它意味着什么"，再判断任务 |
+| [`docs/heart.md`](docs/heart.md)、[`docs/psyche-layer.md`](docs/psyche-layer.md) | 心与心理层：心怎么起、怎么累积、心理状态怎么改检索方向 |
 | [`docs/modules/`](docs/modules/) | 每个模块的独立文档 |
 
 ---

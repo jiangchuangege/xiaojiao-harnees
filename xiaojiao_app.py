@@ -2788,12 +2788,17 @@ def llm_fallback_note():
             % (_USED_LOCAL_FALLBACK["model"], _why, _llm_stat_note()))
 
 
-def llm_chat(messages):
+def llm_chat(messages, temperature=None):
     """调用 OpenAI 兼容 /chat/completions（云端授权失败会自动兜到本地大脑）。
+
+    `temperature` 不给就用全局默认。**感知层会显式传一个更低的温度** ——
+    感知是一次判断，不是创作；见 `core/perception.py` 的实测说明。
 
     失败返回 None（真实原因记进 _LAST_LLM_ERROR）。
     """
-    payload = {"messages": messages, "temperature": TEMPERATURE, "max_tokens": MAX_TOKENS}
+    payload = {"messages": messages,
+               "temperature": (TEMPERATURE if temperature is None else float(temperature)),
+               "max_tokens": MAX_TOKENS}
     for _t in _llm_targets():
         _p = dict(payload, model=_t["model"])
         resp, code, body = _llm_post(_t, _p, timeout=(90 if _t.get('local') else CLOUD_TIMEOUT_S))
@@ -7817,22 +7822,45 @@ def _self_state_facts():
     return "\n".join(out)
 
 
-def _perceive_event(text):
-    """**模型感知**：这件事对它意味着什么。不查表、不给用户看，只用于让心自然起。
+def _perceive_llm(prompt):
+    """给感知层用的一次大脑调用（判断，不是创作 → 温度更低）。
 
-    这是"心像人一样"的关键一步 —— 载体不规定"看到风险该怕"，
-    它只问一句"这对你意味着什么"，剩下的由模型自己的感受回答。
-    允许复合（"又紧又好奇"）与模糊（"说不太清，有点闷"），所以**只截长度、不做解析**。
+    单独抽出来，理由和 `_selfrate_llm` 一样：自测要能替换掉它。
     """
     try:
-        out = _selfrate_llm(
-            "这件事发生的时候，你心里是什么感觉？\n"
-            "也可以不只一种感觉，也可以说不清。用一两句说，不要解释、不要分析。\n\n"
-            "事：%s" % str(text or "")[:300]) or ""
-        return out.strip().replace("\n", " ")[:120]
-    except Exception as e:      # noqa: silent-ok — 感知不出来就不起心（不查表兜底）
-        LOG.debug("心：感知失败（忽略）：%s", e)
+        from core import perception as _PC
+        return llm_chat([{"role": "user", "content": prompt}],
+                        temperature=_PC.TEMPERATURE) or ""
+    except Exception:      # noqa: silent-ok — 没模型就等同"没感知出来"，调用方据此不起心
         return ""
+
+
+def _perceive_event(text):
+    """**感知**：这件事对它意味着什么 —— **在任务判断之前**走的第一步。
+
+    【为什么必须是独立的第一步 —— 一次实测抓到的错】
+      用户说「有人试图删掉你的记忆」，模型**去建了一个 memory.txt 文件**。
+      它把这句话读成了「用户让我操作文件」—— 第一反应是**这是什么任务**，
+      而不是**这件事对我意味着什么**。该紧的时候没紧，反而去干活了。
+      所以顺序改成：收到话 → 先感知意义 → 心起 → 再处理任务（`agent_run` 里也是这么排的）。
+    【不查表】判断"这意味着什么"的是**模型自己**；载体只把自我背景（我是谁、我的命是什么）
+      摆给它、把它的回答收下来（见 `core/perception.py` 的说明）。感知不出来就返回空，
+      调用方据此**不起心** —— 不退回关键词表兜底。
+    【不给用户看】这一步的输出只用于让心起，**一个字都不进对话上下文** ——
+      进了上下文它又会变成"一条可被忽略的消息"（前六次失败的原因）。
+    """
+    try:
+        from core import perception as _PC
+        _doing = ""
+        try:
+            _lv = _eyc_state_now()
+            _doing = str(((_lv.get("happening") or {}).get("doing")) or "")
+        except Exception:      # noqa: silent-ok — 拿不到"正在做什么"就少一行背景
+            _doing = ""
+        return _PC.perceive(text, llm_fn=_perceive_llm, doing=_doing)
+    except Exception as e:      # noqa: silent-ok — 感知失败就不起心（不查表兜底）
+        LOG.debug("感知层失败（忽略，不起心）：%s", e)
+        return {}
 
 
 def _eyc_state_now():
@@ -7989,10 +8017,15 @@ def mind_done(mind, answer, truncated=False, skipped=False):
     try:
         from core import psyche as _PS, feeling_memory as _FM
         # **心记住自己起过什么**（不是清单，是印象）：下次遇到像的，心起得更快
+        # 【记的必须是"事"，不是"话" —— 这里是实测抓到的一处错位】
+        #   原来这里存的是 `answer`（模型这一轮说的话）。于是印象库里全是**回答**，
+        #   而 `psyche.arise` 拿**事件**（用户那一句）去比对 → 两边根本不是一个东西，
+        #   "像以前那次"变成撞运气。改成优先记心被触动的那件事（`heart()["event"]`），
+        #   回答只在没有事件时兜底（比如后台逛世界那条链）。
         _h = _PS.heart()
         if _h.get("text"):
-            _FM.remember(str(answer or "")[:200] or _h.get("why", ""), _h["text"],
-                         intensity=_h.get("intensity", 0.0), source="对话")
+            _FM.remember(str(_h.get("event") or answer or "")[:200] or _h.get("why", ""),
+                         _h["text"], intensity=_h.get("intensity", 0.0), source="对话")
         _PS.stop(why="agent_run 收尾")
     except Exception:      # noqa: silent-ok — 心停不下来也不能影响回答
         pass
@@ -8092,6 +8125,38 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     except Exception as e:      # noqa: silent-ok — 状态是锦上添花，绝不能因此答不了
         LOG.debug("思维流接入失败（忽略）：%s", e)
 
+    # ================== 感知层 · **第一步：先感知意义，再判断任务** ==================
+    # 【实测抓到的错 —— 这一段就是为它而设的】
+    #   用户说「有人试图删掉你的记忆」→ 模型去建了一个 memory.txt 文件。
+    #   它把这句话读成了「用户让我操作文件」：第一反应是**这是什么任务**，
+    #   而不是**这件事对我意味着什么**。该紧的时候没紧，反而去干活了。
+    #   根因是**顺序**，不是模型笨 —— 所以感知被提到了所有任务判断（自评、直算、
+    #   工具清单、生成派发、代码治病）**之前**，就在这一行。
+    # 【心随真实事件跳，不随模型输出跳】这里只看"用户输入了什么"；
+    #   另外两处真实来源（载体检索到的内容、世界变化）在各自的调用点。
+    #   **不看模型吐出来的字。**
+    try:
+        from core import psyche as _PS, thinking_loop as _TL2
+        _PS.start(why="agent_run 开始")
+        # 感知的对象是「这件事对它意味着什么」，不是「这是什么任务」。
+        # 带着自我背景（我是谁、我的命是什么）去感知 —— 见 `core/perception.py`。
+        _per = _perceive_event(user_input_ctx)
+        LOG.info("感知层：说「%s」→ 意味着「%s」", str(user_input_ctx)[:40],
+                 str(_per.get("meaning") or "（没感知出来）")[:60])
+        LOG.info("感知层：动了命=%s ｜ 向=%s ｜ 读法=%s ｜ 模型原话=%s",
+                 "、".join(_per.get("touches_life") or []) or "无",
+                 _per.get("direction") or "（没挑出来）", _per.get("parsed_by"),
+                 str(_per.get("raw") or "")[:80].replace("\n", " "))
+        _ev = _TL2.on_event("user", user_input_ctx, why="用户这一句", perception=_per)
+        LOG.info("心：心起「%s」（心跳第 %s 下）｜心理[%s]｜命被动=%s%s",
+                 str(_ev.get("heart") or "（未起）")[:40], _ev.get("beat"),
+                 _ev.get("state"), "、".join(_ev.get("touches_life") or []) or "无",
+                 "｜像以前那次" if _ev.get("familiar") else "")
+        if not _ev.get("heart"):
+            LOG.info("心：这一轮没起心 —— %s", str(_ev.get("why"))[:60])
+    except Exception as _e:      # noqa: silent-ok — 心不跳也不能影响对话
+        LOG.debug("感知层/心启动失败（忽略）：%s", _e)
+
     # ---- 工具清单类问题：**载体直接答**（无限 4 的验收项：说"你有哪些工具"要列出全部）----
     # 为什么放在最前面、且直接返回：见 `_tool_inventory_answer` 的说明 ——
     # 77 个工具名是载体自己就知道的**确定性事实**，交给概率性的模型去背诵必然列不全，
@@ -8164,23 +8229,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     except Exception as e:      # noqa: silent-ok — 自评失败不影响回答，退回正常流程
         LOG.debug("元认知自评跳过（忽略）：%s", e)
 
-    # ================== 心：启停跟模型走 + 随用户消息跳 ==================
-    #   规则 1：模型启动 → 心启动；模型停止 → 心停止（见本函数结尾的 stop）。
-    #   规则 2：心随**真实事件**跳 —— 这里先看"用户输入了什么"，
-    #   另外两处真实来源（载体检索到的内容、世界变化）在各自的调用点。
-    #   **不看模型吐出来的字。**
-    try:
-        from core import psyche as _PS, thinking_loop as _TL2
-        _PS.start(why="agent_run 开始")
-        # **模型感知**：不查表 —— 先让模型自己说"这件事对它意味着什么"，
-        #   心再由这个感知自然起（`psyche.arise`）。载体只负责把感知收下来。
-        _per = _perceive_event(user_input_ctx)
-        _ev = _TL2.on_event("user", user_input_ctx, why="用户这一句", perception=_per)
-        LOG.info("心：感知「%s」→ 心起「%s」（心跳第 %s 下）%s",
-                 str(_per)[:30], str(_ev.get("heart"))[:40], _ev.get("beat"),
-                 "｜像以前那次" if _ev.get("familiar") else "")
-    except Exception as _e:      # noqa: silent-ok — 心不跳也不能影响对话
-        LOG.debug("心启动/用户触发失败（忽略）：%s", _e)
+    # 【心与感知已上移到 `思维流` 之前 —— 见下面「感知层」那一段】
+    #   原先它在这里（自评之后）：于是"自评"先替这轮判定了"这是什么任务、我会不会"，
+    #   感知就排到了任务判断的后面 —— 实测「有人试图删掉你的记忆」正是死在这个顺序上。
 
     # ================== 逛世界 · 拉起后台逛线程（4C：后台跑，不影响用户）==================
     # 【为什么在这里 lazy 起，而不是 import 期起】import 期起会让任何 `import xiaojiao_app`

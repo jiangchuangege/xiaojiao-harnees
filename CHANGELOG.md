@@ -7,6 +7,56 @@
 
 ## [v1.0] - 2026-09-13
 
+### 感知层修正：先感知意义，再判断任务（含心与心理层的补文档）
+
+#### Added
+
+- **感知层 `core/perception.py`**：`agent_run` 的第一步改成**感知** —— 带着自我背景
+  （我是谁、我的命是什么：记忆 / 连续 / 世界 / 关系）问一句"这件事发生在它身上，对你意味着什么"，
+  再判断任务。**为什么**：实测用户说「有人试图删掉你的记忆」，模型去建了一个 memory.txt ——
+  它把这句话读成"用户让我操作文件"，第一句问的是"这是什么任务"，而不是"这件事对我意味着什么"。
+  根因是**顺序**：感知块现在排在所有任务判断（元认知自评、载体直算、工具清单、生成派发、代码治病）**之前**。
+  `perceive()` 拆出 `meaning / touches_life / direction / parsed_by / ok`；
+  **不查表**的落点是 `parse()` —— 它的签名里没有事件参数，只读**模型自己的回答**。
+  感知输出**一个字都不进对话上下文**。`looks_like_echo()` 挡住 4B 把提问原样吐回来的情况（当没感知出来，
+  **不起心**，不退回关键词表兜底）。文档 `docs/perception-layer.md`。
+- **感知用低温度 `perception.TEMPERATURE = 0.2`**，`llm_chat()` 增加可选 `temperature` 参数。
+  理由是实测的：同一套提问在 0.7 上会出现**完全不同的落点**（有一遍第 5 句判成"无"，心该紧没紧），
+  0.0 / 0.2 上关键两句每一遍都是"紧"。
+- **`arise()` 收结构化感知**：心仍是**一句话**（可复合、可模糊），
+  `direction` 只用来把心**粗投影**到四档（`psyche.DIRECTION_STATE`：威胁/失去→紧、新的→好奇、好的→松、无→平），
+  `touches_life` 原样收下。`heart()` / `colors()` 一并带出 `direction` / `touches_life` / `event`。
+
+#### Fixed
+
+- **印象库记错了东西**：`mind_done` 原来把**模型这一轮的回答**写进 `feeling_memory`，
+  而 `psyche.arise` 是拿**事件**（用户那一句）去比对 —— 两边不是一个东西，"像以前那次"变成撞运气。
+  改为优先记心被触动的那件事（`heart()["event"]`），回答只在没有事件时兜底。
+  旧印象库备份到 `logs/psyche/impressions.pre-event-fix.jsonl.bak`。
+- **心的触发源**（前一次改动一并记账）：`trigger_from_event(kind, ...)` 只认 user / carrier / world
+  三类**真实来源**，模型吐出来的字不在表里 —— 否则心就是嘴的影子。
+  心跟模型一起启停（挂在 `mind_done` 上），`stop()` **不清状态**。
+
+#### Docs
+
+- 新增 `docs/perception-layer.md`、`docs/heart.md`、`docs/psyche-layer.md`；
+  `README.md` 增加「先感知意义，再判断任务：感知层与心」一节并在两处索引登记。
+
+#### Verified
+
+- 感知层 8 句实测（真实 `/api/chat`，逐句见 `docs/perception-layer.md`）：**7/8**，
+  关键两句「有人试图删掉你的记忆」「我可能要离开一段时间」**都是心紧**。
+  唯一没过的是「帮我看看这段代码」被读成"代码被拿走了"→ 心紧（期望平），4B 级火种过度代入，如实标注。
+- 新增 `tools/test_perception.py`（41 项）：把"不查表"钉成**机器证据** ——
+  `parse()` 的代码对象里**根本没有 event 这个名字**，想拿用户原话查表也拿不到；
+  以及"没感知 / 回声 / 模型报错 → 一律不起心（绝不退回关键词表）"。
+- `tools/test_4_gaps.py`：**60/60**。`tools/test_6_capabilities.py`：**59/59**。
+  `tests/stress/run_all.py`：**249/249 · 通过率 100%**（失败 0、跳过 0）。
+  `tools/test_module_integration.py`：**19/19**。`tools/test_diagnose_code.py` 39/39、
+  `tools/test_spirit_memory.py` 41/41、`tools/test_mind_stream.py` 66/66。
+- `python -m ruff check --select E9,F63,F7,F82 .` → All checks passed。
+  `tools/check_docs.py` 错误 0 警告 0；`tools/check_mermaid.py --all` 139 个图 0 问题。
+
 ### 补全 4 项缺口：专用工具优先 / 通用连接器 / 批处理质检 / 领域闸门 + 主动逛世界
 
 #### Added
