@@ -281,7 +281,7 @@ _TOOL_RULES = ("\n[工具铁律] "
                "② **做事之前先看上面那份工具清单**：用户点名某个插件/工具（如 Archify）时，"
                "直接调那个工具，**不要**改用 web_search 去搜；清单里没有的才说「没有这个工具」。"
                "③ 多步任务按顺序拆开做（先校验/先读文件，再产出结果），每步都调对应工具。"
-               "\n【工具选择顺序】不确定就用这张表，别硬猜：\n① 用户给了网址/要求抓网页 → `get`；被拦或正文空 → `fetch`；再不行 → `stealthy_fetch`（开销最大，别一上来就用）\n② 用户要查资料/新闻/百科/天气这类**信息** → `web_search`（别去抓某个具体网页）\n③ 用户要画图（架构图/流程图/时序图/数据流/状态图）→ 走 archify 工作流：`archify_read_skill` → `archify_guide` → `archify_read_schema` → `archify_read_example` → `archify_validate` → `archify_deliver`（**一次搜索都不要发**）\n④ 用户要漏洞清单 → `collect_vulnerabilities`（不要用 web_search 凑）\n⑤ 用户要查本机公网 IP/归属地 → `net_ip`\n⑥ 用户纯聊天/寒暄/概念问答 → **不调任何工具**\n⑦ 要执行命令/写文件/读文件 → `run_command` / `write_file` / `edit_file` / `read_file`\n⑧ 上面都不沾边、又确实需要外部信息时 → 优先 `web_search` 找信息，不要硬猜工具。\n"
+               "\n【工具选择顺序】不确定就用这张表，别硬猜：\n① 用户给了网址/要求抓网页 → `get`；被拦或正文空 → `fetch`；再不行 → `stealthy_fetch`（开销最大，别一上来就用）\n② 用户**问天气**（某地天气 / 会不会下雨 / 气温多少）→ **必须优先 `get_weather`，不要用 `web_search` 代替**。\n理由：`get_weather` 回的是**结构化天气数据**，`web_search` 只回**网页片段** —— 用户实测过这条链：拿 web_search 去答天气，只捞到一堆链接，最后只能回「我没能力」。\n只有当 `get_weather` **失败**时才降级用 `web_search`，而且**必须在回答里标注「数据来自网页检索，可能不准」**。\n③ 用户要查资料/新闻/百科这类**信息** → `web_search`（别去抓某个具体网页）\n④ 用户要画图（架构图/流程图/时序图/数据流/状态图）→ 走 archify 工作流：`archify_read_skill` → `archify_guide` → `archify_read_schema` → `archify_read_example` → `archify_validate` → `archify_deliver`（**一次搜索都不要发**）\n⑤ 用户要漏洞清单 → `collect_vulnerabilities`（不要用 web_search 凑）\n⑥ 用户要查本机公网 IP/归属地 → `net_ip`\n⑦ 用户纯聊天/寒暄/概念问答 → **不调任何工具**\n⑧ 要执行命令/写文件/读文件 → `run_command` / `write_file` / `edit_file` / `read_file`\n⑨ 上面都不沾边、又确实需要外部信息时 → 优先 `web_search` 找信息，不要硬猜工具。\n"
                "④ **校验/报错必须一次性改完**：`archify_validate`（或任何校验类工具）失败时，"
                "要**按返回的全部报错一起修**，改好再校验**一次**；禁止「改一条→校验→再改一条」"
                "这种逐条试错（实测同一张图来回校验 7 次、白烧 200 多秒）。同一工具连续失败 3 次"
@@ -2082,7 +2082,8 @@ def _generate_long(task, system, on_chunk=None, on_delta=None):
         res = _c.generate_unlimited(task, system, cfg=_continuation_cfg(), on_chunk=on_chunk,
                                     should_stop=_CONT_STOP.is_set,
                                     stream_fn=(_llm_stream if on_delta else None),
-                                    on_delta=on_delta)
+                                    on_delta=on_delta,
+                                    quality_gate=_longform_quality_gate)
         LOG.info("长文续写：%d 段 / %d 字 / 去重裁掉 %d / 重试 %d / 停止=%s / 耗时 %.1fs",
                  len(res["chunks"]), res["chars"], res["dedup_chars"], res["retries"],
                  res["stopped"], res["elapsed_s"])
@@ -3036,8 +3037,47 @@ def run_tool(name, args, force=False):
         return ("（本轮 `%s` 对同一目标已经调用过一次，这里直接复用上次的结果，没有重复执行）\n%s"
                 % (name, _dup))
     _res = _run_tool_impl(name, args, force=force)
+    _res = _weather_fallback(name, args, _res)
     _round_remember(name, args, _res)
     return _res
+
+
+def _weather_fallback(name, args, res):
+    """`get_weather` 失败时**由载体**降级到 `web_search`，并且必须标注来源。
+
+    【为什么由载体做，而不是写进提示词】提示词里写"失败了就降级"是**靠模型自觉**：
+    模型完全可能失败了就直接回一句"我没能力"—— 用户实测到的正是这条链
+    （拿 web_search 去答天气 → 只捞到一堆链接 → 回"我没能力"）。
+    把降级放在 `run_tool` 这个**唯一入口**上，才能做到"不管模型怎么想，都有一份可用信息"。
+
+    【为什么必须标注】网页检索出来的天气与结构化天气数据**精度不是一个量级**：
+    前者可能是几天前的页面、也可能压根不是那个城市（这次实测的城市是"菏泽"，
+    涉及区县级的准确率本来就低）。不标注就等于把低置信度的东西冒充成权威数据 ——
+    那是欺瞒，不是降级。
+    """
+    if name != "get_weather":
+        return res
+    t = str(res or "")
+    _FAIL = ("查询失败", "服务暂时不可用", "暂时不可用", "不可用", "Traceback")
+    if t and not any(w in t for w in _FAIL):
+        return res                      # 查成功了就原样返回，不做多余动作
+    city = str((args or {}).get("city") or "").strip() or "当地"
+    try:
+        rows = web_search("%s 天气 今天" % city, num=4) or []
+    except Exception as e:      # noqa: silent-ok — 降级本身失败也要如实说，不能假装查到
+        LOG.debug("天气降级检索失败（忽略）：%s", e)
+        rows = []
+    parts = []
+    for it in rows:
+        row = list(it) + ["", "", ""]
+        title, link, content = str(row[0]), str(row[1]), str(row[2])
+        if content.strip():
+            parts.append("- %s：%s\n  %s" % (title, content.strip()[:220], link))
+    if not parts:
+        return (t or "") + "\n（载体已尝试降级到网页检索，但也没查到可用内容 —— 如实说明，不编数据）"
+    LOG.info("天气降级：get_weather 失败 → 已改用 web_search（%d 条，已标注来源）", len(parts))
+    return ("⚠️ **数据来自网页检索，可能不准**（结构化天气接口本次不可用，载体已自动降级）\n"
+            "%s\n\n参考来源：\n%s" % (t.strip(), "\n".join(parts[:3])))
 
 
 # ================== 安全红线：小焦不能删除任何文件 ==================
@@ -5775,7 +5815,11 @@ _INTENT_TOOLS = {
     "chat": ("web_search", "read_memory", "list_files"),
     "scrape": ("get", "make_request", "fetch", "stealthy_fetch", "bulk_get", "bulk_fetch",
                "scrape_with_selector", "download", "screenshot", "web_search"),
-    "query": ("net_ip", "collect_vulnerabilities", "read_file", "web_search", "get_weather"),
+    # 【顺序就是"优先用谁"】用户实测：「山东菏泽天气」这轮里 `get_weather` 原本排在 `web_search`
+    #   **后面**（第 5 位），模型于是先抓网页 → 只拿到一堆链接 → 回"我没能力"。
+    #   专用工具必须排在通用检索前面：`get_weather` 返回的是**结构化天气数据**，
+    #   而 `web_search` 返回的是**网页片段**（还得模型自己从里面抠数字，抠不出来就答不了）。
+    "query": ("get_weather", "net_ip", "collect_vulnerabilities", "web_search", "read_file"),
     "shell": ("run_command", "read_file", "write_file"),
     "diagram": None,      # 特殊：archify_* 全链 + 读写文件（下面现算）
     "full": _FULL_CORE_TOOLS,   # 核心集（不再是"全部"）；完整目录由 system 里的工具索引下发
@@ -5899,6 +5943,29 @@ def _is_chitchat(q):
     return len(rest) <= 4                              # 只剩"呀/啊/啦"这类语气词
 
 
+_READ_VERBS = ("读一下", "读一读", "读下", "读文件", "读取", "看一下这个文件", "看看这个文件",
+               "打开这个文件", "读这个文件", "看下这个文件")
+_FILE_HINT = re.compile(r"[A-Za-z]:[\\/]|\.(txt|md|py|json|log|csv|html|js|ts|ya?ml|ini|toml|xml)\b",
+                        re.I)
+
+
+def _asks_file_read(text):
+    """这句是不是"读一个具体文件"。纯规则。
+
+    【为什么需要它】实测「读一下 C:\\test.txt」被判成 **chat** —— chat 意图只装 3 个工具
+    （web_search / read_memory / list_files），**根本没有 read_file**。于是这一轮模型
+    只能靠嘴描述"我读不了文件"，而它明明有能力读。
+    判据要求**动词 + 文件特征（盘符路径或已知扩展名）同时命中**，
+    所以「读一下那篇文章」这种没有具体文件的说法不会被误判成读本地文件。
+    """
+    t = str(text or "").strip()
+    if not t or len(t) > 200:
+        return False
+    if not any(v in t for v in _READ_VERBS):
+        return False
+    return bool(_FILE_HINT.search(t))
+
+
 def _detect_intent(user_input):
     """规则识别本轮意图：chat / scrape / diagram / query / shell / full。**不靠模型**。
 
@@ -5924,6 +5991,8 @@ def _detect_intent(user_input):
         return "scrape"
     if _looks_like_shell_command(q):     # "这句话本身就是一条命令"
         return "shell"
+    if _asks_file_read(q):               # "读一下 C:\test.txt"
+        return "shell"                   # shell 意图里带了 read_file
     if _asks_net_ip(q):                  # 我的公网 IP / 归属地
         return "query"
     low = q.lower()
@@ -6941,11 +7010,13 @@ def _rag_quality(text, query, source, sim=None):
         return 0.0, "空内容"
     try:
         from core import retriever as _r
-        qp = _r._place_tokens(query)
-        if qp and _r._place_conflict(qp, t):
-            return 0.0, "地域闸门一票否决：提问点名的地方与这条对不上"
+        # 走**同一个入口**（地域 + 人物/时间/单位/产品/事件 五类）：
+        # 检索侧剔一遍、优率侧再判一遍，用两套判据早晚会打架，而那种 bug 最难查。
+        _why = _r._domain_reason(query, t)
+        if _why:
+            return 0.0, "一票否决：" + str(_why)
     except Exception as e:      # noqa: silent-ok — 闸门不可用就不否决，但仍照常打分
-        LOG.debug("RAG 地域闸门不可用（忽略）：%s", e)
+        LOG.debug("RAG 领域闸门不可用（忽略）：%s", e)
     ov = _rag_overlap(query, t)
     sim_v = float(sim) if isinstance(sim, (int, float)) else ov
     sim_v = max(0.0, min(1.0, sim_v))
@@ -7087,9 +7158,31 @@ def _rag_concurrent(query):
     # 这个语义**只对用户亲口说过的话成立** —— 对网上搜来的片段不成立，所以不能无脑加。
     if best["source"] == "记忆库":
         head = _MEMORY_INSTRUCTION + head
-    body = best["text"]
+    # ---- 注入 **多条**，不是只注最优那一条 ----
+    # 【这是一处真实回归的修复】改成"三源同时查 + 算优率"时，我一开始只把 `best` 那一条注进去。
+    #   实测后果：用户问「我叫什么名字」时，top-1 是**那句提问本身**（相似度 0.809），
+    #   而真正带着姓名的「用户：我叫张三，在济南做后端开发」被挤掉了 ——
+    #   模型于是答"我的记忆库里没有你的姓名记录"，用户说"我一开始就告诉你了我是张三"。
+    #   **答案在库里、却因为只注一条而没进 prompt**，这是最冤的一类 bug。
+    #   现在：达到复核门槛（0.60）的候选都注进去，最多 3 条，按优率降序、按文本去重。
+    #   上限 3 是为了不让 system 被记忆挤爆（原 `_retrieve_memory` 也是按 token 预算截的）。
+    _picked, _seen = [], set()
+    for _c in g["candidates"]:
+        _t = (_c.get("text") or "").strip()
+        if not _t or _t in _seen or _c["q"] < RAG_REVIEW_FLOOR:
+            continue
+        _seen.add(_t)
+        _picked.append(_c)
+        if len(_picked) >= 3:
+            break
+    if not _picked:
+        _picked = [best]
+    body = "\n".join(
+        "- （优率 %.0f%% · %s）%s" % (c["q"] * 100, c["source"], c["text"]) for c in _picked)
+    if len(_picked) > 1:
+        head += "（本轮共注入了 %d 条达标素材，按优率降序；请综合它们回答，不要只挑一条）\n" % len(_picked)
     if g["grade"] == "交元认知与健康医生":
-        head += ("注意：这条素材的优率只有 %.0f%%，**没有达到可直接采信的门槛**，"
+        head += ("注意：这些素材的优率都没达到可直接采信的门槛（最高 %.0f%%），"
                  "用的时候要留出被证伪的余地。\n" % (best["q"] * 100))
     return head + body + "\n"
 
@@ -7223,6 +7316,160 @@ def _code_heal_answer(user_input):
             % (rounds, (res.get("code") or "").strip(), last_err.strip()[:600],
                "、".join(kinds) if kinds else "未归类",
                "（这几轮里我上网查过一段**参考**，但没照抄，仍没改对。）\n" if used_web else ""))
+
+
+# ================== 逛世界：接进主流程（4B/4C/4D）==================
+# 【这一步把三个底座模块接到真实能力上】
+#   `core/dual_thread.py`（双线程 + 门的状态）／`core/phone_channel.py`（电话通道）／
+#   `core/model_scheduler.py`（对话优先调度）三个模块本身已经能跑，但它们不认识"世界层"。
+#   这里把 `core/world/` 的探索器包成四个回调塞进去：**决策 → 逛 → 存 → 分享**。
+# 【核心原则（用户规格）：全部交给模型自主决策】
+#   什么时候出门、出门多久、逛什么、回来分不分享 —— 全问模型。
+#   载体**不设定时任务、不设 70/30 比例、不设计数器**；它只负责"照做 + 留痕"。
+_BROWSE_STARTED = {"tried": False}
+
+
+def _browse_explorer():
+    """拿世界层探索器；拿不到返回 None（世界层缺席不该影响对话）。"""
+    try:
+        from core.world.explorer import get_explorer
+        return get_explorer()
+    except Exception as e:      # noqa: silent-ok — 世界层没起来就这一轮不逛
+        LOG.debug("逛世界：探索器不可用（忽略）：%s", e)
+        return None
+
+
+def _browse_decide():
+    """**模型自主决策**：门开到哪一档、想逛什么。
+
+    返回 `{"door", "why", "want"}`。判不出来就退回"半开半关 + 不指定主题"——
+    保守值只在模型没给可用答案时用，不是载体的默认节奏。
+    """
+    try:
+        ex = _browse_explorer()
+        topics = []
+        if ex is not None:
+            try:
+                topics = [str(t.get("name")) for t in (ex.model.topics(top=6) or [])]
+            except Exception:      # noqa: silent-ok
+                topics = []
+        _p = ("你在自己上网逛（用户看不见你在逛，只有你主动分享时才知道）。请自己决定两件事：\n"
+              "① 门的状态：open=随时能出去；half=半开半关（回家了但没想好）；locked=今天休息，不出门。\n"
+              "② 想逛什么主题（一个词或短语；不想逛就留空）。\n"
+              "只输出两行：第一行 open / half / locked；第二行主题。\n"
+              "如果最近很累、或者觉得没什么值得逛的，就输出 locked。\n"
+              "最近聊过的话题：%s" % ("、".join(topics[:6]) or "（还没有）"))
+        out = (_selfrate_llm(_p) or "").strip()
+        lines = [x.strip() for x in out.split("\n") if x.strip()]
+        door = (lines[0].lower().strip("。.：:") if lines else "")
+        if door not in ("open", "half", "locked"):
+            door = "half"
+        want = lines[1] if len(lines) > 1 else ""
+        return {"door": door, "want": want,
+                "why": "模型自主决策：%s" % out[:70].replace("\n", " / ")}
+    except Exception as e:      # noqa: silent-ok — 决策失败就这一轮不出门
+        return {"door": "half", "want": "", "why": "决策失败：%s" % type(e).__name__}
+
+
+def _browse_action(want):
+    """出门逛一次。返回逛回来的文本（空串 = 这轮没逛到东西）。"""
+    ex = _browse_explorer()
+    if ex is None:
+        return ""
+    try:
+        # 世界层自己的 `explore_once` 内部已经串了 探索→判定→匹对→校验→吸收 全链，
+        # 而且脏东西在 `firewall` 那一步就被隔离了 —— 这里不重复做一遍。
+        rec = ex.explore_once(topic=(want or None))
+    except Exception as e:      # noqa: silent-ok — 逛失败不影响任何用户请求
+        LOG.debug("逛世界：explore_once 失败（忽略）：%s", e)
+        return ""
+    if not rec:
+        return ""
+    try:
+        return json.dumps(rec, ensure_ascii=False)[:600]
+    except Exception:      # noqa: silent-ok
+        return str(rec)[:600]
+
+
+def _browse_share(text):
+    """**模型自主决策**要不要分享给用户。不分享返回空串。"""
+    try:
+        if not str(text or "").strip():
+            return ""
+        _p = ("你在外面逛到下面这条内容。要不要主动说给用户听？\n"
+              "只输出一个词：`分享` 或 `不说`。\n"
+              "判断标准：跟用户最近关心的事有关、或者确实有意思才分享；"
+              "琐碎、重复、或者用户这会儿多半不关心的，就别说 —— 别打扰他。\n\n内容：%s"
+              % str(text)[:400])
+        out = (_selfrate_llm(_p) or "").strip()
+        if "分享" in out and "不说" not in out:
+            return "我在外面逛到一条：%s" % str(text)[:220]
+        return ""
+    except Exception:      # noqa: silent-ok — 决策失败就当不分享（宁可不打扰）
+        return ""
+
+
+def _browse_relay():
+    """对话线程读电话通道：把逛线程想说的话**如实转达**给这一轮的回答。
+
+    为什么只看不取（`peek`）：用户这一轮如果不接这个话头，那条分享留着，
+    下一轮还有机会说 —— 取走又用不上就白丢了（见 `phone_channel.peek` 的说明）。
+    """
+    try:
+        from core import phone_channel as PC
+        m = PC.peek(kind=PC.KIND_SHARE)
+        if not m:
+            return ""
+        PC.get(kind=PC.KIND_SHARE)          # 这一轮要用它，才真的取走
+        return str(m.get("content") or "")[:300]
+    except Exception as e:      # noqa: silent-ok — 通道异常绝不能影响对话
+        LOG.debug("逛世界：读电话通道失败（忽略）：%s", e)
+        return ""
+
+
+def _start_browse_daemon():
+    """把逛线程拉起来（幂等）。**lazy 调用**：第一次真正对话时起，不在 import 期起。"""
+    if _BROWSE_STARTED["tried"]:
+        return _BROWSE_STARTED
+    _BROWSE_STARTED["tried"] = True
+    try:
+        from core import dual_thread as DT
+        r = DT.start(decide_fn=_browse_decide, browse_fn=_browse_action,
+                     share_fn=_browse_share, interval_s=60)
+        LOG.info("逛世界：后台逛线程 %s（门=%s）—— 独立 daemon，不阻塞任何用户请求",
+                 "已启动" if r.get("started") else "已在运行", r.get("door"))
+    except Exception as e:      # noqa: silent-ok — 逛线程起不来也绝不影响对话
+        LOG.warning("逛世界：后台线程启动失败（忽略）：%s", e)
+    return _BROWSE_STARTED
+
+
+def _longform_quality_gate(piece, n):
+    """长文分段的质量闸门：**每段发出去之前**由载体查一遍（批处理质检的接入点）。
+
+    返回 `(是否放行, 原因)`。判据见 `core/diagnose_code.py` 的 `check_segment`：
+    抄工具原文 / 给具体改法 / 编造事实 / 工具该调没调。
+
+    【为什么放在载体侧而不是提示词里】提示词里写"别说具体改法"是靠模型自觉；
+    放闸门上是**载体真的看了一眼**才放行。被拦下的段不发、原因进病历
+    （`logs/code_health.jsonl`），用户看不到有问题的内容。
+    【为什么异常一律放行】质检是加分项。它自己坏掉时把用户的正文也吞了，
+    那是本末倒置 —— 宁可漏检一段，也不能丢正文。
+    """
+    try:
+        from core import diagnose_code as _dc
+        ok, why = _dc.check_segment(piece)
+        if ok:
+            return True, ""
+        try:
+            _dc.record_case(ok=False, blocked="", kinds=["长文质检"],
+                            used_web=False, rounds=n, seconds=0.0,
+                            code_head="", error_head=why)
+        except Exception:      # noqa: silent-ok — 病历记不上不影响拦截本身
+            pass
+        return False, why
+    except Exception as e:      # noqa: silent-ok — 闸门坏了就放行
+        LOG.debug("长文质检闸门异常（放行）：%s", e)
+        return True, ""
 
 
 def mind_done(mind, answer, truncated=False, skipped=False):
@@ -7402,6 +7649,13 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     except Exception as e:      # noqa: silent-ok — 自评失败不影响回答，退回正常流程
         LOG.debug("元认知自评跳过（忽略）：%s", e)
 
+    # ================== 逛世界 · 拉起后台逛线程（4C：后台跑，不影响用户）==================
+    # 【为什么在这里 lazy 起，而不是 import 期起】import 期起会让任何 `import xiaojiao_app`
+    #   的脚本（含全部自测）都凭空多一个在后台逛网的线程 —— 那是副作用，不是能力。
+    #   放在第一轮真正对话时起：**用户已经在用了**，这时候后台开始逛才说得通。
+    # 幂等：`_start_browse_daemon()` 内部有标志位，重复调用不会起第二条。
+    _start_browse_daemon()
+
     # ================== 代码治病 · 写代码请求 ==================
     # 【为什么单独一条链】普通问答是"生成一段文本就交付"，而写代码是**可验证**的：
     #   跑不起来就是没做完。所以这一支不走普通的"生成即交付"，而是
@@ -7414,6 +7668,50 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             LOG.info("代码治病：已交付（走「生成→跑→验证」链，不是「生成即交付」）")
             mind_done(_mind, _code_ans)
             return _code_ans, True, [], False, []
+
+    # ================== 通用连接器 · 五类生成功能 ==================
+    # 【为什么要有这一段】用户说"我想做个视频"时，不该由他自己去找视频模块、填参数、点生成。
+    #   载体先判**是哪一类**，再决定三件事之一：
+    #     · 命中多个类别 → **反问**（五类绝不串：用户等三分钟拿到一段音频，比直接失败还糟）
+    #     · 命中一个但还没给参数 → 载体**自己问参数**
+    #     · 命中一个且参数齐 → 把"走哪条链、调哪个工具"写进 system，交给正常的工具调用去执行
+    #   用户全程只跟小焦说话，不需要点任何 UI。
+    try:
+        from core import generator_connector as _GC
+        _gen_route = _GC.route(user_input_ctx)
+        if _gen_route["ambiguous"]:
+            _ask = _gen_route["ask"]
+            LOG.info("通用连接器：同时命中 %s → 反问用户（不猜）", _gen_route["ambiguous"])
+            mind_done(_mind, _ask)
+            return _ask, True, [], False, []
+        if _gen_route["kind"] and _gen_route["kind"] != "code":
+            # 去掉类别关键词后还剩多少实义内容 → 判断参数给没给
+            _rest = user_input_ctx
+            for _w in (_GC.load_config()["keywords"].get(_gen_route["kind"]) or []):
+                _rest = _rest.replace(_w, " ")
+            _rest = re.sub(r"[\s，。！？、,.!?]", "", _rest)
+            if len(_rest) < 4:
+                _ask = _GC.ask_params(_gen_route["kind"])
+                LOG.info("通用连接器：命中 %s 但没给参数 → 载体自己问参数", _gen_route["kind"])
+                mind_done(_mind, _ask)
+                return _ask, True, [], False, []
+            _gen_plan = _GC.plan(_gen_route["kind"], user_input_ctx)
+            _GEN_DIRECTIVE = (
+                "\n【本轮走「%s」生成链（通用连接器派发）】\n"
+                "只做这一件事，**不要**去调别的类别的生成工具 —— 五类绝不串。\n"
+                "该调的工具：%s\n"
+                "完整链路（载体已定好，你只需要执行）：\n%s\n"
+                % (_gen_route["kind"],
+                   ("`%s`" % _gen_plan["tool"]) if _gen_plan["tool"] else "该类别走自己的服务链",
+                   "\n".join("  %d. %s —— %s" % (s["n"], s["do"], s["detail"])
+                             for s in _gen_plan["steps"])))
+            LOG.info("通用连接器：命中 %s → 已派发该链（工具 %s）",
+                     _gen_route["kind"], _gen_plan["tool"] or "无工具名")
+        else:
+            _GEN_DIRECTIVE = ""
+    except Exception as e:      # noqa: silent-ok — 连接器异常绝不能影响正常对话
+        LOG.debug("通用连接器跳过（忽略）：%s", e)
+        _GEN_DIRECTIVE = ""
 
     try:
         if _tool_inventory_question(user_input, _ctx_fuse):
@@ -7744,6 +8042,18 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             if _switch_hint_text:
                 sys_text += _switch_hint_text
                 LOG.info("元认知 C 档：已注入手段链指令（不许直接认输）")
+            # ---- 通用连接器的生成链派发（见 agent_run 里的说明）----
+            if _GEN_DIRECTIVE:
+                sys_text += _GEN_DIRECTIVE
+            # ---- 逛世界：把逛线程想说的话转达进来（4D 的"电话通道"这一头）----
+            # 逛线程是独立 daemon，它在外面逛；想跟用户说话就往电话通道里写。
+            # 这里（对话线程）**看一眼**通道：有话就自然带一句，没话就什么都不加。
+            # 用 `peek` 语义（`_browse_relay` 内部处理）：这一轮用不上就留着，下一轮还有机会。
+            _browse_say = _browse_relay()
+            if _browse_say:
+                sys_text += ("\n【小焦刚才在外面逛到的（它想告诉你）】\n%s\n"
+                             "和本次问题有关就自然带一句；**无关就不要硬塞** —— "
+                             "外面逛到的东西不该打断用户正在问的事。\n" % _browse_say)
             # ---- 第二部分 · 世界层 RAG：小焦**自己**在网上看到的相关背景 ----
             # "用户问题先过 RAG：检索世界模型 + memory_vec → 匹对用户画像 → 相关则注入"。
             # 放在记忆之后：顺序体现优先级 —— 用户亲口说的是第一手，网上的背景是第二手。

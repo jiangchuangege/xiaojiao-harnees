@@ -7,6 +7,65 @@
 
 ## [v1.0] - 2026-09-13
 
+### 补全 4 项缺口：专用工具优先 / 通用连接器 / 批处理质检 / 领域闸门 + 主动逛世界
+
+#### Added
+
+- **专用工具优先**：`_INTENT_TOOLS["query"]` 里 `get_weather` 原本排在第 5、`web_search` 第 4 ——
+  用户问「山东菏泽天气」，模型自然先抓网页、只捞到链接，最后回「我没能力」。
+  现在 `get_weather` 排第 1，`_TOOL_RULES` 写明「问天气必须优先 `get_weather`」。
+  另加 **载体侧降级** `_weather_fallback()`（挂在 `run_tool` 唯一入口）：`get_weather` 失败才改用
+  `web_search`，并在结果里强制标注「⚠️ 数据来自网页检索，可能不准」。
+  顺带修：「读一下 C:\test.txt」原本判成 **chat**，而 chat 只装 3 个工具、**根本没有 `read_file`** ——
+  新增 `_asks_file_read()` 判为 shell。
+- **通用连接器 `core/generator_connector.py`**：五类生成（视频/播客/音乐/博客/代码）的统一个人口。
+  **五类绝不串**：命中一个走那个、命中多个**反问**、都没命中走通用对话。
+  已接进 `agent_run`（多类→反问短路；单类无参数→载体自己问参数；参数齐→派发链路）。
+  内化的是**提示词映射**（进 `logs/spirit_memory/method.jsonl`），不是产物。
+  配置在 `xiaojiao_control.json` 的 `generators`，加新功能只需加一行。文档 `docs/generator-connector.md`。
+- **批处理流式质检**（`core/diagnose_code.py`）：四类问题——抄工具原文（≥24 字连续重合）／
+  **给具体改法**（"把 X 改成 Y"这类祈使式替换，这是本次要补的那一类）／编造事实（给版本号日期却无出处）／
+  工具该调没调。`check_segment` / `check_batch` / `heal_batch`，批大小可配（`quality_check_batch_size`，默认 10）。
+  已接到长文生成链：`generate_unlimited(..., quality_gate=)` 在 `on_chunk` **之前**拦下（`_longform_quality_gate`），
+  被拦的段不发、原因进病历。
+- **五类领域一票否决闸门**（`core/retriever.py`）：地域那套推广到**人物 / 时间 / 单位 / 产品 / 事件**。
+  判据不非黑即白：**提问点的主体在这条记忆里一个都没有、而它只提到了别的主体**才算冲突。
+  闭词表类（时间/单位/产品）用**精确比对**，地域/人物/事件用**子串比对**；时间做"最长匹配优先"归一化
+  （否则「去年今天」含「今天」会被判成同一时间）。地域与领域走**同一个入口** `_domain_reason`。
+- **主动逛世界（4B/4C/4D）**：`core/dual_thread.py`（双线程 + 门的三档状态）、
+  `core/phone_channel.py`（线程安全双向队列，有界、满丢最旧）、`core/model_scheduler.py`（**对话优先**调度）。
+  复用 `core/world/` 的探索器，把 `explore_once` 包成 `browse_once` 的回调；逛线程 lazy 启动（daemon）。
+  **门的状态、逛什么、要不要分享，全部由模型自主决策**（不设定时任务、不设比例、不设计数器）。文档 `docs/world-living.md`。
+- **最小权限 `core/security/minimal_access.py`**：读本地文件的七条判据（只读指定那一个／不推测／读完即弃／
+  不混进世界记忆／权限不足如实说／凭据类先警告／必须是真实文件），`need_ask` 让调用方知道"该回去问用户"。
+  文档 `docs/minimal-access.md`。
+
+#### Fixed
+
+- **"说两轮就不认识"（用户实测）**：用户说「我是张三」，聊两轮后再问就说"记忆库里没有你的姓名记录"。两层根因：
+  ① `inject.py` 只注入画像的**最后 4 条**，而 `update.py` 里事实只按**整串**去重后 append ——
+  只要之后又攒了几条别的理解，`名字：张三` 就被挤出注入窗口。改为**按键覆盖**（`名字：` 只留最新一条），
+  顺带修好"改口后新旧名字并存"。
+  ② 我上一轮把记忆注入改成"只注最优 1 条"，问「我叫什么名字」时 top-1 是**那句提问本身**（0.809），
+  带姓名的记忆被挤掉 —— 改为注入达标的**前 3 条**。
+  实测：新会话说「我叫赵六，在成都做测试开发」→ 聊两轮 → 再问 → **答出赵六**。
+- **`heal_batch` 解包 bug**：`out, batches = [], [], 0`（三个值解包给两个名字），且 `batches` 一会当列表一会当计数器。
+- **`read_once()` 没透传 `need_ask`**：调用方拿不到"该不该回去问用户"这个信号。
+
+#### Verified
+
+- `tools/test_4_gaps.py`（新建）：**60/60**。
+- `tools/test_6_capabilities.py`：**59/59**。
+- `tests/stress/run_all.py`：**248/249 · 通过率 100%**（失败 0、跳过 1）。
+- `tools/test_module_integration.py`（场景 1-8）：**19/19**。
+- `tools/check_docs.py` 0 错 0 警 · `tools/check_mermaid.py --all` **135 图 0 问题** · `tools/test_docs_audit.py` 42/42。
+- `tools/test_diagnose_code.py` 39/39 · `tools/test_spirit_memory.py` 41/41 · `tools/test_mind_stream.py` 66/66 · ruff 通过。
+
+#### Note
+
+- 长文质检闸门落地的是「**拦下 + 记录**」；"提示 4B 这句不行、让它重说"那一轮**自动修复没接在这一层**（需要重入生成循环，是更大的改动）。
+- 库里已堆了较多"用户问名字 → 小焦答不知道"的对话行，与"问名字"字面几乎相同、持续挤占 top-K（**失败自我强化**）。建议加写入过滤 + 清理存量，本轮未做。
+
 ### 五项能力接入：载体诊断 + 模型自修
 
 **🔧 主线是一句话：把"能不能算对 / 能不能跑起来 / 学到了什么"从模型手里拿到载体这边来。模型只负责"读懂和改一小步"。**

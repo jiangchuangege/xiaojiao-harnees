@@ -79,5 +79,15 @@
     "memory_top_k": 5,                               "//memory_top_k": "最多注入几条相关记忆",
     "memory_threshold": 0.6,                         "//memory_threshold": "相似度阈值（判在**原始余弦**上；时间衰减只影响排序，不会把老记忆踢出阈值）",
     "memory_max_tokens": 2000,                       "//memory_max_tokens": "注入记忆占的 token 上限"
-  }
+  },
+  "generators": {
+    "_说明": "生成类功能的统一入口（core/generator_connector.py）。类别 → 关键词表；用户说一句就由载体自己走完整条链路，不需要点任何 UI。加新功能：加一行即可，不用改代码。",
+    "video":   ["视频", "短片", "动画", "影片", "做个视频", "生成个视频", "video"],
+    "podcast": ["播客", "音频节目", "电台", "podcast", "做一期节目"],
+    "music":   ["音乐", "BGM", "曲子", "配乐", "来段歌", "music", "背景音乐"],
+    "blog":    ["博客", "文章", "长文", "写一篇", "公众号", "blog"],
+    "code":    ["代码", "函数", "脚本", "写个程序", "实现一个", "写段代码", "code"]
+  },
+  "_quality_check_batch_size_说明": "批处理质检的批大小（段）。调小 → 用户更流畅、医生更累；调大 → 用户会卡顿、医生更省。见 docs/carrier-diagnosis.md。",
+  "quality_check_batch_size": 10
 }

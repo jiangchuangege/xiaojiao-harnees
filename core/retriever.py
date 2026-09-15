@@ -310,9 +310,180 @@ def _place_tokens(text):
     return out
 
 
+# ===== 五类领域闸门（在地域闸门之后补的四类）=====
+# 【为什么要把地域那套推广开】地域闸门治的是"问菏泽、答江淮"这一类病：
+#   **同类话题、不同主体**。同样的病在另外四类上一样会犯：
+#     · 人物：问"张三最近怎么样"，记忆里是"李四升职了" → 拿别人的事答
+#     · 时间：问"今天天气"，记忆里是"去年今天下大雪" → 拿旧事当现状
+#     · 单位：问"多少公里"，记忆里是"多少英里" → 数量级直接错
+#     · 产品：问"iPhone 怎么设"，记忆里是"Android 怎么设" → 平台操作不同
+#     · 事件：问"A 项目进度"，记忆里是"B 项目验收" → 张冠李戴
+# 【判据不能非黑即白 —— 这是这套闸门唯一的设计难点】
+#   用户明确要求的两条对照：
+#     「张三最近怎么样」vs 记忆「李四升职了」        → 否决（只提到别人）
+#     「张三最近怎么样」vs 记忆「张三和李四一起吃饭」 → 保留（提到了张三）
+#   所以判据不是"有没有提到别的名字"，而是**"提问点的主体，这条记忆里有没有"**。
+#   这与地域闸门里"记忆完全没提地名时不判冲突"是同一条自律：**宁可漏检，不可误杀**。
+_TIME_TOKENS = ("今天", "今日", "昨天", "昨日", "明天", "明日", "后天", "前天",
+                "本周", "这周", "上周", "上星期", "本周内", "本月", "这个月", "上个月",
+                "今年", "去年", "前年", "明年", "去年今天", "去年同期", "刚才", "刚刚")
+_UNIT_TOKENS = ("公里", "千米", "英里", "mile", "km", "米", "英尺", "foot", "feet",
+                "厘米", "英寸", "inch", "斤", "公斤", "千克", "磅", "pound", "克",
+                "摄氏度", "华氏度", "°c", "°f", "升", "毫升", "加仑", "字节", "kb", "mb", "gb", "tb")
+_PRODUCT_TOKENS = ("iphone", "ipad", "mac", "macos", "ios", "android", "安卓", "windows",
+                   "linux", "ubuntu", "华为", "鸿蒙", "harmonyos", "小米", "redmi", "三星",
+                   "chrome", "edge", "firefox", "safari", "python", "node", "java", "微信", "qq")
+# 人物：只认**带明确身份标记**的名字（低召回、高精度）。
+# 不认识的裸名字一律不认 —— 中文人名与普通词的字面界限太模糊，
+# 硬抽会把"项目/方案/会议"当成名字，那会比不过滤更糟。
+_PERSON_MARK = ("先生", "女士", "老师", "同事", "朋友", "老板", "经理", "医生", "同学", "老婆", "老公", "儿子", "女儿")
+_EVENT_QUOTED = re.compile(r"「([^」]{2,20})」|《([^》]{2,20})》|“([^”]{2,20})”")
+_EVENT_NAMED = re.compile(r"([\u4e00-\u9fa5A-Za-z0-9]{2,12}?)(?:项目|计划|系统|平台|方案|工程)")
+
+
+def _tokens_from(text, vocab):
+    """闭词表命中（时间/单位/产品），并做**最长匹配优先**归一化。
+
+    【为什么要归一化】"去年今天" 同时含 "去年今天" 与 "今天" 两个词条，
+    不处理的话它在字面上就"包含今天"，于是「今天天气」和「去年今天下了大雪」
+    会被判成同一个时间 —— 而这恰恰是要挡的那一类（拿旧事当现状）。
+    归一化规则：**某个短词如果是某个已命中长词的子串，就把短词去掉**。
+    """
+    t = str(text or "").lower()
+    hit = {w for w in vocab if w in t}
+    drop = set()
+    for a in hit:
+        for b in hit:
+            if a != b and a in b:
+                drop.add(a)
+    return hit - drop
+
+
+def _person_tokens(text):
+    """人物词。两条路：**带身份标记的**（张三先生）与**姓氏开头的两字名**（张三）。
+
+    【为什么要走姓氏这条路】用户给的对照例子就是"张三 vs 李四"这种**裸名字**，
+    只认"张三先生"的话那条主线判据根本不生效。
+    【为什么要一份排除表】很多常用词就是姓氏开头："周末/白天/方向/方案/许多/任务"。
+    不排除就会把普通词当人名，那比不过滤更糟（会把对的记忆误杀）。
+    所以这一条是**低召回、高精度**：认得出常见姓名的两字写法，认不出的就不认
+    —— 认不出只导致漏检（保守放行），认错会导致误杀。
+    """
+    t = str(text or "")
+    out = set()
+    for mk in _PERSON_MARK:
+        for m in re.finditer(re.escape(mk), t):
+            for ln in (3, 2, 1):
+                s = m.start() - ln
+                if s < 0:
+                    continue
+                chunk = t[s:m.start()]
+                if chunk and all("\u4e00" <= c <= "\u9fff" for c in chunk):
+                    out.add(chunk + mk)
+                    break
+    for i, ch in enumerate(t):
+        if ch in _CN_SURNAMES and i + 1 < len(t):
+            nxt = t[i + 1]
+            if "\u4e00" <= nxt <= "\u9fff":
+                name = ch + nxt
+                if name not in _SURNAME_STOP:
+                    out.add(name)
+    return out
+
+
+# 常见姓氏（百家姓节选）。只用于"姓氏 + 一个字"的两字名识别。
+_CN_SURNAMES = set("赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜"
+                   "戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳唐罗高林"
+                   "郭何梁宋郑谢韩唐冯于董萧程曹袁邓许傅沈曾彭吕苏卢蒋蔡贾丁魏薛叶阎余潘杜戴夏钟汪田任姜范方石姚谭廖邹熊金陆郝孔白崔康毛邱秦江史顾侯邵孟龙万段漕钱汤尹黎易常武乔贺赖龚文")
+# 姓氏开头但**不是人名**的常用词。命中即不作为人物词。
+_SURNAME_STOP = {
+    "周末", "白天", "方向", "方案", "方法", "方案", "许多", "许可", "任务", "任何",
+    "金子", "金钱", "苏州", "马路", "马上", "毛病", "毛笔", "谢了", "谢谢", "哪里",
+    "何时", "何等", "那么", "这个", "那个", "于是", "常常", "方式", "方才", "程度",
+    "江水", "河水", "海外", "王者", "孔明", "孔子", "山西", "江西", "江苏", "广西",
+    "何时", "汪洋", "白云", "石头", "夏天", "秋冬", "田地", "任何", "史书", "顾客",
+    "侯爵", "孟子", "龙头", "万一", "段子", "钱币", "汤药", "易主", "常识", "武力",
+    "乔迁", "贺电", "赖以", "龚断", "文化", "叶某", "阎王", "余下", "杜鹃",
+}
+
+
+def _event_tokens(text):
+    """事件/项目名：引号里的名字，或"XX项目/计划/系统/平台"里的 XX。"""
+    t = str(text or "")
+    out = set()
+    for m in _EVENT_QUOTED.finditer(t):
+        g = m.group(1) or m.group(2) or m.group(3)
+        if g:
+            out.add(g.strip())
+    for m in _EVENT_NAMED.finditer(t):
+        out.add(m.group(0))
+    return out
+
+
+# 五类闸门的注册表：类别 → (抽词函数, 是否用"子串也算同一个"来比对)。
+# · 地域式比对（子串算同一个）：人物（"张三"⊂"张三先生"）、事件（"星火"⊂"星火项目"）
+# · **精确比对**：时间 / 单位 / 产品 —— 这几类是闭词表，"今天"绝不等于"去年今天"、
+#   "公里"绝不等于"英里"，用子串比对会把要挡的东西放过去。
+# 加一类新闸门只需在这里加一行 —— 判据复用同一套"层级 + 单向否决"逻辑。
+_DOMAIN_GATES = (
+    ("人物", _person_tokens, True),
+    ("时间", lambda t: _tokens_from(t, _TIME_TOKENS), False),
+    ("单位", lambda t: _tokens_from(t, _UNIT_TOKENS), False),
+    ("产品", lambda t: _tokens_from(t, _PRODUCT_TOKENS), False),
+    ("事件", _event_tokens, True),
+)
+
+
+def _domain_conflict(query, text):
+    """五类领域闸门：提问点的主体，这条记忆里**一个都没有**、而它只提到了别的主体 → 冲突。
+
+    返回冲突原因（空串 = 不冲突）。**只有在"提问侧与记忆侧都抽到了同类词、且完全不重合"
+    时才判冲突** —— 任一侧抽不到就放行。这条自律贯穿五类：
+    抽不到说明**载体判不了**，判不了就不能替用户扔掉记忆。
+
+    与地域闸门的分工：地域单独有一条（`_place_conflict`，带层级判据），
+    这里管另外四类 + 人物。两类都命中任一条即算冲突。
+    """
+    q = str(query or "")
+    t = str(text or "")
+    if not q or not t:
+        return ""
+    for name, extract, fuzzy in _DOMAIN_GATES:
+        qt = extract(q)
+        if not qt:
+            continue                      # 提问侧没点这类主体 → 这类不参与判断
+        mt = extract(t)
+        if not mt:
+            continue                      # 记忆侧没提这类 → 不判冲突（可能仍然有用）
+        if fuzzy:
+            if any(_same_place(a, b) for a in qt for b in mt):
+                continue
+        else:
+            if qt & mt:
+                continue
+        return "%s闸门：提问点的是「%s」，而这条记忆只在说「%s」" % (
+            name, "、".join(sorted(qt)), "、".join(sorted(mt)))
+    return ""
+
+
 def _same_place(a, b):
     """两个地名是不是"同一个地方"：完全相同，或一个是另一个的子串（山东 vs 山东菏泽）。"""
     return a == b or a in b or b in a
+
+
+def _domain_reason(query, text):
+    """统一闸门：地域 + 五类领域，任一命中即返回原因（空串 = 放行）。
+
+    调用方（`rerank` 与载体侧的优率计算）都走这一个入口 ——
+    两处各写一套判据早晚会不一致，而"检索判据两套"正是最难查的那种 bug。
+    """
+    try:
+        qp = _place_tokens(query)
+        if qp and _place_conflict(qp, text):
+            return "地域闸门：提问点名的地方与这条记忆对不上"
+    except Exception:      # noqa: silent-ok — 地域判不了就继续看领域那几类
+        pass
+    return _domain_conflict(query, text)
 
 
 def _place_overlap(q_places, text):
@@ -386,17 +557,28 @@ def rerank(query, hits, judge=None):
         if not RERANK:
             return hits, "精排开关关闭，全部保留"
         n0 = len(hits)
-        # ---- ① 载体确定性剔除：问了 A 地，这条只在说 B 地（零成本，不调模型）----
-        # 实测：这一层挡下的正是"问菏泽、答江淮"那条链（见上面 _place_tokens 的说明）。
+        # ---- ① 载体确定性剔除：地域 + 五类领域（零成本，不调模型）----
+        # 实测：这一层挡下的正是"问菏泽、答江淮"那条链（见上面 _place_tokens 的说明）；
+        # 现在同一条链还覆盖 人物 / 时间 / 单位 / 产品 / 事件 五类（见 `_domain_conflict`）。
         q_places = _place_tokens(query)
-        if q_places:
-            kept = [h for h in hits if not _place_conflict(q_places, h.get("text"))]
-            if len(kept) != len(hits):
-                hits = kept
-                if not hits:
-                    return hits, ("保留 0/%d 条（候选记忆提到的地点与「%s」全都对不上 → "
-                                  "这次不注入：宁可说不知道，也不拿别处的事回答）"
-                                  % (n0, "、".join(sorted(q_places))))
+        _rej = {}
+        kept = []
+        for h in hits:
+            _why = _domain_reason(query, h.get("text"))
+            if _why:
+                _rej[id(h)] = _why
+                continue
+            kept.append(h)
+        if len(kept) != len(hits):
+            hits = kept
+            if hits:
+                import logging
+                logging.getLogger("xiaojiao.retriever").info(
+                    "载体确定性闸门：剔除 %d 条｜例：%s", len(_rej), list(_rej.values())[0][:80])
+            if not hits:
+                return hits, ("保留 0/%d 条（候选记忆提到的地点/主体与「%s」全都对不上 → "
+                              "这次不注入：宁可说不知道，也不拿别处的事回答）"
+                              % (n0, "、".join(sorted(q_places)) or query[:20]))
         # 提问点了地名时**不许跳过精排** —— "同类话题、不同主体"恰恰是 top1 领先的典型形状
         # （实测那条就是领先 0.230 仍被跳过）。所以地名词在时，多花一次判官调用是值得的。
         if len(hits) < RERANK_MIN_HITS and not (q_places and hits):

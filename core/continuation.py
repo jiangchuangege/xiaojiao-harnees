@@ -757,7 +757,7 @@ def generate_unlimited(task, system="", max_per_chunk=2000, max_total=None,
                        max_retries=3, summary_interval=5, buffer_size=3,
                        parallel_prefetch=True, llm_fn=None, on_chunk=None,
                        should_stop=None, cfg=None, close_with_model=True,
-                       stream_fn=None, on_delta=None):
+                       stream_fn=None, on_delta=None, quality_gate=None):
     """按需生成任意长度的文本，段与段之间**无缝**。
 
       max_per_chunk   单次请求的输出上限（token）
@@ -1189,6 +1189,24 @@ def generate_unlimited(task, system="", max_per_chunk=2000, max_total=None,
         if summary_interval and (n % summary_interval == 0):
             summary = _brief(written, 300)
         if on_chunk:
+            # ---- 批处理质检闸门（可选；默认 None = 行为与从前完全一致）----
+            # 放在 `on_chunk` **之前**：要拦就得在用户看见之前拦 —— 看见了再打回等于让用户白等。
+            # `quality_gate(piece, n)` 返回 `(是否放行, 原因)`；**只有明确返回 False 才拦**，
+            # 异常一律放行（质检是加分项，它坏掉不能把用户的正文也弄丢）。
+            # ⚠️ 如实说明边界：这里落地的是"**拦下 + 记录**"，
+            #    "提示 4B 这句不行、让它重新说"那一轮自动修复**没有接在这一层**
+            #    （那需要重入生成循环，是更大的改动）。所以拦下时这一段不发，
+            #    但不会自动重写 —— 病历 `logs/code_health.jsonl` 里能查到被拦的原因。
+            if quality_gate is not None:
+                try:
+                    _pass, _why = quality_gate(piece, n)
+                    if not _pass:
+                        import logging as _lg
+                        _lg.getLogger("xiaojiao.continuation").warning(
+                            "质检拦下第 %d 段：%s（这一段不发给用户）", n, str(_why)[:120])
+                        continue
+                except Exception:      # noqa: silent-ok — 闸门坏了就放行，绝不吞正文
+                    pass
             try:
                 on_chunk(piece, n, len(written))
             except Exception:

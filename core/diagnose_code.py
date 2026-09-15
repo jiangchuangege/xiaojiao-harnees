@@ -34,7 +34,9 @@ import threading
 import time
 
 __all__ = ["run_code", "diagnose", "diagnosis_text", "heal", "RUN_TIMEOUT",
-           "health_path", "stats", "web_reference"]
+           "health_path", "stats", "web_reference",
+           "QUALITY_BATCH_SIZE", "quality_batch_size", "check_segment", "check_batch",
+           "heal_batch", "quality_stats"]
 
 RUN_TIMEOUT = 10           # 单次运行上限（秒）：死循环靠它拦，不靠模型自觉
 
@@ -382,3 +384,196 @@ def _strip_fence(s):
     s = str(s or "").strip()
     m = re.search(r"```(?:python|py)?\s*\n(.*?)```", s, re.S)
     return m.group(1) if m else s
+
+
+# ================== 批处理流式质检（防抄）==================
+# 【为什么还需要这一层】`_blocked_by_redline` 拦的是"整段照抄代码"，拦不住
+#   **"你把 range(n) 改成 range(n-1)"** 这种**具体改法** —— 它是文字、不是代码，
+#   红线看不见它，但它同样是"载体替模型把答案说出来了"，模型照样学不会。
+#
+# 【为什么是"批处理 + 流式"】逐段质检会让用户看到一顿一顿的输出（每段都要等医生）；
+#   整轮生成完再质检又会让用户白等一大段然后被打回重来。
+#   折中：攒够一批（默认 10 段）就**先流式给用户**，用户看得到进展；这批输出完**暂停**，
+#   医生查这 10 段：没问题就放行、继续下一批；有问题就**截断、修好、重发**，再继续。
+#   批大小是用户可调的旋钮：
+#     · 调小 → 用户更流畅（暂停更频繁但每次更短），医生更累（检查次数多）
+#     · 调大 → 用户会卡顿（等一批攒满），医生更省
+QUALITY_BATCH_SIZE = 10
+
+# "给具体改法"的典型句式。**只认祈使式的具体替换**，不认"检查一下/确认一下"这类方向性说法
+# ——后者正是载体诊断该给的东西，不能一起拦掉。
+_SPECIFIC_FIX = re.compile(
+    r"把\s*[^\s，。；]{1,40}\s*(?:改成|改为|换成|替换为|写成)"
+    r"|将\s*[^\s，。；]{1,40}\s*(?:改成|改为|换成|替换为|写成)"
+    r"|(?:改成|改为|替换为)\s*[^\s，。；]{1,30}")
+# "编造事实"的代理判据：**给了具体版本号/日期，却没有任何来源标记**
+_VERSION = re.compile(r"\bv?\d+\.\d+(?:\.\d+)?\b")
+_DATE = re.compile(r"\d{4}\s*[-/年]\s*\d{1,2}")
+_SOURCE_MARK = ("http://", "https://", "来源", "据", "官方", "文档", "引用", "参考")
+# "工具该调没调"：整段在讲**会变的外部事实**，而这一轮一个工具都没调
+_NEEDS_TOOL = ("最新", "当前版本", "官网", "刚刚发布", "实时", "现在的价格", "今年")
+
+
+def quality_batch_size(default=QUALITY_BATCH_SIZE):
+    """批大小：优先读控制文件 `quality_check_batch_size`，读不到用默认 10。"""
+    try:
+        cfg_path = os.path.join(_ROOT, "xiaojiao_control.json")
+        if os.path.exists(cfg_path):
+            with open(cfg_path, encoding="utf-8", errors="replace") as f:
+                cfg = json.load(f) or {}
+            v = cfg.get("quality_check_batch_size")
+            if isinstance(v, int) and 1 <= v <= 200:
+                return v
+            if isinstance(v, str) and v.strip().isdigit():
+                n = int(v.strip())
+                if 1 <= n <= 200:
+                    return n
+    except Exception:      # noqa: silent-ok — 配置坏了就用默认值
+        pass
+    return default
+
+
+def _copied(text, tool_texts):
+    """这一段是不是**抄了工具返回的原文**（连续 24 字以上一模一样）。"""
+    t = str(text or "")
+    if len(t) < 24:
+        return False
+    for src in (tool_texts or []):
+        s = str(src or "")
+        if len(s) < 24:
+            continue
+        for i in range(0, len(t) - 24 + 1):
+            if t[i:i + 24] in s:
+                return True
+    return False
+
+
+def check_segment(text, tool_texts=(), tool_used=False):
+    """查一段**有问题没有**。返回 `(是否通过, 原因)`。
+
+    四类问题（用户规格）与各自的判据：
+      ① **抄工具原文** —— 与工具返回文本有 ≥24 字连续重合。抄原文等于把"检索"冒充成"理解"。
+      ② **给具体改法** —— 命中"把 X 改成 Y"这类**祈使式替换**。载体只给方向，
+         给了具体改法就等于载体替模型把答案说了，模型学不会、换模型全废。
+      ③ **编造事实** —— 给了具体版本号/日期，却**一个来源标记都没有**。
+         这是代理判据（判不了"真伪"），但"给具体数字却不给出处"是可判的。
+      ④ **工具该调没调** —— 整段在讲会变的外部事实（最新/官网/实时…），而这一轮没调任何工具。
+
+    ⚠️ 边界：这是**启发式**，不是事实核查。它抓的是"表述形态上的毛病"，
+    抓不了"说得像真的但其实是编的"。所以它是**拦截器**，不是判真伪的法官。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return True, ""
+    if _copied(t, tool_texts):
+        return False, "抄了工具返回的原文（连续 24 字以上重合）—— 要把资料读进去再自己说，不是搬运"
+    m = _SPECIFIC_FIX.search(t)
+    if m:
+        return False, "给了具体改法（「%s」）—— 只许给方向（错在哪、往哪查），不许替模型把改法写出来" % m.group(0)[:30]
+    if (_VERSION.search(t) or _DATE.search(t)) and not any(s in t for s in _SOURCE_MARK):
+        return False, "给了具体版本号/日期却没有任何来源标记 —— 这多半是编的，要给不出处就别给数字"
+    if not tool_used and any(w in t for w in _NEEDS_TOOL):
+        return False, "在讲会变的外部事实（最新/官网/实时…）却一个工具都没调 —— 该查就去查"
+    return True, ""
+
+
+def check_batch(segments, tool_texts=(), tool_used=False):
+    """查一批。返回 `{"ok", "bad": [{"i", "reason", "text"}], "checked"}`。
+
+    `i` 是**批内序号**（从 1 开始），调用方据此决定截断到哪一段。
+    """
+    bad = []
+    segs = list(segments or [])
+    for i, s in enumerate(segs, 1):
+        ok, why = check_segment(s, tool_texts=tool_texts, tool_used=tool_used)
+        if not ok:
+            bad.append({"i": i, "reason": why, "text": str(s)[:120]})
+    return {"ok": not bad, "bad": bad, "checked": len(segs)}
+
+
+def heal_batch(generate_fn, llm_fn, total_segments, batch_size=None,
+               tool_texts=(), tool_used=False, context_tail="", on_batch=None):
+    """批处理流式质检的主循环：**生成一批 → 质检 → 有问题就截断修好重发 → 再下一批**。
+
+    `generate_fn(n, tail) -> [段落...]`：生成 n 段；`tail` 是**前一批末尾**，
+    传给它才能保证衔接（不然第 2 批开头会跟第 1 批结尾接不上，读起来是断裂的）。
+    `llm_fn(messages) -> str`：修那一段时调模型（"这句不行，重新说"）。
+
+    返回 `{"segments", "batches", "fixed", "rejected", "blocked_at"}`：
+      · `segments` 是**最终通过质检**的段落序列；
+      · `batches` 是每一批的真实记录（自测取证用）；
+      · `blocked_at` 非空表示某段修了也没过、停在那里（**如实停下，不硬凑**）。
+    """
+    size = int(batch_size or quality_batch_size())
+    size = max(1, size)
+    out, batch_records = [], []
+    n_batches = 0
+    fixed = rejected = 0
+    tail = str(context_tail or "")
+    done = 0
+    while done < int(total_segments):
+        n = min(size, int(total_segments) - done)
+        try:
+            segs = list(generate_fn(n, tail) or [])
+        except Exception as e:      # noqa: silent-ok — 生成失败就如实停，不假装产出
+            return {"segments": out, "batches": batch_records, "fixed": fixed,
+                    "rejected": rejected, "blocked_at": "生成失败：%s" % type(e).__name__}
+        if not segs:
+            return {"segments": out, "batches": batch_records, "fixed": fixed,
+                    "rejected": rejected, "blocked_at": "生成器没有产出内容"}
+        n_batches += 1
+        batch_records.append({"n": n_batches, "segments": len(segs),
+                               "ok": None})
+        # ---- 这批先"流式给出"（on_batch 回调即用户的可见进度），再暂停质检 ----
+        if on_batch:
+            try:
+                on_batch(n_batches, list(segs))
+            except Exception:      # noqa: silent-ok — 回调是锦上添花
+                pass
+        chk = check_batch(segs, tool_texts=tool_texts, tool_used=tool_used)
+        batch_records[-1]["ok"] = chk["ok"]
+        batch_records[-1]["bad"] = len(chk["bad"])
+        if chk["ok"]:
+            out.extend(segs)
+            done += len(segs)
+            tail = segs[-1]
+            continue
+        # ---- 有问题：截断到第一处问题之前，修好、重发 ----
+        first = chk["bad"][0]
+        keep = segs[:first["i"] - 1]
+        bad_text = segs[first["i"] - 1]
+        out.extend(keep)
+        done += len(keep)
+        _prev = (keep[-1] if keep else tail)
+        try:
+            _msg = ("下面这一句不行：%s\n原句：%s\n请**重新说这一句**：只给重写后的那一句，"
+                    "不要解释。" % (first["reason"], str(bad_text)[:300]))
+            new = str(llm_fn([{"role": "user", "content": _msg}]) or "").strip()
+        except Exception:      # noqa: silent-ok — 修不动就停在这一段
+            new = ""
+        ok2, why2 = check_segment(new, tool_texts=tool_texts, tool_used=tool_used) if new else (False, "模型没有给出重写")
+        if ok2:
+            out.append(new)
+            done += 1
+            fixed += 1
+            tail = new
+            continue
+        rejected += 1
+        return {"segments": out, "batches": batch_records, "fixed": fixed, "rejected": rejected,
+                "blocked_at": "第 %d 批第 %d 段修了仍未过：%s" % (n_batches, first["i"], why2)}
+    return {"segments": out, "batches": batch_records, "fixed": fixed,
+            "rejected": rejected, "blocked_at": ""}
+
+
+def quality_stats():
+    """质检自检信息：当前批大小与它来自哪里（配置还是默认）。"""
+    cfg_path = os.path.join(_ROOT, "xiaojiao_control.json")
+    src = "默认"
+    try:
+        if os.path.exists(cfg_path):
+            with open(cfg_path, encoding="utf-8", errors="replace") as f:
+                if "quality_check_batch_size" in (json.load(f) or {}):
+                    src = "配置"
+    except Exception:      # noqa: silent-ok
+        pass
+    return {"batch_size": quality_batch_size(), "source": src, "path": cfg_path}

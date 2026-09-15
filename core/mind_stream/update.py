@@ -267,8 +267,23 @@ def after_user(st, text):
     if facts:
         cur = list(st.get("user_understanding") or [])
         for f in facts:
-            if f not in cur:
-                cur.append(f)
+            if f in cur:
+                continue
+            # 【按"键"合并，不是按整串去重 —— 这是一处真实 bug 的修复】
+            #   画像里的事实都是「键：值」形状（`名字：张三` / `城市：济南` / `职业：后端开发`）。
+            #   原来的写法只在**整串相同**时才去重，于是有两个后果：
+            #     ① 用户改口（"我叫李四"）会**多出一条** `名字：李四`，与 `名字：张三` 并存，
+            #        模型不知道该信哪条；
+            #     ② 更关键的是 —— `inject.py` 只注入**最后 4 条**。只要之后又攒了几条别的理解，
+            #        `名字：张三` 就被**挤出注入窗口**，表现就是用户实测的那句
+            #        「我一开始就告诉你了我是张三」，**说两轮就不认识了**。
+            #   改成按键覆盖：同名键只留最新一条；键的种类天然有限（名字/城市/职业/偏好…），
+            #   不会被一次性理解挤掉。
+            key = f.split("：", 1)[0] if "：" in f else ""
+            if key:
+                cur = [x for x in cur
+                       if not (isinstance(x, str) and x.startswith(key + "："))]
+            cur.append(f)
         st["user_understanding"] = cur[-MAX_UNDERSTANDING:]
 
     if _has_question(s):
