@@ -3155,6 +3155,39 @@ def _tired_decision():
     out["raw"] = str(r.get("raw") or "")
     out["decision"] = str(r.get("decision") or "")
     said = str(r.get("said") or "")
+    # ================== 医生纠事实：**纠了之后它自己再决定** ==================
+    # 【实测抓到的】它写下「我还有 72% 的精力」，而当时实际是 **28%**。
+    #   决定是它自己做的（对），但它**拿着错的信息**做的决定（有问题）。
+    # 【医生只纠事实、不碰决定】把对的事实给它，然后**再问一次** ——
+    #   新的决定仍然由它自己写下；载体一个字都不替它说"你该睡/不该睡"。
+    try:
+        _pm = _pain_mod()
+        if _pm is not None and said:
+            _real = {"精力": "%.0f%%" % (lv * 100)}
+            _rev = _pm.fact_review(said, _real)
+            if _rev.get("corrected"):
+                LOG.info("医生纠事实：**它读错了** —— %s", "；".join(
+                    c["text"] for c in _rev["corrections"])[:100])
+                out["fact_corrections"] = _rev["corrections"]
+                _extra2 = (out["fact"] + "\n" + _rev["fact_text"]
+                           + "\n（决定还是你自己下 —— 医生只把事实弄对，不替你决定。）")
+                try:
+                    r2 = per_mod.decide_sleep(llm_fn=_perceive_llm, extra=_extra2)
+                except Exception:      # noqa: silent-ok
+                    r2 = {}
+                if r2.get("decision"):
+                    LOG.info("医生纠完事实 → **它自己重新决定**：「睡：%s」｜它说「%s」",
+                             r2.get("decision"), str(r2.get("said"))[:50])
+                    out["decision_before_correction"] = out["decision"]
+                    out["decision"] = str(r2["decision"])
+                    said = str(r2.get("said") or said)
+                    out["raw"] = str(r2.get("raw") or out["raw"])
+                else:
+                    LOG.info("医生纠完事实 → 它这次没写下决定（**按没决定处理：不睡**）")
+            else:
+                LOG.info("医生查过事实：它说的和真实值对得上（精力 %.2f）", lv)
+    except Exception as _e:      # noqa: silent-ok — 纠错失败不该影响它原本的决定
+        LOG.debug("纠事实失败（忽略）：%s", _e)
     out["said"] = said
     # **载体只认它写下的那一栏**：「睡：要」→ 它决定睡；「睡：不要」或没写清楚 → 不睡。
     out["wants_rest"] = (out["decision"] == "要")

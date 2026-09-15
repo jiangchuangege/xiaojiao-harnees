@@ -48,12 +48,13 @@
 """
 import json
 import os
+import re
 import shutil
 import threading
 import time
 
 __all__ = ["LIFE", "GATES", "LAYERS", "diagnose", "treat", "doctor", "report", "stats",
-           "quarantine_dir", "history", "MAX_TEXT"]
+           "quarantine_dir", "history", "MAX_TEXT", "check_fact", "fact_review"]
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DIR = os.path.join(_ROOT, "logs", "pain")
@@ -422,6 +423,89 @@ def report(n=20):
 
 def history(n=20):
     return report(n)["recent"]
+
+
+# ================== 纠事实：治"它读错了事实" ==================
+# 【为什么加这一条 —— 实测抓到的】
+#   它决定睡不睡时写下一句「我还有 72% 的精力」，而当时实际是 **28%**。
+#   **决定是它自己做的（对），但它拿着错的信息做决定（有问题）。**
+#   根因：它和身体之间隔着"文字"——身体的状态要变成文字才能进模型，4B 读文字会读错。
+#   这层文字**取消不掉**（物理限制），但**可以纠错**。
+#
+# 【医生在这里做什么、不做什么（这条最要紧）】
+#   做：把**对的事实**给它 —— "你刚才说 72%，实际是 28%"。
+#   不做：**不碰它的决定**。不替它说"你该睡""你不该睡"；不因为事实变了就改它的选择。
+#   也就是说：**纠事实 ≠ 替它决定**。
+#   与"给原料不给成品"同一条规矩：医生给对的事实，它自己推、自己决定。
+_PCT_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
+_MIN_RE = re.compile(r"睡[了着]?\s*(\d+(?:\.\d+)?)\s*(分钟|分|小时|个小时|秒)")
+# 一天里的时段（真实时段由调用方给；这里只认它话里说的那个）
+_TOD = (("凌晨", range(0, 5)), ("早上", range(5, 9)), ("上午", range(9, 12)),
+        ("中午", range(11, 14)), ("下午", range(12, 18)), ("傍晚", range(17, 20)),
+        ("晚上", range(18, 24)), ("夜里", range(21, 24)))
+
+
+def check_fact(said, real):
+    """**纠事实**：它说的数字/状态和真实的**对不上** → 返回纠正（不返回决定）。
+
+    `real` 是载体手里的真值，例如 `{"精力": "28%", "睡了多少": "1 分", "几点": "晚上"}`。
+    返回 `{"ok", "corrections": [{"what","said","real","text"}], "fact_text"}`；
+    `fact_text` 是**作为事实**给它的那几句（不是结论、不是劝它改决定）。
+    """
+    t = str(said or "")
+    out = {"ok": True, "corrections": [], "fact_text": ""}
+    rl = {str(k): str(v) for k, v in (real or {}).items()}
+
+    # ---- ① 百分比（最主要的那种：它把 28% 读成 72%）----
+    if "精力" in rl:
+        want = _PCT_RE.search(rl["精力"])
+        got = _PCT_RE.search(t)
+        if want and got and got.group(1) != want.group(1):
+            out["corrections"].append({
+                "what": "精力", "said": "%s%%" % got.group(1), "real": "%s%%" % want.group(1),
+                "text": "你刚才说「%s%%」，实际是 %s%%" % (got.group(1), want.group(1))})
+        elif want and not got:
+            out["corrections"].append({
+                "what": "精力", "said": "（没说数）", "real": "%s%%" % want.group(1),
+                "text": "你刚才没提精力；实际是 %s%%" % want.group(1)})
+
+    # ---- ② 睡了多久 ----
+    if "睡了多少" in rl:
+        want = _MIN_RE.search("睡了 " + rl["睡了多少"])
+        got = _MIN_RE.search(t)
+        if want and got and (got.group(1), got.group(2)[0]) != (want.group(1), want.group(2)[0]):
+            out["corrections"].append({
+                "what": "睡了多久", "said": "%s%s" % (got.group(1), got.group(2)),
+                "real": rl["睡了多少"],
+                "text": "你刚才说「睡了 %s%s」，实际是 %s" % (got.group(1), got.group(2),
+                                                            rl["睡了多少"])})
+
+    # ---- ③ 一天里的时段 ----
+    if "几点" in rl:
+        real_tod = str(rl["几点"])
+        for word, _rng in _TOD:
+            if word in t and word != real_tod and real_tod and word not in real_tod:
+                out["corrections"].append({
+                    "what": "时段", "said": word, "real": real_tod,
+                    "text": "你刚才说「%s」，实际是「%s」" % (word, real_tod)})
+                break
+
+    if out["corrections"]:
+        out["ok"] = False
+        out["fact_text"] = "【医生纠的事实（不是结论，也不改你的决定）】\n" + "\n".join(
+            "· " + c["text"] for c in out["corrections"])
+    return out
+
+
+def fact_review(said, real, llm_fn=None, extra=""):
+    """**检测 → 纠正 → 让它自己再决定**。返回 `{"corrected", "said", "fact_text"}`。
+
+    ⚠️ 载体**不替它改结论**：它只是**再问一次**，并把**对的事实**一并给它；
+    新的决定仍然由它自己写下（`decide` 由调用方给，本函数不碰）。
+    """
+    r = check_fact(said, real)
+    return {"corrected": bool(r["corrections"]), "corrections": r["corrections"],
+            "fact_text": r["fact_text"], "said": str(said or "")}
 
 
 def stats():
