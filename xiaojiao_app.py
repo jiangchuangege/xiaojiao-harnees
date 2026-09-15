@@ -1447,6 +1447,13 @@ _ROUND = threading.local()
 _DEDUP_EXCLUDE = frozenset({
     "write_file", "edit_file", "open_app", "ask_user", "background", "background_result",
     "capture_screen", "screen_text", "now", "check_env",
+    # 【校验类必须排除 —— 这是"画图卡死 3 轮"的直接原因】
+    # `archify_validate` 这类工具的结果取决于**文件内容**，而参数里只有路径。
+    # 模型改完 spec 再用同一路径校验时，`(工具, 参数)` 一模一样 → 去重把**上一次的旧结果**
+    # 还回去 → "改完再校验"永远拿到同一批旧错误 → 连续 3 轮必红。
+    # 用户看到的就是截图里那两条一字不差重复的校验报错。
+    "archify_validate", "archify_check", "archify_inspect", "archify_visual_check",
+    "archify_preview", "archify_metrics", "archify_compare",
 })
 
 
@@ -1463,9 +1470,31 @@ def _round_begin():
 
 
 def _round_dedup_key(name, args):
-    """(工具, 参数) 的规范化键。参数排序后再序列化，键顺序不同也算同一个调用。"""
+    """`(工具, 参数, 目标文件指纹)` 的规范化键。
+
+    参数排序后再序列化，键顺序不同也算同一个调用。
+
+    【为什么必须带上"目标文件的内容指纹"】这是一处真实故障的修复 ——
+    用户实测「画图」：spec 连续 3 轮没通过校验，而且每一轮的报错**一字不差重复**。
+    根因是去重键只有 `(工具, 参数)`，而校验类工具的结果取决于**文件内容**：
+    模型改完 spec、拿同一个路径再校验时，键完全一样 → 去重直接把**上一次的旧结果**还回去，
+    于是"改完再校验"看到的永远是同一批旧错误，**这个循环从设计上就不可能收敛**。
+
+    带上指纹后：**文件一变，键就变，校验才会真的重跑**；文件没变时仍然去重
+    （省掉真正重复的那一次）。用「大小 + 修改时间」做指纹：便宜，且对本场景足够 ——
+    内容改了却大小与 mtime 都不变，在实践中基本不会发生。
+    """
     try:
-        return name + "|" + json.dumps(args or {}, sort_keys=True, ensure_ascii=False)
+        a = dict(args or {})
+        sig = ""
+        for k in ("path", "file", "file_path", "spec", "spec_path", "target", "input"):
+            v = a.get(k)
+            if isinstance(v, str) and v and os.path.exists(v):
+                try:
+                    sig += "|%s:%d:%d" % (k, os.path.getsize(v), int(os.path.getmtime(v)))
+                except Exception:      # noqa: silent-ok — 取不到指纹就不带，退回原行为
+                    pass
+        return name + "|" + json.dumps(a, sort_keys=True, ensure_ascii=False) + sig
     except Exception:      # noqa: silent-ok — 序列化不了（含非 JSON 值）就不去重，宁可多抓一次
         return ""
 
