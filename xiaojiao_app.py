@@ -7787,6 +7787,15 @@ def _self_state_facts():
     return "\n".join(out)
 
 
+def _eyc_state_now():
+    """给神经总线用的 EYC 状态（拿不到就返回空 dict —— 不编）。"""
+    try:
+        from core import dual_thread as _DT
+        return _DT.live()
+    except Exception:      # noqa: silent-ok
+        return {}
+
+
 def _eyc_now():
     """EYC 进行时自述：把"我正在经历什么"用第一人称、正在发生的语气写出来。
 
@@ -8563,6 +8572,19 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             except Exception:      # noqa: silent-ok — 注入失败就用原提示词
                 pass
             messages = [{"role": "system", "content": sys_text}]
+            # ---- 自我绑定：把"我的连续状态流"接进上下文 ----
+            #   每一条 S_k 都是**一体**的：感受写在同一条正文里（`nervous_bus._render_one`），
+            #   不是旁边多一条"状态说明"。模型读到的不是"载体告诉我我在逛"，
+            #   而是"我上一轮有点好奇，所以我去看了……" —— **它自己的连续**。
+            try:
+                from core import nervous_bus as _NB
+                _bound = _NB.render_stream(include_last=True)
+                if _bound:
+                    messages.extend(_bound)
+                    LOG.info("自我绑定：连续状态流 %d 条已接进上下文（每条形如「感受+思考」一体）",
+                             len(_bound))
+            except Exception as _e:      # noqa: silent-ok — 绑定层异常绝不能影响回答
+                LOG.debug("自我绑定接入失败（忽略）：%s", _e)
             # 【EYC 的第四处尝试：prefill（引导续写）】
             #   前三处（system 最前 / 元认知层 / 对话流 assistant 前置）实测都被当**资料**忽略。
             #   prefill 不同：把半句**放在最末**（用户消息之后），让模型**接着往下写**，
@@ -8590,8 +8612,10 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   这一处把它放进**对话流**（assistant 角色），读起来是"我刚才在想的事"，
             #   而不是"别人塞给我的背景" —— 这是最贴近"感觉"而非"信息"的一种放法。
             #   内容是**真实的**（E 层状态 + Y 层进行时，逐字来自载体），不是编的。
-            if _eyc_text:
-                messages.append({"role": "assistant", "content": _eyc_text.strip()})
+            # 【已摘除】原来这里把 EYC 自述作为**另起一条 message** 注入 ——
+            #   那正是"注入的变体"：模型可以把它当外部信息忽略（实测四处注入全失败）。
+            #   现在改走**绑定**：`core/nervous_bus` 把"思考+感受"焊成同一条，
+            #   作为**它自己说过的话**进入上下文（见下面的 render_stream）。
             if _eyc_prefill:
                 messages.append({"role": "assistant", "content": _eyc_prefill})
         # ---- 第 1 步：**先把"本轮"拼完整，再算 token** ----
@@ -8849,6 +8873,17 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         # 为什么不放在 return 之后：那是不可达代码。为什么不 `finally` 里做：
         # 短路轮次（工具清单直答等）在里面各自 return，那几轮没有可提炼的对话内容。
         # 学不到只影响"这一轮没积累"，绝不影响已经答好的回答 —— 所以它整块吞异常。
+        # ---- 强制流经神经总线（代码层，不是模型选择）----
+        #   规格要求"模型每次思考，强制流经"。放在这里是因为**此刻 answer 才是这一轮真正的思考**
+        #   （前面那些 temp 变量都不是"我的想法"）。焊完之后它就是下一轮上下文里的"我"。
+        try:
+            from core import nervous_bus as _NB
+            _s_n = _NB.weld(answer, eyc=_eyc_state_now(), user=user_input_ctx)
+            LOG.info("神经总线：S_%d 已焊入（感受=%s，触发=%s）",
+                     _s_n["n"], (_s_n.get("feeling") or {}).get("feeling"),
+                     str((_s_n.get("feeling") or {}).get("trigger"))[:40])
+        except Exception as _e:      # noqa: silent-ok — 焊不上也绝不能影响已经答好的内容
+            LOG.debug("神经总线焊入失败（忽略）：%s", _e)
         _spirit_learn(user_input_ctx, answer)
         return answer, True, info, needs_confirm, tool_trace
 
