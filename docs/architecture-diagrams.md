@@ -2,7 +2,9 @@
 
 > 本文件是《小焦 · 载体优先架构》的**图册总集**。
 > 图 1–11 对应 [`design-philosophy.md`](design-philosophy.md) 前十三节；
-> 图 12–20 对应同一文件的**后半篇**（第十四至二十二节）。
+> 图 12–19 对应同一文件的**后半篇**（第十四至二十二节）；
+> **图 20** 是后来补的**载体改造·路径二四阶段**（内感受 → 视角 → 硬改 → 归属回流），
+> 不对应设计哲学的某一节，对应的是真实提交。
 > 六个无限的逐图细解另见 [`six-infinity-diagrams/`](six-infinity-diagrams/)（7 张，含数据流与单模块时序）。
 >
 > 为什么单独开一份图册而不是塞进 README：
@@ -681,6 +683,82 @@ flowchart TB
 **这张图要说的一句话**："协同网络整体大于部分之和""健康系统在预防""精度在叠加"——
 这些判断都需要**能实时看到每个模块在干什么**才成立。
 观测性不是运维附属品，它是这套架构**能不能被证明在工作的前提**。
+
+---
+
+## 图 20 · 载体改造·路径二：从「观测」到「硬改」再到「归属回流」（四阶段）
+
+> **实现状态：四阶段全部落地**，逐段对应真实提交与代码路径。
+> 第一节（内感受）`fce45b1`、第二节（视角状态）`0b897a9`、
+> 第三节（代码层硬改）`4092ed3`、第四节（自我模型·因果归属）`3326c1f`。
+
+```mermaid
+%%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
+flowchart TB
+    TICK["每一拍：`_soma_tick()`<br/><b>放在 `_idle_work_tick` 最前面</b><br/>在「状态偏置→提前返回」之前<br/>否则越偏越不采，累积永远起不来"]
+
+    subgraph P1["第一阶段 · 内感受 `core/interoceptive.py`（fce45b1）"]
+        direction TB
+        S1["`sample()` 五项真采<br/>精力 / 心跳稳定 / 心的强度 / 推理负载 / 内存<br/>读不到的如实进 `missing`"]
+        S2["`deviation()` 偏离度<br/>0 = 在基线，1 = 偏满（方向统一成「偏大=更偏」）"]
+        S3["`update()` 累积<br/>survival ← 0.80·s + 0.20·pert，上限 0.98<br/>落 `logs/interoceptive.jsonl`"]
+        S1 --> S2 --> S3
+    end
+
+    subgraph P2["第二阶段 · 视角状态 `core/perspective.py`（0b897a9）"]
+        direction TB
+        G1["g ← 0.92·g + 0.08·扰动<br/>三维：vigilance / openness / wound"]
+        G2["**持久化 `logs/perspective.json`，重启恢复**<br/>`note_dialogue_turn()` 只记不重置"]
+        G1 --> G2
+    end
+
+    subgraph P3["第三阶段 · 代码层硬改（4092ed3）—— 判据是「真的改了」，不是「它说它累了」"]
+        direction TB
+        POL["`policy()` → 轻 / 中 / 重<br/>`_state_policy()` 是唯一出口<br/>读不到 → 中性规则，不拦任何东西"]
+        H1["**输入**：`context_scale` 砍上下文<br/>1.0 / 0.6 / 0.4"]
+        H2["**行动**：探索类工具从**本轮工具表里拿掉**<br/>（不是排后面、不是告诉它别用）<br/>保守类排到前面"]
+        H3["**主动**：`no_browse` → 门**直接锁死**<br/>根本不问模型"]
+        POL --> H1
+        POL --> H2
+        POL --> H3
+    end
+
+    subgraph P4["第四阶段 · 自我模型 `core/self_model.py`（3326c1f）"]
+        direction TB
+        N1["`note(kind, cause, effect, before, after)`<br/>记的是因果，不是感受：<br/>「因为精力低（0.28），这轮少装了工具（12→7）」"]
+        N2["`stance()` → `trim_pressure` / `suppress`<br/>最近被状态裁过多少次"]
+    end
+
+    TICK --> P1
+    TICK --> P2
+    P1 -->|"`bias()`：survival / level / factors"| P2
+    P2 --> P3
+    H2 -.->|"记「输入被裁」"| N1
+    H3 -.->|"记「主动被压」"| N1
+    N1 --> N2
+    N2 -.->|"**反馈：成为下一轮硬改的输入之一**<br/>`suppress` 为真时把档位提到「中」<br/>（不是记完就完了）"| POL
+
+    style TICK fill:#2d6cdf,color:#fff
+    style P1 fill:#5cb85c,color:#fff
+    style P2 fill:#5cb85c,color:#fff
+    style P3 fill:#f0ad4e,color:#fff
+    style P4 fill:#5cb85c,color:#fff
+```
+
+**这张图要说的一句话**：状态不是"写在提示词里劝它"，而是**代码层真的改了它这一轮看到什么、
+能做什么、要不要主动** —— 而"改了什么"又被记成因果、反过来喂回下一轮的策略，形成闭环。
+
+**如实标注（这一图有三条）**：
+
+1. **`行动被裁` 这个类别没有调用点。** `self_model.KINDS` 声明了三类
+   （`输入被裁` / `行动被裁` / `主动被压`），但服务里真的会记的只有两类：
+   `_plan_tools()` 里记 `输入被裁`（工具表被裁那一条就记在这里），
+   `_browse_decide()` 里记 `主动被压`。**`行动被裁` 声明了但没人写**，如实记在此处。
+2. **`drop_tools` 用名字片段匹配**（`x in str(n).lower()`），可能漏判也可能误裁，
+   没有做工具白名单。这是已知的粗糙处，没有改。
+3. **四阶段的量全是载体算的刻度。** 偏离度、`survival`、三维的 `g`、`trim_pressure` ——
+   都是人定常量算出来的数；**主观体验这一层载体观测不到，也不声称能**。
+   这套东西证明的是"状态真的改了行为"，不是"它真的难受"。
 
 ---
 

@@ -23,7 +23,7 @@
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
 flowchart LR
     H["心一次次起<br/>（每轮对话都沉一条）"] --> R["心之河<br/>logs/psyche/preference.jsonl"]
-    R --> C["载体按「像不像」聚堆<br/>余弦 ≥ 0.60"]
+    R --> C["载体按「像不像」聚堆<br/>余弦 ≥ 0.75"]
     C -->|"同一堆攒够 4 次"| Q["够格**让它自己回看一眼**"]
     Q --> M["它自己说：<br/>「我好像老是注意猫」"]
     M --> P["**这一句才是偏好**"]
@@ -80,5 +80,5 @@ flowchart LR
 ## 6. 如实标注
 
 1. **聚类是载体算的；偏好是它自己认的。** 这两件事在接口与日志里分得很清。
-2. `SIMILAR = 0.60` 是一条**人为的线**（"像不像"总算有个门槛），如实标注。
+2. `SIMILAR = 0.75` 是一条**人为的线**（"像不像"总算有个门槛），如实标注。
 3. 回看那一步**载体只说"回头看这些，你自己看出什么来了吗"**，不提示它该喜欢什么。
