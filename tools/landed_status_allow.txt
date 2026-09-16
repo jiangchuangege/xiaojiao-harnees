@@ -1,0 +1,22 @@
+# 落地状态基线：这些 not-done 句子已逐条判过，是【对的】或【工具误报】
+# 格式：<指纹>\t<文件:行 摘要>
+# ⚠️ 基线≠证明都对；每条都可能随时间变错，需定期重审。
+3a8619ff5429c8a9	README.md:114 [元认知自评] | 校验这一环 | 已接入：答前自评 + 复读检测（检出即截断重来）。**未落地**：「同题跑 N 次 + 投票择一」的完整流水线 | 无中间校验，一次输出即成品 | `core/
+8f7a631909c4f2aa	docs/api.md:10 [上下文四层防护] **摘要**：小焦的对外接口清单。分为两部分：给任意 OpenAI 兼容客户端使用的 `/v1`，以及网页与外部脚本使用的 `/api/*` 内部接口。表中所有端点都对应代码里真实
+8cfc1a4dd8a07a7e	docs/architecture-diagrams.md:524 [元认知自评] 现状：目录与写入路径**尚未落地**；已有的元认知边界档案与记忆深度改的是**数据**，不是**流程**。
+47685ea3f5232692	docs/brain-switch.md:181 [睡眠/精力/心跳] | vLLM 与 DeepSeek 等 | vLLM 的睡眠模式 | 未接入。注册表里预留了扩展位置，加进去即可被调度 |
+dd4a9e348a63c434	docs/brain-switch.md:215 [睡眠/精力/心跳] 7. vLLM 睡眠模式与图像大脑（SD3）均为预留扩展，尚未落地。
+21401a719f009c3a	docs/coding-brain.md:127 [睡眠/精力/心跳] vLLM 等其他引擎的睡眠模式尚未接入。
+75e12cfe65d73257	docs/modules/01-carrier-core.md:400 [记忆污染五修] 多答案投票器尚未落地，目前真正运行的「多候选择一」只覆盖模型密钥与工具结果两类。
+859aa71d3c15c6c4	docs/modules/02-six-infinity.md:51 [上下文四层防护] | ⑥ | 单次请求永不超 | 精确按需装配，保证每次请求都装得下 | `_estimate_tokens`、`_plan_tools`、`_fit_context`、`_max_
+58adf6d476ac9403	docs/modules/08-metacognition.md:16 [上下文四层防护] [摘要](#1-摘要) · [背景与问题](#2-背景与问题) · [设计目标](#3-设计目标) · [架构与原理](#4-架构与原理) · [接口与实现](#5-接口与实现) 
+4942a04e1c593121	docs/modules/08-metacognition.md:100 [元认知自评] - **`cross_check()` 仍然没有接入对话主流程**（调用点只有自测），
+b0de460fd872bed9	docs/modules/08-metacognition.md:299 [元认知自评] 仍**未接入**的是 `cross_check()` —— 它只有自测调用点，用户对话时不会触发。详见 4.1 节。
+a0a177c4d8df86f1	docs/modules/08-metacognition.md:331 [元认知自评] | 2026-09-14 | v1.0 | 首次发布。记录三个子模块的接口、判据与阈值，并标注自评与交叉检查尚未接入对话主流程 | 小焦项目 |
+f9d7a422016c0499	docs/modules/09-persona.md:17 [上下文四层防护] [摘要](#1-摘要) · [背景与问题](#2-背景与问题) · [设计目标](#3-设计目标) · [架构与原理](#4-架构与原理) · [接口与实现](#5-接口与实现) 
+fd3f09986ebc9591	docs/modules/10-boost.md:17 [上下文四层防护] [摘要](#1-摘要) · [背景与问题](#2-背景与问题) · [设计目标](#3-设计目标) · [架构与原理](#4-架构与原理) · [接口与实现](#5-接口与实现) 
+1c4b1d41ea8d5a01	docs/modules/11-post-chapters.md:172 [记忆污染五修] | 聚合精度 | 仓库中没有多答案投票器，`core/central/__init__.py` 内也不含仲裁逻辑。密钥优先级解析在 `xiaojiao_app.py` 的 `_re
+453455bbbc6ee1d5	docs/modules/11-post-chapters.md:298 [元认知自评] **仍未接入**的是答后交叉检查 —— `cross_check()` 在仓库中只被
+142b0e698b1d970e	docs/modules/11-post-chapters.md:1781 [记忆污染五修] | 3 | 聚合精度的落点是"`core/central/` 冲突仲裁，多 LLM key 择一、工具结果择一" | `core/central/__init__.py` 中不含任
+a3d4cc2b7dd4ecc4	docs/six-infinity.md:77 [上下文四层防护] | ⑥ 单次永不超 | `_estimate_tokens` `_plan_tools` `_fit_context` `_max_context_tokens` | 已实现 + 
+d3ef67909fef4ed4	docs/six-infinity.md:79 [工具无限第5步] 第 5 步的四个子项（工具调度强制路由、工具结果上下文隔离、工具结果校验、archify 工作流强制）**已经落地**，见 [4.4.5](#445-第-5-步已落地的四项)；第 
