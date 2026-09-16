@@ -479,13 +479,14 @@ class XXPlugin:
 
 ### 4.2 抓取插件：ScraplingBridge
 
-`plugins/scrapling_bridge.py`（3031 行）对外暴露 18 个工具：
+`plugins/scrapling_bridge.py`（3031 行）对外暴露 18 个工具，分三组：
 
-| 分组 | 工具 |
-| --- | --- |
-| 原生 13 个（与上游同名） | `make_request`、`bulk_get`、`fetch`、`bulk_fetch`、`stealthy_fetch`、`bulk_stealthy_fetch`、`open_session`、`open_request_session`、`close_session`、`list_sessions`、`session_fetch`、`session_make_request`、`screenshot` |
-| 增强 4 个 | `get`、`scrape_with_selector`、`download`、`collect_vulnerabilities` |
-| 兼容入口 1 个 | `browser_session` |
+- **原生 13 个**（与上游同名）——
+  `make_request`、`bulk_get`、`fetch`、`bulk_fetch`、`stealthy_fetch`、`bulk_stealthy_fetch`、
+  `open_session`、`open_request_session`、`close_session`、`list_sessions`、`session_fetch`、
+  `session_make_request`、`screenshot`
+- **增强 4 个** —— `get`、`scrape_with_selector`、`download`、`collect_vulnerabilities`
+- **兼容入口 1 个** —— `browser_session`
 
 它仍然只实现 `get_tool_descriptions()` / `execute()`，所以对小焦来说它就是「一个工具多一点的普通插件」，
 异步桥接、安全闸门、熔断、批量、漏洞聚合全部封装在内部。细节见 [scrapling.md](scrapling.md)。
