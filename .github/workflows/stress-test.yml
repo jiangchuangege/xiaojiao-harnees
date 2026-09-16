@@ -83,6 +83,10 @@ jobs:
         shell: pwsh
         run: python tools/audit_static.py
 
+      - name: 渲染缺陷检查（代码围栏闭合 / Mermaid 里的 ** 加粗）
+        shell: pwsh
+        run: python tools/check_render.py
+
       - name: 文档一致性检查（链接/路径/接口/工具名 ↔ 代码）
         shell: pwsh
         run: python tools/check_docs.py

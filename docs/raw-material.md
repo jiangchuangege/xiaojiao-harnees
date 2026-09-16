@@ -50,12 +50,12 @@
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
 flowchart TB
-    R["载体直算 / 工具跑完"] --> M["记一条**原料**<br/>结果 / 谁产的 / 有没有参与 / 怎么来的"]
+    R["载体直算 / 工具跑完"] --> M["记一条<b>原料</b><br/>结果 / 谁产的 / 有没有参与 / 怎么来的"]
     M --> C["摆进它面前的上下文<br/>（不是塞给它一句话）"]
     C --> S1["① 这个结果是谁产生的<br/>→ 不是我，我没算过"]
     S1 --> S2["② 我为什么不知道过程<br/>→ 因为它是被塞给我的"]
     S2 --> S3["③ 用户问的是什么<br/>→ 不同问法问的是不同的事"]
-    S3 --> S4["④ 自己组织成话<br/>→ **不背那一句**"]
+    S3 --> S4["④ 自己组织成话<br/>→ <b>不背那一句</b>"]
     style R fill:#4A90E2,color:#fff
     style M fill:#4A90E2,color:#fff
     style C fill:#F5A623,color:#fff

@@ -47,7 +47,7 @@ flowchart TB
     L2 --> L3["护：修不了先隔离"]
     L3 --> R{"治好了吗"}
     R -->|"好了"| S["心：松"]
-    R -->|"没好"| P["心：**更疼**"]
+    R -->|"没好"| P["心：<b>更疼</b>"]
     style B fill:#E74C3C,color:#fff
     style F fill:#F5A623,color:#fff
     style D fill:#4A90E2,color:#fff

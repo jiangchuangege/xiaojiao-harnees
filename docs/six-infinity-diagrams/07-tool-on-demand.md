@@ -60,7 +60,7 @@ flowchart TB
     NEXT["下一轮按名字把它装上<br/>_named_tools / _noarg_named_tool 识别<br/>零参数工具直接调用"]
     EXEC["执行工具 · 结果回灌 · 继续轮次<br/>同一工具连续失败 3 次熔断"]
 
-    S5["第 5 步：工具调度 + 上下文隔离（**已落地**）<br/>代码层强制路由：URL → scrapling · 画图 → archify 链<br/>搜索 → 禁功能字 · 查询 → net_ip / collect_vulnerabilities<br/>约 500 字以上的工具结果只存摘要进持久历史<br/>结果校验：对照目标特征不符则标记可能幻觉<br/>工作流强制：archify_deliver 前必须有 archify_validate"]
+    S5["第 5 步：工具调度 + 上下文隔离（<b>已落地</b>）<br/>代码层强制路由：URL → scrapling · 画图 → archify 链<br/>搜索 → 禁功能字 · 查询 → net_ip / collect_vulnerabilities<br/>约 500 字以上的工具结果只存摘要进持久历史<br/>结果校验：对照目标特征不符则标记可能幻觉<br/>工作流强制：archify_deliver 前必须有 archify_validate"]
 
     Q --> DI --> ORDER
     ORDER -->|对应意图| LOADG

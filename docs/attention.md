@@ -21,7 +21,7 @@ flowchart TB
     P["偏好（它自己认过的）"] --> B
     U["没做完的事（expectation）"] --> B
     B --> F["作为一个因素<br/>进它面前的上下文"]
-    F --> M["**脑子自己决定关注什么**"]
+    F --> M["<b>脑子自己决定关注什么</b>"]
     M --> D["这值得关注吗 / 该看猫吗 / 先放一放还是现在处理"]
     style H fill:#4A90E2,color:#fff
     style P fill:#4A90E2,color:#fff

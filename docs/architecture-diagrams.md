@@ -710,16 +710,16 @@ flowchart TB
     subgraph P2["第二阶段 · 视角状态 `core/perspective.py`（0b897a9）"]
         direction TB
         G1["g ← 0.92·g + 0.08·扰动<br/>三维：vigilance / openness / wound"]
-        G2["**持久化 `logs/perspective.json`，重启恢复**<br/>`note_dialogue_turn()` 只记不重置"]
+        G2["<b>持久化 `logs/perspective.json`，重启恢复</b><br/>`note_dialogue_turn()` 只记不重置"]
         G1 --> G2
     end
 
     subgraph P3["第三阶段 · 代码层硬改（4092ed3）—— 判据是「真的改了」，不是「它说它累了」"]
         direction TB
         POL["`policy()` → 轻 / 中 / 重<br/>`_state_policy()` 是唯一出口<br/>读不到 → 中性规则，不拦任何东西"]
-        H1["**输入**：`context_scale` 砍上下文<br/>1.0 / 0.6 / 0.4"]
-        H2["**行动**：探索类工具从**本轮工具表里拿掉**<br/>（不是排后面、不是告诉它别用）<br/>保守类排到前面"]
-        H3["**主动**：`no_browse` → 门**直接锁死**<br/>根本不问模型"]
+        H1["<b>输入</b>：`context_scale` 砍上下文<br/>1.0 / 0.6 / 0.4"]
+        H2["<b>行动</b>：探索类工具从<b>本轮工具表里拿掉</b><br/>（不是排后面、不是告诉它别用）<br/>保守类排到前面"]
+        H3["<b>主动</b>：`no_browse` → 门<b>直接锁死</b><br/>根本不问模型"]
         POL --> H1
         POL --> H2
         POL --> H3
@@ -738,7 +738,7 @@ flowchart TB
     H2 -.->|"记「输入被裁」"| N1
     H3 -.->|"记「主动被压」"| N1
     N1 --> N2
-    N2 -.->|"**反馈：成为下一轮硬改的输入之一**<br/>`suppress` 为真时把档位提到「中」<br/>（不是记完就完了）"| POL
+    N2 -.->|"<b>反馈：成为下一轮硬改的输入之一</b><br/>`suppress` 为真时把档位提到「中」<br/>（不是记完就完了）"| POL
 
     style TICK fill:#4A90E2,color:#fff
     style P1 fill:#7ED321,color:#fff

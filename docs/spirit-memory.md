@@ -51,7 +51,7 @@
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
 flowchart TB
     Q["用户这一轮的提问"] --> R{"recall 按相似度召回"}
-    R -->|"命中"| M["拿到**素材**：一句话认知"]
+    R -->|"命中"| M["拿到<b>素材</b>：一句话认知"]
     R -->|"没命中"| N["不注入，照常走"]
     M --> L["连同问题一起交给模型"]
     L --> A["模型自己组织措辞后作答"]

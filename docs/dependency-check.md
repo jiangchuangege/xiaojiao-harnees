@@ -40,17 +40,16 @@
 
 1. `base_url` 为空 → `(False, "base_url 为空")`。
 2. 先发 `GET {base_url}/models`（超时 15 秒），`200` → `(True, "GET /models 200 OK")`。
-3. `/models` 返回**任何非 200**（不只是 404 / 405）→ 退回发一个最小 `POST {base_url}/chat/completions`：
+3. `/models` 返回**任何非 200**（不只是 404 / 405）→ 退回发一个最小 POST，请求体是
+   `{"model": "模型名或 test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}`，
+   **超时 20 秒**；`200` → `(True, "POST /chat/completions 200 OK")`。
 
-   ```json
-   {"model": "模型名或 test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
-   
-```
-
-   超时 20 秒，`200` → `(True, "POST /chat/completions 200 OK")`。
+   > 这条本来是把请求体写成一个缩进在列表里的 ```json 代码块，但**围栏嵌在编号列表里**
+   > 很容易让后面的正文被一起吞进代码块（渲染出来就是"格式全不对、到处是星号"）。
+   > 现在改成行内代码，结构上不会再歧义。
 4. 其它情况 → `(False, "HTTP <状态码> (models=<状态码>, chat=<状态码>)")`；连接异常 → `(False, "连接失败: …")`。
 
-> 为什么保留 fallback：有部分端点不开放 `/models` 列表，但 `/chat/completions` 可用。
+> **为什么保留 fallback**：有部分端点不开放 `/models` 列表，但 `/chat/completions` 可用。
 > 保留 fallback 才能准确回答「到底能不能聊」这个问题。
 
 ### 2.2 `is_port_up(port, timeout=1.0)`

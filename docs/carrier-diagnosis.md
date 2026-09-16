@@ -57,14 +57,14 @@
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
 flowchart TB
     S["模型给出的代码"] --> G{"载体先过删除红线"}
-    G -->|"命中"| BLK["**拒绝执行**，连子进程都不起<br/>且不重试、不查网络"]
+    G -->|"命中"| BLK["<b>拒绝执行</b>，连子进程都不起<br/>且不重试、不查网络"]
     G -->|"放行"| RUN["沙箱里真跑一遍<br/>超时 10 秒必 kill"]
-    RUN -->|"退出码 0"| OK["**通过，直接输出真实运行结果**"]
+    RUN -->|"退出码 0"| OK["<b>通过，直接输出真实运行结果</b>"]
     RUN -->|"挂了"| D["载体诊断：只给方向<br/>错误类型 / 位置 / 检查方向"]
     D --> FIX["模型按方向改"]
     FIX --> CNT{"改满 3 轮了吗"}
     CNT -->|"没有"| RUN
-    CNT -->|"改满了"| WEB["联网查一段**参考**<br/>明确标注不照抄"]
+    CNT -->|"改满了"| WEB["联网查一段<b>参考</b><br/>明确标注不照抄"]
     WEB --> REWRITE["模型理解后自己重写"]
     REWRITE --> RUN
     RUN --> REC["每轮都写病历 logs/code_health.jsonl"]

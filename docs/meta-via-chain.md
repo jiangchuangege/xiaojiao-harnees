@@ -28,11 +28,11 @@
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 60, "useMaxWidth": true}}}%%
 flowchart TB
-    R["原料（事实字段，**不结论**）"] --> P["感知：这对我意味着什么？"]
+    R["原料（事实字段，<b>不结论</b>）"] --> P["感知：这对我意味着什么？"]
     P --> H["心起：有点不确定 / 有点踏实 / 有点触动"]
     H --> B["脑子：辨一下 —— 这是怎么回事？"]
-    B --> S["**它自己辨出来的那句**"]
-    S --> C["进上下文的是**它自己那句话**<br/>（不是载体摆的事实块）"]
+    B --> S["<b>它自己辨出来的那句</b>"]
+    S --> C["进上下文的是<b>它自己那句话</b><br/>（不是载体摆的事实块）"]
     style R fill:#4A90E2,color:#fff
     style P fill:#4A90E2,color:#fff
     style H fill:#7ED321,color:#fff

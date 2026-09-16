@@ -580,10 +580,10 @@ flowchart TB
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
     A["用户又发来一句<br/>（历史已经很长了）"] --> B["① 上限校准<br/>_max_context_tokens()<br/>ctx 20000 实际是 20224（256 倍数取整）"]
-    B --> C["② 计量<br/>_estimate_tokens()<br/>中文 1.5 token/字 · **宁可高估**"]
+    B --> C["② 计量<br/>_estimate_tokens()<br/>中文 1.5 token/字 · <b>宁可高估</b>"]
     C --> D{"拼起来超上限吗"}
     D -->|"没超"| H["直接发"]
-    D -->|"超了"| E["③ 滑动窗口 + 硬性截断<br/>_fit_context()<br/>system 与本轮问题**永远保留**<br/>从**最老**的一端开始丢"]
+    D -->|"超了"| E["③ 滑动窗口 + 硬性截断<br/>_fit_context()<br/>system 与本轮问题<b>永远保留</b><br/>从<b>最老</b>的一端开始丢"]
     E --> F["④ 摘要压缩<br/>_history_digest()<br/>最近 4 轮留原文<br/>更早的压成一行 60 字"]
     F --> G["说明按 system=a + tools=b + … = 合计 f / 上限 g 记账<br/>logs/context_fit.log 可查"]
     G --> H
