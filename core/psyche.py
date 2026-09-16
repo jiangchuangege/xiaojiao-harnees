@@ -482,6 +482,26 @@ def trigger_from_event(kind, text, why="", perception=None):
     _has_per = bool(str(perception.get("meaning") or "").strip()) if isinstance(perception, dict) \
         else bool(str(perception or "").strip())
     if _has_per:
+        # ================== **硬判据：命=无 且 向=无 → 不起心** ==================
+        # 【实测抓到的结构问题】「我 25 岁」→ 感知层自己判了「命=无 ｜ 向=无」，
+        #   但它**同时**生成了一句文学化的话（"突然被定格在 25 岁，像被按下了暂停键…"），
+        #   而心起这一步**只看那句话、没看判据** → 命=无 也起了一段文学化感受。
+        # 【真修】判据要**硬**：它自己写下命=无 且 向=无 → **就是不起心**。
+        #   要起心，必须先有"命被动"或"有方向" —— 这是**先决条件**，不是"让它自由发挥"。
+        #   ⚠️ 感受句要生成，是**心起了之后**由心那条链生成，**不是感知层代劳**。
+        if isinstance(perception, dict):
+            _life0 = [str(x) for x in (perception.get("touches_life") or [])]
+            _dir0 = str(perception.get("direction") or "").strip()
+            if not _life0 and _dir0 in ("", "无"):
+                with _LOCK:
+                    _ALIVE["beats"] = int(_ALIVE.get("beats") or 0) + 1
+                    _ALIVE["events"].append({"kind": k, "触发": t[:40],
+                                             "why": "命=无 且 向=无 → 不起心",
+                                             "at": time.time()})
+                    del _ALIVE["events"][:-20]
+                    beat = _ALIVE["beats"]
+                return {"state": state().get("state"), "heart": "", "kind": k, "beat": beat,
+                        "why": "命=无 且 向=无 → **不起心**（判据是命/向，不是那句文学化的话）"}
         h = arise(perception, event=t, inner=why)
         with _LOCK:
             _ALIVE["beats"] = int(_ALIVE.get("beats") or 0) + 1

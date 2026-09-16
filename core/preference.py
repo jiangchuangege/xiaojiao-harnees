@@ -39,8 +39,14 @@ _DIR = os.path.join(_ROOT, "logs", "psyche")
 _PATH = os.path.join(_DIR, "preference.jsonl")
 _LOCK = threading.RLock()
 
-# "像不像"的线（与 feeling_memory 同一条思路：像不像是个程度，不是分类）
-SIMILAR = 0.60
+# "像不像"的线。**必须够高** —— 它同时是"同一类心"的判据。
+# 【实测抓到的结构问题】偏好里出现过**跨类拼接**：
+#   「摸到两个红球…但突然被定格在 25 岁，像被按下了暂停键…」（来自 205 次相像的心）
+#   ——"摸红球"和"25岁"是两类完全不同的事，被拼成了一句偏好。
+#   根因：线太松（0.60），两类被并成一堆，形成偏好时**给了跨类素材**。
+# 【真修】线提到 **0.75**，并且**按代表句定簇**（见 `_shapes`）——
+#   后一条更要紧：旧写法下"A像B、B像C"就能把 A 与 C 并到一起（链式漂移）。
+SIMILAR = 0.75
 # 同一堆攒够几次，才值得它自己回看一眼
 FORM_AT = 4
 
@@ -123,6 +129,9 @@ def _shapes():
     for it in items:
         placed = False
         for c in clusters:
+            # **按代表句定簇**：跟"这一簇的代表"像才算同一类。
+            #   ⚠️ 旧写法是"跟簇里任意一条像就算"→ A像B、B像C 就能把 A 与 C 并到一起
+            #   （链式漂移），于是"摸红球"和"25岁"被并成一堆、拼成一句偏好（实测抓到的）。
             if _sim(it.get("heart"), c["heart"]) >= SIMILAR:
                 c["n"] += 1
                 c["items"].append(it)
@@ -130,8 +139,18 @@ def _shapes():
                 break
         if not placed:
             clusters.append({"heart": it.get("heart"), "n": 1, "items": [it]})
-    clusters.sort(key=lambda c: -c["n"])
-    return clusters
+    # **同类校验**：簇里每条都必须与代表句达线（不达线的轰出去单独成簇）——
+    #   这是"不许跨类拼接"的硬保证：形成偏好时给出去的素材**只来自同一类**。
+    clean = []
+    for c in clusters:
+        rep, same, other = c["heart"], [], []
+        for x in c["items"]:
+            (same if _sim(x.get("heart"), rep) >= SIMILAR else other).append(x)
+        clean.append({"heart": rep, "n": len(same), "items": same})
+        for x in other:
+            clean.append({"heart": x.get("heart"), "n": 1, "items": [x]})
+    clean.sort(key=lambda c: -c["n"])
+    return clean
 
 
 def candidates(min_n=None):

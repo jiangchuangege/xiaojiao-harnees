@@ -3347,9 +3347,17 @@ def _idle_think():
         cands = pf.candidates() if pf is not None else []
         if cands:
             c = cands[0]
+            # **只给同一类的素材**（不许跨类拼接）：examples 全部来自这一簇，
+            #   并且**再筛一遍**——与代表句不达线的一条都不给（宁可少，不拼）。
+            try:
+                _rep = str(c.get("heart") or "")
+                _ex = [x for x in (c.get("examples") or [])
+                       if pf._sim(x, _rep) >= pf.SIMILAR] or [x for x in (c.get("examples") or [])][:1]
+            except Exception:      # noqa: silent-ok
+                _ex = list(c.get("examples") or [])[:1]
             p = per.perceive("我回头看我心里起过的东西", llm_fn=_perceive_llm,
-                             extra="这些是你心里起过的：%s" % "；".join(
-                                 str(x)[:30] for x in c.get("examples") or []))
+                             extra="这些是**同一类**心里起过的（只从这一类取，别混别的）：%s"
+                                   % "；".join(str(x)[:30] for x in _ex))
             if p.get("ok"):
                 said = str(p.get("meaning") or "")
                 if len(said) >= 6 and said not in (c.get("examples") or []):
