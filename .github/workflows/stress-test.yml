@@ -87,6 +87,10 @@ jobs:
         shell: pwsh
         run: python tools/check_render.py
 
+      - name: 加粗不渲染检查（中文标点与 CommonMark 侧翼规则打架 → 星号原样显示）
+        shell: pwsh
+        run: python tools/check_md_emphasis.py
+
       - name: 文档一致性检查（链接/路径/接口/工具名 ↔ 代码）
         shell: pwsh
         run: python tools/check_docs.py
