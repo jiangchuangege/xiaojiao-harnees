@@ -173,7 +173,7 @@ git reset --hard origin/<branch>      # 内容一致，安全；此后本地与�
 
 - 压测套件说明：[../tests/stress/README.md](../tests/stress/README.md)
 - 更新日志：[../CHANGELOG.md](../CHANGELOG.md)
-- v1.0 发布说明：[release-notes-v1.0.md](release-notes-v1.0.md)
+- v1.0 发布说明：见 GitHub Release（已随发布写上去，仓库内不再留一份副本）→ https://github.com/jiangchuangege/xiaojiao-harness/releases/tag/v1.0
 
 ## 变更记录
 

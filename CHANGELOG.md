@@ -239,7 +239,7 @@
   **代码清理一个都没删**（**四条**：`_wholeness_material()` 已无调用、
   `if False:` 停用块、`core/relation.py` 的 `wounded()` 无调用点、`TIRED_WORDS=()`；
   其中 `TIRED_WORDS=()` 与 `xiaojiao_app.py` 里那处 `if False:` **被自测断言引用，不能删**）；
-  **release v1.0 正文**文件已写好（`docs/release-notes-v1.0.md`）但**还没粘进 GitHub**（需要你手动）。
+  **release v1.0 正文**已**写进 GitHub Release**。（原文曾放在 `docs/release-notes-v1.0.md`，后按「不留重复文档」的要求删掉了 —— 正文只保留在 release 页：https://github.com/jiangchuangege/xiaojiao-harness/releases/tag/v1.0）
 
 ### 真修：命=无不起心 + 偏好不跨类拼接
 

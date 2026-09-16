@@ -842,7 +842,7 @@ PowerShell 下用 `2>&1` 重定向时，程序写到 stderr 的日志会被当�
 | [`../architecture-diagrams.md`](../architecture-diagrams.md) | 图 5 给出健康系统的整体结构 |
 | [`../testing-report.md`](../testing-report.md) | 全量自测结果与验收口径 |
 | [`../monitor.md`](../monitor.md) | 运行监控面板 |
-| [`../release-notes-v1.0.md`](../release-notes-v1.0.md) | v1.0 能力清单与已知限制 |
+| GitHub Release（v1.0） | v1.0 能力清单与已知限制（正文在 release 页，仓库内不留副本） |
 
 代码入口：
 
