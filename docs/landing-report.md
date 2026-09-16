@@ -163,6 +163,9 @@ flowchart TB
 | 会话管理 | 已落地 | 侧栏多会话、新建、切换、历史：`/api/sessions`、`/api/session/new` |
 | 长期记忆 | 已落地 | 向量库 + `xiaojiao_memory.txt` + 知识库 JSON |
 | 记忆深度 | 已落地 | 事实 / 表达 / 印象三层，实现 `core/memory_deep.py` |
+| 记忆写入闸门与来源标记 | 已落地 | 工具原文与坏回复进不了对话记忆（`core/mem_filter.py`）；注入时标明来源（谁说的就是谁说的）；时间性问题走时间线。见 [memory-pollution.md](memory-pollution.md) |
+| 用户画像库（第四个库） | 已落地 | `core/user_profile.py`，落 `logs/psyche/user_profile.jsonl`；**记不记、记什么由模型自己判断**，载体只执行存储 |
+| 兴趣积累闭环（下次精准回答） | **载体侧已落地，模型侧没通** | 两遍实测（各 8 条）：事实进库 **7/8**、注入 **7/7**、**换新会话真的用上 1/7 与 2/7**。链是通的，"用它回答"没通 —— 见 [user-profile.md](user-profile.md) |
 | 自学习 | 已落地 | `self_learn/learn.py` 从点赞与更正中提炼功能用法 |
 | 成长面板 | 已落地 | `/growth` + `/api/growth` |
 | 自我改进闭环（改提示词 / 工具 / 流程并 A/B 回滚） | **设计未落地** | 目录与写入路径均无实现，见 [design-philosophy.md](design-philosophy.md) 第十七节 |
@@ -308,7 +311,7 @@ flowchart TB
 | `CONTRIBUTING.md`（212 行） | 分支提交规范 + 硬性约束 + 插件模板 |
 | `docs/architecture.md` | 架构总览（本文档的同级入口） |
 | `docs/design-philosophy.md` | 设计哲学 22 节，实现状态的最终口径 |
-| `docs/architecture-diagrams.md` | 架构图册 20 张 |
+| `docs/architecture-diagrams.md` | 架构图册 21 张 |
 | `docs/security-audit.md` | 安全结论 + 问题根因修复 + 控制点流程图 |
 | `docs/testing-report.md` | 覆盖矩阵 + 未覆盖清单 + 无头压测方法 |
 | `docs/release-and-rollback.md` | 发版步骤 + 回滚场景 + 网络受限时的发布兜底 |

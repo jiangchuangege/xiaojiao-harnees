@@ -116,6 +116,7 @@ python start_xiaojiao.py
 | 维度 | 小焦（本地小模型 + 载体） | 云端大模型裸用 | 数据来源 | 可复现 |
 | --- | --- | --- | --- | --- |
 | 记忆持久化 | 本地向量库，长期保存，可检索、降级、不删除 | 由服务方决定，通常不长期保存 | `core/memory_vec.py`、`tools/test_memory_depth.py` | 是 |
+| 记住"你是谁"（用户画像） | 画像**独立成一个库**（与对话 / 精神 / 偏好分开存）；**记不记、记什么由模型自己判断**，载体只执行存储、下一轮把它当事实摆回来。两遍实测（各 8 条）：事实进库 **7/8**、注入 **7/7**、**换新会话真的用上 1/7 与 2/7** | 无跨会话用户画像 | `core/user_profile.py`、`tools/test_closed_loop.py` | 部分 |
 | 检索命中率（本机实测） | 5 / 5 = 100%（20 条记忆、5 个问题） | 不适用 | `tools/test_memory_recall.py` | 是 |
 | 向量检索延迟（本机实测） | 平均 3.2ms · 最大 4.3ms | 不适用 | 同上 | 是 |
 | 输出长度 | 载体负责续写与无缝拼接 | 受单次输出上限约束 | `core/continuation.py`、`tools/test_longform_quality.py` | 是 |
@@ -166,7 +167,7 @@ flowchart TB
 | 想了解 | 看这篇 |
 | --- | --- |
 | 设计哲学与工程依据（22 节） | [`docs/design-philosophy.md`](docs/design-philosophy.md) |
-| 架构图册（20 张 Mermaid） | [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) |
+| 架构图册（21 张 Mermaid） | [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) |
 | 每个模块的独立文档 | [`docs/modules/`](docs/modules/) |
 | 七个无限 | [`docs/six-infinity.md`](docs/six-infinity.md) |
 | 感知层（先感知意义，再判断任务） | [`docs/perception-layer.md`](docs/perception-layer.md) |
@@ -181,6 +182,7 @@ flowchart TB
 | **EYC 进行时自述（第一人称把状态说给它听）** | [`docs/eyc-self-narration.md`](docs/eyc-self-narration.md) |
 | **无限 7 · 上下文无限** | [`docs/context-infinity.md`](docs/context-infinity.md) |
 | **记忆污染（来源标记 / 清库 / 时间线检索）** | [`docs/memory-pollution.md`](docs/memory-pollution.md) |
+| **用户画像与兴趣积累闭环（记不记它自己判 · 载体只负责存）** | [`docs/user-profile.md`](docs/user-profile.md) |
 | **路径二 · 内感受与视角状态** | [`docs/interoception.md`](docs/interoception.md)、[`docs/perspective.md`](docs/perspective.md) |
 | **渠道隔离（外部通道只能聊天，不能执行任何工具）** | [`docs/channel-isolation.md`](docs/channel-isolation.md) |
 | 测试报告与实测数字 | [`docs/testing-report.md`](docs/testing-report.md) |

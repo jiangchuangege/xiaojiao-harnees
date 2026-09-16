@@ -29,7 +29,7 @@
     {
       "id": "…",
       "ts": 1789…,                       # 载体填
-      "kind": "兴趣" | "事实" | "偏好" | "关系",
+      "kind": "兴趣" | "事实" | "偏好" | "关系" | 它自己起的短类别名（见 `KINDS` 处的实测教训）
       "content": "用户关注 NBA 篮球赛事",   # 模型给的一句话
       "source": "模型自己判断",             # **如实标：这不是载体推的**
       "evidence": "用户问了湖人 vs 勇士",    # 模型给的依据（载体照抄，不改写）
@@ -46,20 +46,27 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 import time
 
-__all__ = ["KINDS", "add", "all_records", "recent", "hit", "render", "stats",
-           "count", "forget_all", "path", "parse_verdict"]
+__all__ = ["KINDS", "KIND_MAX", "add", "all_records", "recent", "hit", "render", "stats",
+           "count", "forget_all", "path", "parse_verdict", "clean_kind", "contradiction"]
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DIR = os.path.join(_ROOT, "logs", "psyche")
 _PATH = os.path.join(_DIR, "user_profile.jsonl")
 _LOCK = threading.RLock()
 
-# 规格给定的四个类别。**只有这四个**，模型给别的会被拒（宁可漏，不污染）。
+# 规格给定的四个类别：**推荐**（提示词里让它优先用这四个）。
+# ⚠️ 但它们**不是只许这四个** —— 实测教训（`tools/test_closed_loop.py` 案例 3）：
+#   模型判「我是做后端的，平时都用 Python」值得记，给的类别是 `职业/技术栈`，
+#   而载体当时**硬性拒收** → 一条真实、明确的用户事实被载体丢掉了。
+#   那正是"载体替它做决定"：它说要记，载体因为标签不在白名单里就说不行。
+#   现在的判据：四类**优先**；四类都不贴切时，它**可以自己起一个短类别名**（≤ `KIND_MAX` 字），
+#   载体照收、照存、照原样标（`source` 已写明这是它自己给的类别）。
+#   载体只挡**明显不成标签**的东西（空、带 JSON 符号、带换行、过长）—— 那是解析垃圾，不是类别。
 KINDS = ("兴趣", "事实", "偏好", "关系")
+KIND_MAX = 10
 
 # 单条内容长度上限：内容太长就不是"一句话的画像"了，那是对话记忆该干的事。
 MAX_LEN = 200
@@ -102,14 +109,28 @@ def count():
     return len(all_records())
 
 
+def clean_kind(kind):
+    """把模型给的类别收拾成一个**能当标签用**的短词；不成标签的返回 ""。
+
+    **只管格式，不管内容**：四类优先，但它自己起的短类别名一样收 ——
+    载体没资格判断「职业/技术栈」算不算一个类别（那是替它做决定）。
+    """
+    k = str(kind or "").strip().strip("「」\"'")
+    if not k or len(k) > KIND_MAX:
+        return ""
+    if any(ch in k for ch in "{}[]\n\r\t\"'`"):      # JSON 残留 / 换行 → 解析垃圾，不是类别
+        return ""
+    return k
+
+
 def add(kind, content, why="", evidence="", source="模型自己判断"):
     """**只做存储**：模型说要记什么就记什么；载体不判断内容对不对、该不该记。
 
-    返回记录 id；`content` 为空、或 `kind` 不在四类里 → 返回 ""（**不写盘**）。
+    返回记录 id；`content` 为空、或 `kind` 不成标签（见 `clean_kind()`）→ 返回 ""（**不写盘**）。
     """
-    k = str(kind or "").strip()
+    k = clean_kind(kind)
     c = str(content or "").strip()
-    if not c or k not in KINDS:
+    if not c or not k:
         return ""
     if len(c) > MAX_LEN:
         c = c[:MAX_LEN]
@@ -183,32 +204,108 @@ def render(n=8):
     return "\n".join(lines)
 
 
+def _json_objects(s):
+    """按**括号配对**扫出文本里所有候选 JSON 对象。
+
+    为什么不用正则：`re.search(r"\\{[\\s\\S]*\\}")` 是**贪婪**的 —— 模型先在正文里举一次
+    格式例子、再给结论时（`按格式 {"remember":…} 我的判断是 {"remember":false}`），
+    它会从第一个 `{` 一口气吃到最后一个 `}`，`json.loads` 直接失败 → **一条本该记下的东西被判成"不记"**。
+    这就是"载体侧把它的判断丢了"，必须堵死。扫描时跳过字符串内部（`"` 与转义），
+    不然 `content` 里带个花括号就会配错。
+    """
+    out = []
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    out.append(s[start:i + 1])
+                    start = -1
+    return out
+
+
+def _pick(text):
+    """从一段输出里挑出**它那句判断**的对象（挑不到返回 None）。"""
+    cands = []
+    for blob in _json_objects(str(text or "")):
+        try:
+            d = json.loads(blob)
+        except Exception:      # noqa: silent-ok — 这个候选不是合法 JSON，换下一个
+            continue
+        if isinstance(d, dict):
+            cands.append(d)
+    if not cands:
+        return None
+    # 取**最后一个**带 remember 字段的对象：模型常把格式例子先写一遍、结论写在后面，
+    # 而例子里的 `remember` 也在（它就是照格式抄的）—— 所以"第一个"会取到例子。
+    # 自测 `tools/test_user_profile.py` 第四节专门钉这一条。
+    with_rem = [c for c in cands if "remember" in c]
+    return with_rem[-1] if with_rem else cands[0]
+
+
+def contradiction(text):
+    """它的输出**自己跟自己不一致**时，返回一句可核对的原因；一致返回 ""。
+
+    实测抓到的真原文（闭环实测案例 1 的写入轮）：
+        {"remember": false,
+         "kind": "兴趣", "content": "用户平时最爱看NBA，湖人球几乎一场不落",
+         "why": "这是用户主动交代的个人兴趣偏好，属于值得长期记住的信息"}
+    标志位写 false，可它把 kind / content 全填满了、why 还写着"值得长期记住"。
+
+    载体的处理（三样都不许做：不改它的 flag、不静默丢掉、不替它下结论）：
+      · 只把这个**事实**（它的两处对不上）原样告诉它，让它自己再说一次。
+    判据是**结构**的，不是关键词猜的：真原文里两条"不记"（案例 4、6）填的是
+    `"kind": null, "content": null`，而这一条两个字段都是满的 —— 差得很清楚。
+    """
+    d = _pick(text)
+    if not isinstance(d, dict) or d.get("remember") is not False:
+        return ""
+    has_kind = bool(clean_kind(d.get("kind")))
+    has_content = bool(str(d.get("content") or "").strip())
+    if has_kind and has_content:
+        return ("remember 写的是 false，但 kind=%r、content=%r 都填满了 —— 两处对不上"
+                % (d.get("kind"), str(d.get("content"))[:40]))
+    return ""
+
+
 def parse_verdict(text):
     """解析模型那句判断。返回 `dict`（解析不出来返回 `{"remember": False}`）。
 
     【判据必须宽容、取值必须严】
-      · 模型可能包着 ```json 或带解释 → **宽容**地从中抠出第一个 JSON 对象
-      · 但 `remember` 必须是真 true、`kind` 必须在四类里 → **严**，宁可漏记不污染
+      · 模型可能包着 ```json、先举例再给结论、带一堆解释 → **宽容**地逐个抠 JSON 对象
+      · 但 `remember` 必须是真 true、`content` 非空 → **严**，宁可漏记不污染
     """
     s = str(text or "")
     if not s.strip():
         return {"remember": False, "why": "空"}
-    m = re.search(r"\{[\s\S]*\}", s)
-    if not m:
+    d = _pick(s)
+    if d is None:
         return {"remember": False, "why": "没有 JSON"}
-    try:
-        d = json.loads(m.group(0))
-    except Exception:      # noqa: silent-ok — 解析不了就当"不记"
-        return {"remember": False, "why": "JSON 解析失败"}
-    if not isinstance(d, dict):
-        return {"remember": False, "why": "不是对象"}
     if d.get("remember") is not True:
         return {"remember": False, "why": str(d.get("why") or "模型说不记")}
-    kind = str(d.get("kind") or "").strip()
+    kind = clean_kind(d.get("kind"))
     content = str(d.get("content") or "").strip()
-    if kind not in KINDS or not content:
-        # ⚠️ 模型说"要记"但类别/内容不合格 → **不记**，并把原因带出去（可如实记账）
-        return {"remember": False, "why": "类别或内容不合格（kind=%r）" % kind}
+    if not kind or not content:
+        # ⚠️ 模型说"要记"但类别不成标签 / 内容为空 → **不记**，并把原因带出去（可如实记账）
+        return {"remember": False, "why": "类别或内容不合格（kind=%r）" % d.get("kind")}
     return {"remember": True, "kind": kind, "content": content,
             "why": str(d.get("why") or ""), "evidence": str(d.get("evidence") or "")}
 
@@ -236,21 +333,32 @@ if __name__ == "__main__":       # 自带的冒烟自测（写临时库，不动
     if os.path.exists(_PATH):
         os.remove(_PATH)
     try:
-        assert add("体育", "x") == "", "非四类必须拒收"
+        assert add("", "x") == "", "空类别必须拒收"
+        assert add("x" * 30, "x") == "", "过长类别必须拒收"
+        assert add("{\"kind\": 1}", "x") == "", "JSON 残留不是类别，必须拒收"
         assert add("兴趣", "") == "", "空内容必须拒收"
+        # 实测抓到的**真原文**（4B 就是这么答的）—— 它说要记，载体必须接住
+        _real = ('```json\n{\n  "remember": true,\n  "kind": "职业/技术栈",\n'
+                 '  "content": "用户是后端开发者，日常使用 Python 进行开发。",\n'
+                 '  "why": "职业身份和技术栈是用户的核心身份标签",\n'
+                 '  "evidence": "我是做后端的，平时工作里都用 Python"\n}\n```')
+        _v = parse_verdict(_real)
+        assert _v["remember"] is True and _v["kind"] == "职业/技术栈", _v
+        assert add(_v["kind"], _v["content"]) != "", "自定类别也必须能落盘"
         i = add("兴趣", "用户关注 NBA 篮球赛事", why="主动问了湖人比赛",
                 evidence="用户问了湖人 vs 勇士")
         assert i, "正常记录应当写入"
-        assert count() == 1, count()
+        assert count() == 2, count()
         assert "NBA" in render(), render()
         assert hit(keyword="NBA") == 1
-        assert all_records()[0]["hit_count"] == 1, all_records()[0]
+        rows = {r["content"]: r["hit_count"] for r in all_records()}
+        assert rows.get("用户关注 NBA 篮球赛事") == 1, rows
         v = parse_verdict('```json\n{"remember": true, "kind": "兴趣", '
                           '"content": "用户关注 NBA", "why": "问了湖人"}\n```')
         assert v["remember"] is True and v["kind"] == "兴趣", v
         assert parse_verdict('{"remember": false}')["remember"] is False
-        assert parse_verdict('{"remember": true, "kind": "瞎写", "content": "x"}'
-                             )["remember"] is False, "非法类别必须拒收"
+        assert parse_verdict('{"remember": true, "kind": "", "content": "x"}'
+                             )["remember"] is False, "空类别必须拒收"
         assert parse_verdict("随便一句话")["remember"] is False
         print("✅ 用户画像库 冒烟自测通过；stats=%s" % stats())
     finally:

@@ -10,7 +10,7 @@
 **摘要**：本文说明小焦各部分的职责、边界与数据流，回答「代码为什么长成这样、改一处会牵动哪里」。
 
 本文只讲**结构**：有哪些部件、谁调用谁、数据从哪里来到哪里去。设计动机（为什么这么选）见
-[design-philosophy.md](design-philosophy.md)；图形化的 20 张图见
+[design-philosophy.md](design-philosophy.md)；图形化的 21 张图见
 [architecture-diagrams.md](architecture-diagrams.md)。三份文档口径一致：**实现状态一律以代码为准**，
 代码与文档不一致时改文档。
 
@@ -749,7 +749,7 @@ N.E.K.O. **不是小焦自带的**，而是一个独立的开源桌面项目（S
 ## 参考
 
 - [design-philosophy.md](design-philosophy.md) —— 22 节设计哲学，实现状态的最终口径
-- [architecture-diagrams.md](architecture-diagrams.md) —— 20 张架构图
+- [architecture-diagrams.md](architecture-diagrams.md) —— 21 张架构图
 - [project-overview.md](project-overview.md) —— 项目总览与关键文件清单
 - [landing-report.md](landing-report.md) —— 落地报告
 - [modules/](modules/) —— 分模块说明

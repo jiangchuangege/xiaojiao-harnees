@@ -2150,8 +2150,12 @@ def _memory_used(inject_text, question, answer):
 #   ③ 关键词匹配一定会误伤。而模型能区分这些、能结合上下文、判错了还能修正。
 #   **载体要做的是给它"判断的机会"** —— 就是下面这一问，而不是替它判断。
 # 【载体在这条链上只做两件事】① 问它一句；② 照它说的**执行存储**。
-# 【失败方向必须朝"不记"】解析不出 / 它说 false / 类别不合格 → **一个字都不写**。
+# 【失败方向必须朝"不记"】解析不出 / 它说 false / 类别不成标签 → **一个字都不写**。
 #   宁可漏记（下次还能再判），也不许污染画像库（错记会**固化**下来）。
+#   ⚠️ 实测补的一条（`tools/test_closed_loop.py` 案例 3）：**"类别不在四类里"曾经被载体当成
+#   "不合格"直接丢掉**，而它给的原话是 `remember: true, kind: 职业/技术栈` —— 它明明说要记，
+#   是载体把一条真实的用户事实扔了。那不是判据严，那是载体替它做决定。
+#   现在：四类**优先**，它自己起的短类别名照收（`core/user_profile.clean_kind()`）。
 # 【一个必须如实说的代价】这一步**每轮多一次模型调用**（也就要多花一份精力）。
 #   换来的是"下次答得准"。这是明确的交换，不是免费的。
 _PROFILE_ASK = (
@@ -2159,11 +2163,20 @@ _PROFILE_ASK = (
     "只输出 JSON，不要任何解释、不要 Markdown 代码块：\n"
     '{"remember": true 或 false, "kind": "兴趣/事实/偏好/关系", '
     '"content": "一句话", "why": "为什么值得记", "evidence": "依据（用户原话）"}\n'
+    "【什么该记 —— 用户**主动交代的、关于他自己的事**，说一次就够了】\n"
+    "· 习惯、口味、身体情况（不吃什么、喝什么、睡得怎么样）→ 记\n"
+    "· 他在做什么（工作 / 学业 / 在学什么）→ 记\n"
+    "· 家里人和关系（女儿、父母、伴侣、朋友）→ 记\n"
+    "· 长期在看什么、在乎什么、反复提起什么 → 记\n"
     "【什么不该记】\n"
-    "· 只问了一次、或明显随口问的 → 不记（一次不等于长期关注）\n"
+    "· **问过一次的问题 ≠ 长期关注**：随手问了一句比分、一句天气 → 不记\n"
     "· 替别人问的（「我朋友让我问…」）→ 不记（那不是用户自己的事）\n"
     "· 寒暄、闲聊、与用户本人无关的 → 不记\n"
-    "【什么该记】确实能看出**用户是谁 / 在乎什么 / 跟谁什么关系**的 → 记，并写清依据。\n\n"
+    "【类别】优先用 兴趣 / 事实 / 偏好 / 关系；这四个都不贴切时，"
+    "**可以自己起一个短类别名（6 字以内）**，别硬塞进不合适的类别里。\n"
+    "【格式必须自洽】**决定不记时，kind / content / evidence 一律留空**"
+    "（remember 已经是 false，就别再把内容填满了）；决定记才填。\n"
+    "【拿不准就不记】宁可漏记（下次还能再判），也不要把猜的东西写进去。\n\n"
     "用户说：%s\n它回答：%s")
 
 
@@ -2171,12 +2184,28 @@ def _profile_judge(user_input, answer):
     """闭环第三、四步：问模型"要不要记"；它说要 → 载体写进用户画像库。返回记录 id。"""
     try:
         from core import user_profile as _UP
-        _out = llm_chat([{"role": "user",
-                          "content": _PROFILE_ASK % (str(user_input)[:300], str(answer)[:400])}],
-                        temperature=0.0)
+        _ask = _PROFILE_ASK % (str(user_input)[:300], str(answer)[:400])
+        _out = llm_chat([{"role": "user", "content": _ask}], temperature=0.0)
+        # ---- 它自己跟自己不一致时：**让它自己再说一次**（载体不改它的决定）----
+        # 实测真原文：`remember: false` 却把 kind/content 填满、why 还写"值得长期记住"。
+        # 载体既不许改这个 false（那是替它决定），也不许静默丢掉（那是把它的判断扔了）——
+        # 只把它两处对不上这个**事实**原样摆回去，重新由它自己判。**只重问一次**，防止打转。
+        _bad = _UP.contradiction(_out)
+        if _bad:
+            LOG.info("用户画像：它的输出自己不一致（%s）→ 把这个事实摆回去，让它自己重说一次", _bad)
+            _out = llm_chat([{"role": "user", "content":
+                              _ask + "\n\n【你上一次的输出】\n" + str(_out)[:300]
+                              + "\n【问题】%s。请按你自己的判断，重新只输出一次 JSON。" % _bad}],
+                            temperature=0.0)
+            _bad2 = _UP.contradiction(_out)
+            if _bad2:
+                LOG.info("用户画像：重说一次仍不一致（%s）→ 按它写的 remember 处理，不记", _bad2)
         _v = _UP.parse_verdict(_out)
         if not _v.get("remember"):
-            LOG.debug("用户画像：**它自己判断不记**（%s）", str(_v.get("why"))[:60])
+            # **"没记"也必须留在日志里** —— 实测吃过亏：漏记只在 DEBUG 里，
+            # 于是"它不记"和"载体没接住"分不出来，只能靠事后重新问一遍才知道是谁的问题。
+            LOG.info("用户画像：**它自己判断不记**（原因：%s）｜原始输出 %r",
+                     str(_v.get("why"))[:70], str(_out)[:130])
             return ""
         _rid = _UP.add(_v.get("kind"), _v.get("content"),
                        why=_v.get("why"),
@@ -2184,6 +2213,10 @@ def _profile_judge(user_input, answer):
         if _rid:
             LOG.info("用户画像：**它自己判断要记** → 已写入｜kind=%s｜content=%s｜why=%s",
                      _v.get("kind"), str(_v.get("content"))[:40], str(_v.get("why"))[:40])
+        else:
+            # 说要记、却写不进去 → 一定是**载体侧**的问题（判据/落盘），必须喊出来
+            LOG.warning("用户画像：它说要记，但载体没写进去（kind=%r content=%r）",
+                        _v.get("kind"), str(_v.get("content"))[:40])
         return _rid
     except Exception as e:      # noqa: silent-ok — 判断失败绝不能影响这一轮对话
         LOG.debug("用户画像判断失败（忽略）：%s", e)
@@ -10259,11 +10292,17 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             # 这一条就是闭环的收口：上次它自己判断"用户关注 NBA" → 这次作为**事实**给它 →
             # 它不用再重新推理一遍，直接就能答得更准。**依赖那一跳的次数因此变少。**
             # ⚠️ render() 里只列它自己记下的那句话，**不加任何结论**（见模块注释）。
+            # ⚠️ **位置**：这一段**故意挪到最后**（排在思维流之后、紧挨生成）。
+            #   实测（`tools/test_closed_loop.py` 8 条，对照 8/8 干净、写入 7/8、
+            #   注入 7/7，可**命中只有 1/8**）—— 事实确实在 system 里，它就是不拿它回答。
+            #   本项目自己早就写过这条规律（见下面思维流那句注释与 docs/eyc-self-narration.md）：
+            #   **越靠近生成越不容易被淹没**。所以把"必须影响这一轮回答"的事实放到最后。
+            _profile_txt = ""
             try:
                 from core import user_profile as _UPr
-                _up_txt = _UPr.render(8)
-                if _up_txt:
-                    sys_text += "\n[关于用户] " + _up_txt + "\n"
+                _up = _UPr.render(8)
+                if _up:
+                    _profile_txt = "\n[关于用户] " + _up + "\n"
                     LOG.info("用户画像：作为事实注入 %d 条", _UPr.count())
             except Exception as _e:      # noqa: silent-ok — 画像读不到不影响回答
                 LOG.debug("用户画像注入失败（忽略）：%s", _e)
@@ -10361,6 +10400,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     sys_text += "\n\n" + _mb["text"]
             except Exception:      # noqa: silent-ok — 注入失败就用原提示词
                 pass
+            # ---- 闭环第五步（收口）· 见上面 `_profile_txt` 的说明：**放最后** ----
+            if _profile_txt:
+                sys_text += _profile_txt
             messages = [{"role": "system", "content": sys_text}]
             # ---- 自我绑定：把"我的连续状态流"接进上下文 ----
             #   每一条 S_k 都是**一体**的：感受写在同一条正文里（`nervous_bus._render_one`），

@@ -111,6 +111,6 @@
 
 想看细节的话，两篇最值得读：
 - `docs/一条没人走过的路.md` —— 完整的那条路，包括所有失败
-- `docs/architecture-diagrams.md` —— 20 张原理图，全是 Mermaid，GitHub 上直接渲染
+- `docs/architecture-diagrams.md` —— 21 张原理图，全是 Mermaid，GitHub 上直接渲染
 
 **欢迎骂。** 尤其是"载体优先"这个方向 —— 如果你觉得哪里想错了，我宁愿现在听到。
