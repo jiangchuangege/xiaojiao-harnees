@@ -117,6 +117,19 @@ if requests is not None:
         print("     「你好」→ %s" % a3.replace("\n", " ")[:80])
         ck("闲聊仍正常（有回答、没报错）", len(a3.strip()) > 0, a3[:60])
 
+print("\n【C】载体直答（**不问模型** → 换任何模型答案都一样）")
+try:
+    import xiaojiao_app as _app
+    _HIT = ["今天几号", "今天几号？", "现在几点", "今天是星期几", "今年是哪一年", "几号"]
+    _MISS = ["几点睡比较好", "今天的新闻有哪些", "2026年世界杯冠军是谁", "帮我写个函数", "你好"]
+    for q in _HIT:
+        r = _app._direct_time_answer(q)
+        ck("载体直答接住「%s」" % q, bool(r) and TODAY in r, (r or "没接住")[:50])
+    for q in _MISS:
+        ck("不误伤「%s」（该走模型）" % q, not _app._direct_time_answer(q), "被误判成时间问题")
+except Exception as e:      # noqa: silent-ok — 拿不到主程序就如实跳过
+    print("  ⏭️  跳过（%s）" % e)
+
 print("\n" + "=" * 76)
 print("  通过 %d / 共 %d" % (_C["pass"], _C["total"]))
 if _C["failed"]:
