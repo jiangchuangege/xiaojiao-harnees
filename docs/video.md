@@ -169,14 +169,17 @@ curl -X POST http://127.0.0.1:5000/api/video \
 第 2 步会带上 `chat_template_kwargs` 关闭思考。`/api/video/promptkb` 想读的是
 `video_service/knowledge_vec.json` 中标签为 `video_prompt` 的条目，用于展示"学到了什么"。
 
-> ⚠️ **这里如实标注一处对不上的地方**：提示词是**真的写进** `self_learn/knowledge_vec.json` 的
-> （第 2 步走的是 `self_learn/vstore`），但 `/api/video/promptkb` 读的是
-> `video_service/knowledge_vec.json` —— **那个文件不存在**。代码
-> （`video_service/video_api.py`，读取处按 `__file__` 拼路径）打开它会抛异常，
-> 被吞掉之后 `count` 保持 0。所以这个接口**目前永远展示不出"学到了什么"**，
-> 学到的东西得去 `self_learn/` 那边看。详见
-> [`../video_service/README.md`](../video_service/README.md) 的核对记录。
-> **本次没有改代码**（本轮只做文档对齐），只把文档改成了与代码一致的说法。
+#### ⚠️ 一处对不上的地方（如实标注）
+
+| | |
+|---|---|
+| **提示词真的写进了哪** | `self_learn/knowledge_vec.json`（第 2 步走的是 `self_learn/vstore`） |
+| **接口读的是哪** | `video_service/knowledge_vec.json` |
+| **后果** | 那个文件**不存在**。`video_service/video_api.py` 按 `__file__` 拼路径打开它 → 抛异常 → 被吞掉 → `count` 保持 **0** |
+| **所以** | 这个接口**目前永远展示不出"学到了什么"**；学到的东西得去 `self_learn/` 那边看 |
+
+详见 [`../video_service/README.md`](../video_service/README.md) 的核对记录。
+**本轮没有改代码**，只把文档改成了与代码一致的说法。
 
 ## 9. 显存让位与温存策略
 
