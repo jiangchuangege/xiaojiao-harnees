@@ -109,12 +109,12 @@ flowchart TB
 
 ## 3. 本项目探索的方向
 
-### 3.1 六个无限
+### 3.1 七个无限
 
-「无限」指用户感知层面的不设上限，而不是指单次请求可以突破物理限制。六个无限分布在
+「无限」指用户感知层面的不设上限，而不是指单次请求可以突破物理限制。七个无限分布在
 一条请求链路的三个位置，全部由载体实现，没有一条依靠扩大上下文窗口。
 
-**图 2 · 六个无限在链路中的位置**
+**图 2 · 七个无限在链路中的位置**
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
@@ -159,7 +159,7 @@ flowchart LR
     style V fill:#F5A623,color:#fff
 ```
 
-> 一句话说明：六个无限分布在一条请求链路的进口、装配、出口三处，全部由载体实现。
+> 一句话说明：七个无限分布在一条请求链路的进口、装配、出口三处，全部由载体实现。
 > 代码位置：`core/memory_vec.py`、`core/input_splitter.py`、`core/continuation.py`、`core/carrier/capability.py`
 
 | 编号 | 名称 | 机制 | 状态 |
@@ -195,7 +195,7 @@ flowchart LR
 与之配套的是一条不容让步的规则：检索不到时明确说明「此前没有提过这件事」，
 不用最相似的一条凑数。
 
-### 3.3 健康系统
+### 3.3 医生
 
 把模型输出异常当作「生病」而不是「坏了」，据此设计了监测、诊断、治疗、病历、预防五个环节
 （`core/health/monitor.py`、`core/health/diagnose.py`、`core/health/heal.py`）。
@@ -272,7 +272,7 @@ flowchart LR
 | 目标 | 依据与当前状态 |
 | --- | --- |
 | 补齐测试覆盖缺口 | `docs/testing-report.md` 第 6 节列出的未覆盖项：小脑推理与记忆检索的最小单测、安装器端到端、浏览器端像素级对照、NVD 接口限流 |
-| 完成六个无限中第 4、5、6 项的收口 | `docs/six-infinity.md` 第 0 节标注为部分落地，强制路由、上下文隔离、超限告警与统一日志行仍在设计阶段 |
+| 完成七个无限中第 4、5、6 项的收口 | `docs/six-infinity.md` 第 0 节标注为部分落地，强制路由、上下文隔离、超限告警与统一日志行仍在设计阶段 |
 | 落地可观测性 | `docs/design-philosophy.md` 第 22 节：日志层已落地，指标与追踪为部分落地，面向用户的告警与设置页系统状态面板尚未落地 |
 | 给小脑补充区分度更高的句向量后端 | `docs/six-infinity.md` 第 8.9 节列为方向；当前为字符级模型，精细语义区分度有限 |
 | 为向量库增加近似检索索引 | `docs/six-infinity.md` 第 8.9 节：当前为全库矩阵扫描，数据量级上升后需要索引 |

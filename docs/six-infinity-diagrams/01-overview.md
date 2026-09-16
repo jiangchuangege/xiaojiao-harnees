@@ -1,4 +1,4 @@
-# 图 1 · 六个无限总览：载体在模型外面兜出六个无限
+# 图 1 · 七个无限总览：载体在模型外面兜出七个无限
 
 | 项 | 内容 |
 | --- | --- |
@@ -39,7 +39,7 @@
 
 | 图 | 文件 | 讲什么 |
 | --- | --- | --- |
-| 图 1 | 本文 | 六个无限总览与分工边界 |
+| 图 1 | 本文 | 七个无限总览与分工边界 |
 | 图 2 | [02-carrier-layer.md](02-carrier-layer.md) | 载体层内部结构（八个职责） |
 | 图 3 | [03-data-flow.md](03-data-flow.md) | 一次 `agent_run` 的五个阶段 |
 | 图 4 | [04-output-continuation.md](04-output-continuation.md) | 输出无限：多次请求 + 无缝合并 |
@@ -47,16 +47,16 @@
 | 图 6 | [06-memory-retrieval.md](06-memory-retrieval.md) | 记忆无限：写入路径与读取路径 |
 | 图 7 | [07-tool-on-demand.md](07-tool-on-demand.md) | 工具无限：按意图装载 + 点名即下轮装载 |
 
-## 2. 图 1 · 六个无限总览
+## 2. 图 1 · 七个无限总览
 
 ```mermaid
     %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 320, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
 flowchart TB
     U["用户输入<br/>长度不限 · 要的篇幅不限"]
 
-    F["载体层（工厂）<br/>分解 · 装配 · 存储 · 调度 · 拼装 · 校验<br/>六个无限全部在这一层实现"]
+    F["载体层（工厂）<br/>分解 · 装配 · 存储 · 调度 · 拼装 · 校验<br/>七个无限全部在这一层实现"]
 
-    subgraph SIX["六个无限 —— 都由载体在模型外面兜出来"]
+    subgraph SIX["七个无限 —— 都由载体在模型外面兜出来"]
         direction TB
         I1["① 记忆无限<br/>历史全部落外部向量库，按需检索注入<br/>core/retriever.py"]
         I2["② 输入无限<br/>超长输入在入口切片、循环、拼装<br/>core/input_splitter.py"]
@@ -100,7 +100,7 @@ flowchart TB
 | ⑤ 感知无限 | `xiaojiao_app.py` → `_on_progress`（第 8686 行）、`_on_chunk`（第 8674 行）；`core/input_splitter.py` → `process_long_input` 的 `on_progress` 参数 |
 | ⑥ 单次永不超 | `xiaojiao_app.py` → `_estimate_tokens`（第 6105 行）、`_max_context_tokens`（第 6122 行）、`_fit_context`（第 6154 行）、`_plan_tools`；实测脚本 `tools/check_prompt_size.py` |
 
-## 4. 六个无限怎么分类
+## 4. 七个无限怎么分类
 
 图中的颜色不是装饰，它标的是落实程度：
 
@@ -130,7 +130,7 @@ flowchart TB
 
 ## 6. 相关阅读
 
-- [six-infinity.md](../six-infinity.md)：六个无限的定义、实现与验收数据
+- [six-infinity.md](../six-infinity.md)：七个无限的定义、实现与验收数据
 - [02-carrier-layer.md](02-carrier-layer.md)：载体层内部结构
 - [03-data-flow.md](03-data-flow.md)：一次请求的完整数据流
 

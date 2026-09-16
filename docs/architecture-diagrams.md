@@ -5,7 +5,7 @@
 > 图 12–19 对应同一文件的**后半篇**（第十四至二十二节）；
 > **图 20** 是后来补的**载体改造·路径二四阶段**（内感受 → 视角 → 硬改 → 归属回流），
 > 不对应设计哲学的某一节，对应的是真实提交。
-> 六个无限的逐图细解另见 [`six-infinity-diagrams/`](six-infinity-diagrams/)（7 张，含数据流与单模块时序）。
+> 七个无限的逐图细解另见 [`six-infinity-diagrams/`](six-infinity-diagrams/)（7 张，含数据流与单模块时序）。
 >
 > 为什么单独开一份图册而不是塞进 README：
 > README 是"第一眼"，读者扫两屏就该知道这是什么；图册是"要细看时"才来的地方。
@@ -368,7 +368,7 @@ flowchart TB
 
 ---
 
-## 图 10 · 六个无限（都发生在模型外面）
+## 图 10 · 七个无限（都发生在模型外面）
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 340, "nodeSpacing": 46, "rankSpacing": 64, "useMaxWidth": true}}}%%
@@ -395,7 +395,7 @@ flowchart TB
     style OUT fill:#7ED321,color:#fff
 ```
 
-**这张图要说的一句话**：六个无限**没有一个**是靠扩大 ctx 实现的，
+**这张图要说的一句话**：七个无限**没有一个**是靠扩大 ctx 实现的，
 全靠载体在模型外面兜。
 
 ---

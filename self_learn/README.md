@@ -354,7 +354,7 @@ python self_learn/learn.py train
 ## 11. 参考
 
 - [`../docs/self_learn.md`](../docs/self_learn.md)：持续学习功能说明。
-- [`../docs/six-infinity.md`](../docs/six-infinity.md)：六个无限的原理与实测，含记忆相关的设计取舍。
+- [`../docs/six-infinity.md`](../docs/six-infinity.md)：七个无限的原理与实测，含记忆相关的设计取舍。
 - [`../docs/modules/03-memory-depth.md`](../docs/modules/03-memory-depth.md)：记忆深度模块。
 - [`../core/memory_vec.py`](../core/memory_vec.py)：对话记忆向量库与红线断言。
 - [`../core/embedder.py`](../core/embedder.py)：对话记忆的 512 维向量化。

@@ -103,7 +103,7 @@
 | 单次成本 | 无按次计费 | 按 token 计费 | 架构事实 | 是 |
 | 可替换模型 | 换模型不改配置、不丢数据 | 换服务方通常需要改造 | `core/carrier/brain_registry.py` | 是 |
 | 能力上限由谁决定 | **由载体决定，不由单次前向决定**：记忆可扩容、插件可增加、循环可叠加，上限随载体长，不随模型停 | 由这一次前向的模型规模决定 | `core/carrier/capability.py`、`core/memory_vec.py`、`docs/design-philosophy.md` 第二节 | 是 |
-| 六个无限（记忆 / 输入 / 输出 / 工具 / 感知 / 单次不超） | 六项全部实现在模型之外，**用户感知到的能力不随单次上下文与单次输出到顶** | 受单次上下文长度、单次输出上限、单次调用约束 | `core/memory_vec.py`、`core/input_splitter.py`、`core/continuation.py`、`core/carrier/capability.py`、`core/world/` | 是 |
+| 七个无限（记忆 / 输入 / 输出 / 工具 / 感知 / 单次不超） | 六项全部实现在模型之外，**用户感知到的能力不随单次上下文与单次输出到顶** | 受单次上下文长度、单次输出上限、单次调用约束 | `core/memory_vec.py`、`core/input_splitter.py`、`core/continuation.py`、`core/carrier/capability.py`、`core/world/` | 是 |
 | 一次任务的完成方式 | 拆步（输入切片、长文分段）+ 循环（逐段生成）+ 拼接（跨段去重合并）：任务多大就拆多少步 | 一次前向对应一个答案 | `core/input_splitter.py`、`core/continuation.py` | 是 |
 | 校验这一环 | 已接入：答前自评 + 复读检测（检出即截断重来）。**未落地**：「同题跑 N 次 + 投票择一」的完整流水线 | 无中间校验，一次输出即成品 | `core/metacognition/`、`core/health/degeneration.py`；未落地部分见 `docs/design-philosophy.md` 第十四节 | 部分 |
 | 回答质量 | 不可比 | 不可比 | 无对照实验 | 否 |
@@ -156,7 +156,7 @@ flowchart TB
 | 设计哲学与工程依据（22 节） | [`docs/design-philosophy.md`](docs/design-philosophy.md) |
 | 架构图册（20 张 Mermaid） | [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) |
 | 每个模块的独立文档 | [`docs/modules/`](docs/modules/) |
-| 六个无限 | [`docs/six-infinity.md`](docs/six-infinity.md) |
+| 七个无限 | [`docs/six-infinity.md`](docs/six-infinity.md) |
 | 感知层（先感知意义，再判断任务） | [`docs/perception-layer.md`](docs/perception-layer.md) |
 | 心（自然起 · 自己感受 · 自己累积） | [`docs/heart.md`](docs/heart.md)、[`docs/psyche-layer.md`](docs/psyche-layer.md) |
 | 心跳与挂起（睡着不是死） | [`docs/heartbeat.md`](docs/heartbeat.md) |
@@ -1372,7 +1372,7 @@ xiaojiao-harness/
 能力可以靠加插件继续扩展而不靠重训模型；每一层都有日志与测试可查。
 其余判断与依据，包括世界是互联网、自主性边界、模型健康系统、精度叠加、速度优化、
 自我改进、全局工作空间、小脑定位、意图理解交给模型、并发与状态一致性、可观测性等章节，
-见 [`docs/design-philosophy.md`](docs/design-philosophy.md)；六个无限见 [`docs/six-infinity.md`](docs/six-infinity.md)；
+见 [`docs/design-philosophy.md`](docs/design-philosophy.md)；七个无限见 [`docs/six-infinity.md`](docs/six-infinity.md)；
 项目缘起见 [`docs/about.md`](docs/about.md)。
 
 ---

@@ -60,7 +60,7 @@ flowchart TB
     NEXT["下一轮按名字把它装上<br/>_named_tools / _noarg_named_tool 识别<br/>零参数工具直接调用"]
     EXEC["执行工具 · 结果回灌 · 继续轮次<br/>同一工具连续失败 3 次熔断"]
 
-    S5["第 5 步：工具调度 + 上下文隔离（设计，未落地）<br/>代码层强制路由：URL → scrapling · 画图 → archify 链<br/>搜索 → 禁功能字 · 查询 → net_ip / collect_vulnerabilities<br/>约 500 字以上的工具结果只存摘要进持久历史<br/>结果校验：对照目标特征不符则标记可能幻觉<br/>工作流强制：archify_deliver 前必须有 archify_validate"]
+    S5["第 5 步：工具调度 + 上下文隔离（**已落地**）<br/>代码层强制路由：URL → scrapling · 画图 → archify 链<br/>搜索 → 禁功能字 · 查询 → net_ip / collect_vulnerabilities<br/>约 500 字以上的工具结果只存摘要进持久历史<br/>结果校验：对照目标特征不符则标记可能幻觉<br/>工作流强制：archify_deliver 前必须有 archify_validate"]
 
     Q --> DI --> ORDER
     ORDER -->|对应意图| LOADG
@@ -178,7 +178,7 @@ flowchart TB
 | 收敛只影响一轮 | `_plan_tools` 超预算时从列表尾部收敛，**至少保留 1 个**；它不动"系统有多少工具" |
 | 工具目录依赖 system | 模型能点名的前提是目录在 system 里；system 被截断或意图为 `chat` 时目录仍然存在（`_tool_index` 只收窄清单，不删除目录文本） |
 | 连续失败熔断 | 同一工具连续失败 3 次后熔断并把真实报错摆给用户；熔断期间不再重复调用该工具 |
-| 第 5 步未落地 | 图里红色那一格（代码层强制路由、工具结果上下文隔离、结果校验、工作流强制）是设计，尚未落地；落地前这些行为仍由模型与提示词约束 |
+| 第 5 步**已落地**（2026-09-16 更正） | 那一格的四项都已接进代码：**代码层强制路由**（`xiaojiao_app.py` 的「工具选择顺序」表）、**工具结果上下文隔离**（约 500 字以上只留摘要进历史，用户拿到的 answer 一个字不动）、**结果校验**（对照目标特征不符即标「⚠️ 可能幻觉」）、**工作流强制**（`_ARCHIFY_GATE = "archify_validate"`，交付前缺校验由代码层补调）。早先本文标的是"设计，未落地"，属过期标注 |
 | 工具数量会变 | 本文的 77 个 / 13891 token 来自最近一次 `tools/check_prompt_size.py`；新增插件后需复测 |
 
 ## 8. 相关阅读

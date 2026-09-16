@@ -561,10 +561,10 @@ Invoke-WebRequest -Uri "http://127.0.0.1:5000/api/central" -UseBasicParsing
 
 - [`../design-philosophy.md`](../design-philosophy.md)：项目设计哲学，共二十二节，包含十项所处的十一层器官划分与各节实现状态。
 - [`../architecture-diagrams.md`](../architecture-diagrams.md)：图册版，其中图 3 为主题为「载体核心智力十项」的流程图。
-- [`../six-infinity.md`](../six-infinity.md)：六个无限的原理、取舍与实测数据。
+- [`../six-infinity.md`](../six-infinity.md)：七个无限的原理、取舍与实测数据。
 - [`../architecture.md`](../architecture.md)：整体架构与工具选择的层次划分。
 - [`../testing-report.md`](../testing-report.md)：测试报告。
-- [`02-six-infinity.md`](02-six-infinity.md)：模块文档 02，六个无限。
+- [`02-six-infinity.md`](02-six-infinity.md)：模块文档 02，七个无限。
 - `tools/test_mind.py`：十项自测脚本，逐项独立断言。
 - `tools/check_prompt_size.py`：单次请求体检，打印系统提示词占比与各意图装载量。
 - `tools/check_docs.py`：文档与代码一致性检查。
