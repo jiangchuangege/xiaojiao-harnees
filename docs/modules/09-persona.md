@@ -84,10 +84,10 @@ flowchart TB
     G -.-> C["strip_flavor 与 audit"]
     C -.-> NL["尚未接入主流程"]
 
-    style S fill:#2d6cdf,color:#fff
-    style N fill:#5cb85c,color:#fff
-    style NL fill:#d9534f,color:#fff
-    style C fill:#2d6cdf,color:#fff
+    style S fill:#4A90E2,color:#fff
+    style N fill:#7ED321,color:#fff
+    style NL fill:#E74C3C,color:#fff
+    style C fill:#4A90E2,color:#fff
 ```
 
 代码位置：软约束路径见 `core/persona/__init__.py` 的 `persona_block()`，接入点在 `xiaojiao_app.py` 的 `_persona_rules_text()`；硬后处理路径为同文件的 `strip_flavor()`、`audit()`、`polish()`。
@@ -113,10 +113,10 @@ flowchart TB
     C -->|"是"| CH["判为纯口语"]
     C -->|"否"| PR["判为普通段落"]
 
-    style R fill:#2d6cdf,color:#fff
-    style F1 fill:#5cb85c,color:#fff
-    style CH fill:#5cb85c,color:#fff
-    style L fill:#5cb85c,color:#fff
+    style R fill:#4A90E2,color:#fff
+    style F1 fill:#7ED321,color:#fff
+    style CH fill:#7ED321,color:#fff
+    style L fill:#7ED321,color:#fff
 ```
 
 代码位置：`core/persona/__init__.py`，常量 `FORM_WORDS`、`_FORM_CN` 与函数 `pick_form()`、`form_hint()`。
@@ -150,10 +150,10 @@ flowchart TB
     D6 --> SUM
     SUM --> OUT["score 与 human 两个数值"]
 
-    style SUM fill:#2d6cdf,color:#fff
-    style OUT fill:#5cb85c,color:#fff
-    style D3 fill:#d9534f,color:#fff
-    style D4 fill:#d9534f,color:#fff
+    style SUM fill:#4A90E2,color:#fff
+    style OUT fill:#7ED321,color:#fff
+    style D3 fill:#E74C3C,color:#fff
+    style D4 fill:#E74C3C,color:#fff
 ```
 
 代码位置：`core/persona/__init__.py`，函数 `audit()`，正则 `_LIST_MARK` 与 `_TABLE_MARK`。
@@ -175,10 +175,10 @@ flowchart TB
     E -->|"否"| OK["返回新文本与命中列表"]
     E -->|"是"| BK["退回原文并追加删空标记"]
 
-    style M fill:#2d6cdf,color:#fff
-    style OK fill:#5cb85c,color:#fff
-    style BK fill:#d9534f,color:#fff
-    style TD fill:#2d6cdf,color:#fff
+    style M fill:#4A90E2,color:#fff
+    style OK fill:#7ED321,color:#fff
+    style BK fill:#E74C3C,color:#fff
+    style TD fill:#4A90E2,color:#fff
 ```
 
 代码位置：`core/persona/__init__.py`，常量 `AI_TROPES` 与函数 `strip_flavor()`、`_tidy()`、`polish()`。

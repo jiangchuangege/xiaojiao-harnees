@@ -54,6 +54,9 @@ flowchart TB
     end
     AWAKE -->|"suspend()"| ASLEEP
     ASLEEP -->|"resume()：我睡了 N 分，心跳 M 下"| AWAKE
+    style AWAKE fill:#7ED321,color:#fff
+    style ASLEEP fill:#8C8C8C,color:#fff
+
 ```
 
 ## 3. 挂起 / 唤醒机制

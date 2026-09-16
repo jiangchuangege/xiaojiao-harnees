@@ -139,17 +139,17 @@ flowchart LR
     MOD --> I3["③ 输出无限<br/>多次生成并无缝合并"]
     I3 --> OUT["用户看到的一段连续输出"]
     OUT -.-> I5["⑤ 感知无限<br/>全程不露技术痕迹"]
-    style U fill:#2d6cdf,color:#fff
-    style G fill:#2d6cdf,color:#fff
-    style ASM fill:#2d6cdf,color:#fff
-    style I6 fill:#2d6cdf,color:#fff
-    style MOD fill:#2d6cdf,color:#fff
-    style I1 fill:#5cb85c,color:#fff
-    style I2 fill:#5cb85c,color:#fff
-    style I3 fill:#5cb85c,color:#fff
-    style I4 fill:#5cb85c,color:#fff
-    style OUT fill:#5cb85c,color:#fff
-    style I5 fill:#d9534f,color:#fff
+    style U fill:#4A90E2,color:#fff
+    style G fill:#4A90E2,color:#fff
+    style ASM fill:#4A90E2,color:#fff
+    style I6 fill:#4A90E2,color:#fff
+    style MOD fill:#4A90E2,color:#fff
+    style I1 fill:#7ED321,color:#fff
+    style I2 fill:#7ED321,color:#fff
+    style I3 fill:#7ED321,color:#fff
+    style I4 fill:#7ED321,color:#fff
+    style OUT fill:#7ED321,color:#fff
+    style I5 fill:#E74C3C,color:#fff
 ```
 
 ### 4.2 为什么「无限」必须发生在模型外面
@@ -191,16 +191,16 @@ flowchart TB
     CUT --> CK
     CK -->|未超过| SEND["发出请求并写一行装配账本"]
     SEND --> NOTE["账本格式<br/>system 加 tools 加 本轮 等于 合计 除以 上限"]
-    style SUM fill:#2d6cdf,color:#fff
-    style CK fill:#2d6cdf,color:#fff
-    style SEND fill:#2d6cdf,color:#fff
-    style F1 fill:#5cb85c,color:#fff
-    style F2 fill:#5cb85c,color:#fff
-    style V1 fill:#5cb85c,color:#fff
-    style V2 fill:#5cb85c,color:#fff
-    style V3 fill:#5cb85c,color:#fff
-    style CUT fill:#5cb85c,color:#fff
-    style NOTE fill:#5cb85c,color:#fff
+    style SUM fill:#4A90E2,color:#fff
+    style CK fill:#4A90E2,color:#fff
+    style SEND fill:#4A90E2,color:#fff
+    style F1 fill:#7ED321,color:#fff
+    style F2 fill:#7ED321,color:#fff
+    style V1 fill:#7ED321,color:#fff
+    style V2 fill:#7ED321,color:#fff
+    style V3 fill:#7ED321,color:#fff
+    style CUT fill:#7ED321,color:#fff
+    style NOTE fill:#7ED321,color:#fff
 ```
 
 顺序问题的历史记录：早期实现先裁剪、后拼接相关记忆与联网资料，这些注入内容完全没有被计入总量。
@@ -248,13 +248,13 @@ flowchart LR
     R --> INJ["注入系统提示词<br/>不超过 2000 token<br/>每行带说话人前缀"]
     INJ --> M["模型据此回答"]
     R -.->|未命中则注入 0 条| M
-    style N1 fill:#2d6cdf,color:#fff
-    style Q fill:#2d6cdf,color:#fff
-    style W fill:#5cb85c,color:#fff
-    style R fill:#5cb85c,color:#fff
-    style INJ fill:#5cb85c,color:#fff
-    style M fill:#2d6cdf,color:#fff
-    style N50 fill:#5cb85c,color:#fff
+    style N1 fill:#4A90E2,color:#fff
+    style Q fill:#4A90E2,color:#fff
+    style W fill:#7ED321,color:#fff
+    style R fill:#7ED321,color:#fff
+    style INJ fill:#7ED321,color:#fff
+    style M fill:#4A90E2,color:#fff
+    style N50 fill:#7ED321,color:#fff
 ```
 
 #### 5.1.3 实现机制
@@ -334,14 +334,14 @@ flowchart TB
     LOOP --> MERGE["merge_outputs 跨片拼装<br/>整句去重 换行接起"]
     MERGE --> OUT["一份完整结果"]
     LOOP -.-> P["on_progress 只报正在处理<br/>不携带片号"]
-    style IN fill:#2d6cdf,color:#fff
-    style GATE fill:#2d6cdf,color:#fff
-    style OUT fill:#2d6cdf,color:#fff
-    style ST fill:#5cb85c,color:#fff
-    style LOOP fill:#5cb85c,color:#fff
-    style MERGE fill:#5cb85c,color:#fff
-    style N fill:#5cb85c,color:#fff
-    style P fill:#5cb85c,color:#fff
+    style IN fill:#4A90E2,color:#fff
+    style GATE fill:#4A90E2,color:#fff
+    style OUT fill:#4A90E2,color:#fff
+    style ST fill:#7ED321,color:#fff
+    style LOOP fill:#7ED321,color:#fff
+    style MERGE fill:#7ED321,color:#fff
+    style N fill:#7ED321,color:#fff
+    style P fill:#7ED321,color:#fff
 ```
 
 #### 5.2.3 实现机制
@@ -424,14 +424,14 @@ flowchart TB
     J --> F["合并成一段<br/>SSE 逐段推送 前端追加同一气泡"]
     F --> O["交给用户的一段连续输出"]
     J --> ST["停止条件<br/>用户叫停 或 模型声明完成<br/>或 达到目标长度 或 到达段数上限"]
-    style P fill:#2d6cdf,color:#fff
-    style T fill:#2d6cdf,color:#fff
-    style J fill:#2d6cdf,color:#fff
-    style O fill:#2d6cdf,color:#fff
-    style G fill:#5cb85c,color:#fff
-    style PF fill:#5cb85c,color:#fff
-    style F fill:#5cb85c,color:#fff
-    style ST fill:#5cb85c,color:#fff
+    style P fill:#4A90E2,color:#fff
+    style T fill:#4A90E2,color:#fff
+    style J fill:#4A90E2,color:#fff
+    style O fill:#4A90E2,color:#fff
+    style G fill:#7ED321,color:#fff
+    style PF fill:#7ED321,color:#fff
+    style F fill:#7ED321,color:#fff
+    style ST fill:#7ED321,color:#fff
 ```
 
 #### 5.3.3 实现机制
@@ -523,15 +523,15 @@ flowchart TB
     F --> G["模型点名了本轮未装载的工具"]
     G --> H["下一轮按名字装载它<br/>零参数工具可由载体直接调用"]
     E --> I["_fit_context 把结构声明的 token 计入预算"]
-    style A fill:#2d6cdf,color:#fff
-    style C fill:#2d6cdf,color:#fff
-    style G fill:#2d6cdf,color:#fff
-    style B fill:#5cb85c,color:#fff
-    style D fill:#5cb85c,color:#fff
-    style E fill:#5cb85c,color:#fff
-    style F fill:#5cb85c,color:#fff
-    style H fill:#5cb85c,color:#fff
-    style I fill:#5cb85c,color:#fff
+    style A fill:#4A90E2,color:#fff
+    style C fill:#4A90E2,color:#fff
+    style G fill:#4A90E2,color:#fff
+    style B fill:#7ED321,color:#fff
+    style D fill:#7ED321,color:#fff
+    style E fill:#7ED321,color:#fff
+    style F fill:#7ED321,color:#fff
+    style H fill:#7ED321,color:#fff
+    style I fill:#7ED321,color:#fff
 ```
 
 #### 5.4.3 实现机制
@@ -626,15 +626,15 @@ flowchart LR
     end
     BG --> UI["用户那一侧只有两样东西<br/>一是连续的一段正文<br/>二是正在处理"]
     UI -.->|不出现切片 循环 合并 检索<br/>不出现第几分之几片<br/>不出现已超上下文| NEVER["这一批词一个都不出现"]
-    style X1 fill:#dbe9ff,color:#000
-    style X2 fill:#dbe9ff,color:#000
-    style X3 fill:#dbe9ff,color:#000
-    style X4 fill:#dbe9ff,color:#000
-    style X5 fill:#dbe9ff,color:#000
-    style X6 fill:#dbe9ff,color:#000
-    style X7 fill:#dbe9ff,color:#000
-    style UI fill:#5cb85c,color:#fff
-    style NEVER fill:#d9534f,color:#fff
+    style X1 fill:#EAF2FD,color:#000
+    style X2 fill:#EAF2FD,color:#000
+    style X3 fill:#EAF2FD,color:#000
+    style X4 fill:#EAF2FD,color:#000
+    style X5 fill:#EAF2FD,color:#000
+    style X6 fill:#EAF2FD,color:#000
+    style X7 fill:#EAF2FD,color:#000
+    style UI fill:#7ED321,color:#fff
+    style NEVER fill:#E74C3C,color:#fff
 ```
 
 #### 5.5.3 实现机制
@@ -705,17 +705,17 @@ flowchart TB
     D --> C
     C -->|未超过| E["发出请求<br/>写一行装配账本"]
     E --> P6["第 6 步设计 未落地<br/>超过上限的百分之八十给告警<br/>超过上限如实报错 不静默丢"]
-    style B fill:#2d6cdf,color:#fff
-    style C fill:#2d6cdf,color:#fff
-    style E fill:#2d6cdf,color:#fff
-    style S fill:#5cb85c,color:#fff
-    style T fill:#5cb85c,color:#fff
-    style R fill:#5cb85c,color:#fff
-    style H fill:#5cb85c,color:#fff
-    style Q fill:#5cb85c,color:#fff
-    style OV fill:#5cb85c,color:#fff
-    style D fill:#5cb85c,color:#fff
-    style P6 fill:#d9534f,color:#fff
+    style B fill:#4A90E2,color:#fff
+    style C fill:#4A90E2,color:#fff
+    style E fill:#4A90E2,color:#fff
+    style S fill:#7ED321,color:#fff
+    style T fill:#7ED321,color:#fff
+    style R fill:#7ED321,color:#fff
+    style H fill:#7ED321,color:#fff
+    style Q fill:#7ED321,color:#fff
+    style OV fill:#7ED321,color:#fff
+    style D fill:#7ED321,color:#fff
+    style P6 fill:#E74C3C,color:#fff
 ```
 
 #### 5.6.3 实现机制

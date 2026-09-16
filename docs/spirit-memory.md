@@ -64,10 +64,10 @@ flowchart TB
     J -->|"同题"| DUP["不重复存"]
     J -->|"不同题"| ADD
 
-    style Q fill:#2d6cdf,color:#fff
-    style A fill:#5cb85c,color:#fff
-    style RE fill:#d9534f,color:#fff
-    style M fill:#f0ad4e,color:#fff
+    style Q fill:#4A90E2,color:#fff
+    style A fill:#7ED321,color:#fff
+    style RE fill:#E74C3C,color:#fff
+    style M fill:#F5A623,color:#fff
 ```
 
 **这张图要说的一句话**：召回只给素材，落库只收认知 —— 两头都不许出现答案原文。

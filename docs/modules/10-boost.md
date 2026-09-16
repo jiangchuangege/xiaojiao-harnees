@@ -75,8 +75,8 @@ flowchart TB
     D4 --> RES
     D5 --> RES
 
-    style G fill:#2d6cdf,color:#fff
-    style RES fill:#5cb85c,color:#fff
+    style G fill:#4A90E2,color:#fff
+    style RES fill:#7ED321,color:#fff
 ```
 
 代码位置：`core/boost/__init__.py` 的总纲注释，以及各模块各自的文件头注释。
@@ -100,11 +100,11 @@ flowchart TB
     S3 -->|"是"| R3["模糊反问"]
     S3 -->|"否"| NONE
 
-    style Q fill:#2d6cdf,color:#fff
-    style NONE fill:#d9534f,color:#fff
-    style R1 fill:#5cb85c,color:#fff
-    style R2 fill:#5cb85c,color:#fff
-    style R3 fill:#5cb85c,color:#fff
+    style Q fill:#4A90E2,color:#fff
+    style NONE fill:#E74C3C,color:#fff
+    style R1 fill:#7ED321,color:#fff
+    style R2 fill:#7ED321,color:#fff
+    style R3 fill:#7ED321,color:#fff
 ```
 
 代码位置：`core/boost/__init__.py`，函数 `dispatch()`，返回 `{"kind", "text", "why", "evidence"}`。图把性质相近的判据并成一组，实际执行是逐项试探，顺序为：跨领域联想、创造性、超长一致性、深度推理、模糊意图反问。命中即返回并结束，不再往下试。
@@ -132,11 +132,11 @@ flowchart TB
     TB --> CK
     RG --> CK
 
-    style EX fill:#2d6cdf,color:#fff
-    style IN fill:#2d6cdf,color:#fff
-    style TB fill:#5cb85c,color:#fff
-    style RG fill:#5cb85c,color:#fff
-    style CK fill:#d9534f,color:#fff
+    style EX fill:#4A90E2,color:#fff
+    style IN fill:#4A90E2,color:#fff
+    style TB fill:#7ED321,color:#fff
+    style RG fill:#7ED321,color:#fff
+    style CK fill:#E74C3C,color:#fff
 ```
 
 代码位置：`core/boost/consistency.py`，类 `EntityTable` 与 `RelationGraph`，函数 `extract()`、`inject()`、`check()`、`save()`、`load()`。实体表处理同名归一：`merge_alias()` 把同一实体的不同写法并成一条，保留首次出现的写法作为规范名，其余写法进入别名列表。类型冲突指同一个名字被登记为两种实体类型。关系矛盾指同一对实体之间同时存在互斥关系，例如"是"与"不是"。校验结果中的"新实体"不计为错误，文本里出现表外名字可能是新引入的角色，也可能是同一个人的新写法，需要确认后再登记。

@@ -33,6 +33,17 @@ flowchart TB
     A1 --> A2["组合：用现有工具拼出新用法"]
     A2 --> A3["试：做一遍，看行不行"]
     A3 --> A4["记：成了记住；**不成也记住**"]
+    style C fill:#F5A623,color:#fff
+    style F fill:#4A90E2,color:#fff
+    style P fill:#4A90E2,color:#fff
+    style W fill:#F5A623,color:#fff
+    style T fill:#7ED321,color:#fff
+    style N fill:#8C8C8C,color:#fff
+    style A1 fill:#7ED321,color:#fff
+    style A2 fill:#7ED321,color:#fff
+    style A3 fill:#7ED321,color:#fff
+    style A4 fill:#7ED321,color:#fff
+
 ```
 
 ## 3. 判据的边界（和感知层 `parse()` 同一条）

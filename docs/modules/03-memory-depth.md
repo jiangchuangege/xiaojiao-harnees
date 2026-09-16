@@ -125,11 +125,11 @@ flowchart TB
     IMP["印象层 impression<br/>压缩生成的摘要条目"] --> V
     V --> IDX["内存索引<br/>512 维矩阵一次乘扫描"]
 
-    style C1 fill:#2d6cdf,color:#fff
-    style C2 fill:#2d6cdf,color:#fff
-    style F fill:#5cb85c,color:#fff
-    style E fill:#5cb85c,color:#fff
-    style V fill:#5cb85c,color:#fff
+    style C1 fill:#4A90E2,color:#fff
+    style C2 fill:#4A90E2,color:#fff
+    style F fill:#7ED321,color:#fff
+    style E fill:#7ED321,color:#fff
+    style V fill:#7ED321,color:#fff
 ```
 
 > 代码位置：`core/memory_deep.py` 的 `classify()`、`remember()`、`remember_fact()`、`remember_expression()`、`remember_impression()`；`core/memory_vec.py` 的 `add_memory()`。
@@ -180,12 +180,12 @@ flowchart LR
     RV["revive 回升<br/>7 天内被检索命中"] -.->|"把条目升回高清"| HD
     CS["consolidate 巩固<br/>引用次数达到 3 次"] -.->|"标记 locked 之后不再降级"| HD
 
-    style HD fill:#5cb85c,color:#fff
-    style SD fill:#5cb85c,color:#fff
-    style BL fill:#5cb85c,color:#fff
-    style IM fill:#5cb85c,color:#fff
-    style RV fill:#2d6cdf,color:#fff
-    style CS fill:#2d6cdf,color:#fff
+    style HD fill:#7ED321,color:#fff
+    style SD fill:#7ED321,color:#fff
+    style BL fill:#7ED321,color:#fff
+    style IM fill:#7ED321,color:#fff
+    style RV fill:#4A90E2,color:#fff
+    style CS fill:#4A90E2,color:#fff
 ```
 
 > 代码位置：`core/memory_deep.py` 的 `CLARITY_DAYS`、`clarity_of()`、`_clarity_of_row()`、`degrade()`、`revive()`、`consolidate()`。
@@ -217,12 +217,12 @@ flowchart TB
     M5 --> OUT["注入内容 或 明确说明没有"]
     SCH["后台定时调度<br/>设计，未落地"] -.->|"应由它定期触发前三个机制"| M1
 
-    style M1 fill:#5cb85c,color:#fff
-    style M2 fill:#5cb85c,color:#fff
-    style M3 fill:#5cb85c,color:#fff
-    style M4 fill:#5cb85c,color:#fff
-    style M5 fill:#d9534f,color:#fff
-    style SCH fill:#d9534f,color:#fff
+    style M1 fill:#7ED321,color:#fff
+    style M2 fill:#7ED321,color:#fff
+    style M3 fill:#7ED321,color:#fff
+    style M4 fill:#7ED321,color:#fff
+    style M5 fill:#E74C3C,color:#fff
+    style SCH fill:#E74C3C,color:#fff
 ```
 
 > 代码位置：`core/memory_deep.py` 的 `compress()`、`consolidate()`、`degrade()`、`associations()`、`recall()`。调度缺口见第 7.1 节。
@@ -273,11 +273,11 @@ flowchart TB
     FZ --> USE
     N --> USE
 
-    style RC fill:#2d6cdf,color:#fff
-    style P fill:#5cb85c,color:#fff
-    style FZ fill:#2d6cdf,color:#fff
-    style N fill:#d9534f,color:#fff
-    style EM fill:#2d6cdf,color:#fff
+    style RC fill:#4A90E2,color:#fff
+    style P fill:#7ED321,color:#fff
+    style FZ fill:#4A90E2,color:#fff
+    style N fill:#E74C3C,color:#fff
+    style EM fill:#4A90E2,color:#fff
 ```
 
 > 代码位置：`core/memory_deep.py` 的 `recall()`、`overlap()`、`confidence()`、`_features()`、常量 `SIM_WEAK` 与 `SIM_STRONG`。
@@ -318,11 +318,11 @@ flowchart TB
     D -->|未命中| OK["放行"]
     BLK --> USER["提示原文直接交给用户<br/>不经过模型转述"]
 
-    style G fill:#2d6cdf,color:#fff
-    style D fill:#2d6cdf,color:#fff
-    style BLK fill:#d9534f,color:#fff
-    style USER fill:#d9534f,color:#fff
-    style OK fill:#5cb85c,color:#fff
+    style G fill:#4A90E2,color:#fff
+    style D fill:#4A90E2,color:#fff
+    style BLK fill:#E74C3C,color:#fff
+    style USER fill:#E74C3C,color:#fff
+    style OK fill:#7ED321,color:#fff
 ```
 
 > 代码位置：`core/security/no_delete.py` 的 `check_command()`、`check_file_op()`、`guard_write()`、`assert_command()`、`is_delete_command()`、`explain()`。

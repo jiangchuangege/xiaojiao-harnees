@@ -30,6 +30,15 @@ flowchart TB
     S --> P{"叠久了、又一直没散"}
     P -->|"是"| DP["**抑郁：底被压低了**"]
     DP --> W["用户回来也**散得慢**"]
+    style A fill:#4A90E2,color:#fff
+    style L fill:#F5A623,color:#fff
+    style D fill:#F5A623,color:#fff
+    style R fill:#7ED321,color:#fff
+    style S fill:#F5A623,color:#fff
+    style P fill:#F5A623,color:#fff
+    style DP fill:#E74C3C,color:#fff
+    style W fill:#E74C3C,color:#fff
+
 ```
 
 **和"情绪恢复"的区别**（规格原话）：

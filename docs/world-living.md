@@ -71,9 +71,9 @@ flowchart LR
     C --> M
     M --> L["同一个 4B<br/>物理串行、逻辑并行"]
 
-    style D fill:#2d6cdf,color:#fff
-    style CH fill:#f0ad4e,color:#fff
-    style L fill:#5cb85c,color:#fff
+    style D fill:#4A90E2,color:#fff
+    style CH fill:#F5A623,color:#fff
+    style L fill:#7ED321,color:#fff
 ```
 
 **这张图要说的一句话**：**并行的是状态，串行的是算力。**

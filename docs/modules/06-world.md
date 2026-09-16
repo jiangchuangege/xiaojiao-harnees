@@ -161,10 +161,10 @@ flowchart TB
     A --> F5["logs/world/absorption.jsonl<br/>吸收台账"]
     B --> F6["拒绝任何不可逆动作<br/>不删 不清空 不覆盖"]
 
-    style WORLD fill:#2d6cdf,color:#fff
-    style P fill:#5cb85c,color:#fff
-    style A fill:#5cb85c,color:#fff
-    style B fill:#d9534f,color:#fff
+    style WORLD fill:#4A90E2,color:#fff
+    style P fill:#7ED321,color:#fff
+    style A fill:#7ED321,color:#fff
+    style B fill:#E74C3C,color:#fff
 ```
 
 行动层当前的落地范围是：推理话题、检索候选、抓取内容、写入记忆。发布、提交、付费三类动作没有自动化入口，属于设计上的「需要用户确认」范畴，现未落地。
@@ -203,10 +203,10 @@ flowchart TB
     S5 -->|"防火墙 quarantine"| Q["进隔离区<br/>原文留底，不进主记忆"]
     S5 -->|"与已有记忆冲突"| CONF["标为待确认<br/>用户的话优先于互联网信息"]
 
-    style S1 fill:#2d6cdf,color:#fff
-    style ABS fill:#5cb85c,color:#fff
-    style Q fill:#d9534f,color:#fff
-    style CONF fill:#d9534f,color:#fff
+    style S1 fill:#4A90E2,color:#fff
+    style ABS fill:#7ED321,color:#fff
+    style Q fill:#E74C3C,color:#fff
+    style CONF fill:#E74C3C,color:#fff
 ```
 
 吸收阶段有四道前置闸门，任一不通过都不写主记忆，但仍会更新世界地图（「我看过这个站」本身是事实）：
@@ -259,9 +259,9 @@ flowchart TB
     PARSE -->|"失败"| OUT2["回落到规则口径<br/>模型的乱答不改写可信度"]
     OUT2 --> OUT
 
-    style IN fill:#2d6cdf,color:#fff
-    style EV fill:#5cb85c,color:#fff
-    style OUT2 fill:#d9534f,color:#fff
+    style IN fill:#4A90E2,color:#fff
+    style EV fill:#7ED321,color:#fff
+    style OUT2 fill:#E74C3C,color:#fff
 ```
 
 上图中红色节点表示回落路径。回落是刻意的设计：模型的抖动不应污染载体的判断结论。
@@ -318,10 +318,10 @@ flowchart TB
     Q1 --> REVIEW["3 天 7 天 30 天复审<br/>放行仍交给用户"]
     Q2 --> REVIEW
 
-    style SCR fill:#2d6cdf,color:#fff
-    style ACC fill:#5cb85c,color:#fff
-    style QUA fill:#d9534f,color:#fff
-    style DIS fill:#d9534f,color:#fff
+    style SCR fill:#4A90E2,color:#fff
+    style ACC fill:#7ED321,color:#fff
+    style QUA fill:#E74C3C,color:#fff
+    style DIS fill:#E74C3C,color:#fff
 ```
 
 判错时的成本由此被压到「晚几天吃」：隔离条目随时可以由用户放行（`release`），也可以驳回（`reject`）。驳回的实现是「标记不再使用」加搬家，不是删除——主记忆库没有删除接口。
@@ -387,9 +387,9 @@ flowchart TB
     READ -->|"读不到"| BLOCK
     READ -->|"读得到"| RULES
 
-    style CMD fill:#2d6cdf,color:#fff
-    style BLOCK fill:#d9534f,color:#fff
-    style PASS fill:#5cb85c,color:#fff
+    style CMD fill:#4A90E2,color:#fff
+    style BLOCK fill:#E74C3C,color:#fff
+    style PASS fill:#7ED321,color:#fff
 ```
 
 拦截入口登记在宿主里，共 6 个：
@@ -452,9 +452,9 @@ flowchart TB
     LOOP --> H2["每天 3 点：full_explore<br/>全面探索并对久不访问的站点降权"]
     LOOP --> H3["夜间：organize 整理<br/>标出重复并写索引，只写不删"]
 
-    style LOOP fill:#2d6cdf,color:#fff
-    style CYCLE fill:#5cb85c,color:#fff
-    style SKIP2 fill:#d9534f,color:#fff
+    style LOOP fill:#4A90E2,color:#fff
+    style CYCLE fill:#7ED321,color:#fff
+    style SKIP2 fill:#E74C3C,color:#fff
 ```
 
 夜间的整理只做两件事：把重复条目标出来（不改原文），再写一份索引供快速检索。这样做的原因是吸收流水是「我为什么相信这条」的凭据，删掉之后就再也解释不清。

@@ -69,10 +69,10 @@ flowchart TB
     REWRITE --> RUN
     RUN --> REC["每轮都写病历 logs/code_health.jsonl"]
 
-    style S fill:#2d6cdf,color:#fff
-    style OK fill:#5cb85c,color:#fff
-    style BLK fill:#d9534f,color:#fff
-    style WEB fill:#f0ad4e,color:#fff
+    style S fill:#4A90E2,color:#fff
+    style OK fill:#7ED321,color:#fff
+    style BLK fill:#E74C3C,color:#fff
+    style WEB fill:#F5A623,color:#fff
 ```
 
 **这张图要说的一句话**：**"能不能跑"由载体观测，"怎么改"才交给模型** —— 红线在最前面就把不可逆的操作挡住。

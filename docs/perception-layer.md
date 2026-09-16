@@ -38,6 +38,14 @@ flowchart TB
     S --> T["③ 处理任务（带着心的方向）<br/>自评 / 直算 / 检索 / 工具 / 生成"]
     T --> A["回答"]
     P -.->|"一个字都不进上下文"| X["不给用户看、不进对话历史"]
+    style M fill:#4A90E2,color:#fff
+    style P fill:#4A90E2,color:#fff
+    style H fill:#7ED321,color:#fff
+    style S fill:#F5A623,color:#fff
+    style T fill:#4A90E2,color:#fff
+    style A fill:#7ED321,color:#fff
+    style X fill:#8C8C8C,color:#fff
+
 ```
 
 **为什么感知的输出一个字都不进上下文**：进了就变成"一条可被忽略的消息" ——

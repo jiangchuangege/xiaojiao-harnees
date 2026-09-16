@@ -50,10 +50,10 @@ flowchart TB
     M4 -.->|"同一套器官"| CORE
     CORE --> OUT["开箱即用的成品<br/>4B 在载体里发挥出远超它本身的能力"]
 
-    style ROOT fill:#2d6cdf,color:#fff
-    style CORE fill:#5cb85c,color:#fff
-    style MODEL fill:#f0ad4e,color:#fff
-    style OUT fill:#5cb85c,color:#fff
+    style ROOT fill:#4A90E2,color:#fff
+    style CORE fill:#7ED321,color:#fff
+    style MODEL fill:#F5A623,color:#fff
+    style OUT fill:#7ED321,color:#fff
 ```
 
 **这张图要说的一句话**：模型是**换得起**的零件，载体才是"小焦"。
@@ -99,8 +99,8 @@ flowchart TB
     O11 --> RED["🚫 红线：不能删文件<br/>载体层硬拦截，不靠模型自觉"]
     O6 --> RED
 
-    style BODY fill:#2d6cdf,color:#fff
-    style RED fill:#d9534f,color:#fff
+    style BODY fill:#4A90E2,color:#fff
+    style RED fill:#E74C3C,color:#fff
 ```
 
 **这张图要说的一句话**：这十一层全部是**载体实现**的。
@@ -129,9 +129,9 @@ flowchart LR
 
     K -.->|"整轮循环：状态回写到 ①"| A
 
-    style E fill:#f0ad4e,color:#fff
-    style OUT fill:#5cb85c,color:#fff
-    style G fill:#d9534f,color:#fff
+    style E fill:#F5A623,color:#fff
+    style OUT fill:#7ED321,color:#fff
+    style G fill:#E74C3C,color:#fff
 ```
 
 **这张图要说的一句话**：十项里**只有一格是模型**（橙色的"单步推理"），
@@ -170,10 +170,10 @@ flowchart TB
     RC -->|"模糊命中"| R2["我记得你提过…<br/>细节你提醒我一下<br/>绝不补全细节"]
     RC -->|"检索不到"| R3["你之前没跟我说过这事<br/>绝不拿最像的凑"]
 
-    style F fill:#5cb85c,color:#fff
-    style E fill:#2d6cdf,color:#fff
-    style IM fill:#9e9e9e,color:#fff
-    style R3 fill:#d9534f,color:#fff
+    style F fill:#7ED321,color:#fff
+    style E fill:#4A90E2,color:#fff
+    style IM fill:#8C8C8C,color:#fff
+    style R3 fill:#E74C3C,color:#fff
 ```
 
 **这张图要说的一句话**：记忆的**降级不是遗忘**——
@@ -199,10 +199,10 @@ flowchart TB
     REC --> PRE["预防<br/>体检 / 睡眠 / 压力管理 / 隔离机制"]
     PRE -.->|"回灌：把已知病灶变成下次的预警"| MON
 
-    style L1 fill:#8bc34a,color:#fff
-    style L2 fill:#fdd835
-    style L3 fill:#f0ad4e,color:#fff
-    style L4 fill:#d9534f,color:#fff
+    style L1 fill:#7ED321,color:#fff
+    style L2 fill:#F5A623
+    style L3 fill:#F5A623,color:#fff
+    style L4 fill:#E74C3C,color:#fff
 ```
 
 **这张图要说的一句话**：模型会退化，这不可怕；
@@ -252,8 +252,8 @@ flowchart TB
 
     BODY --> OUT["小焦<br/>永远同一个小焦<br/>换火种不换小焦"]
 
-    style BODY fill:#dbe9ff
-    style OUT fill:#2d6cdf,color:#fff
+    style BODY fill:#EAF2FD
+    style OUT fill:#4A90E2,color:#fff
 ```
 
 **这张图要说的一句话**：换模型时**状态一个都不能丢**——
@@ -284,9 +284,9 @@ flowchart TB
     BUS -.->|"共享状态"| MEMS
     BUS -.->|"共享状态"| PERS
 
-    style MEMS fill:#2d6cdf,color:#fff
-    style U3 fill:#5cb85c,color:#fff
-    style PERS fill:#f0ad4e,color:#fff
+    style MEMS fill:#4A90E2,color:#fff
+    style U3 fill:#7ED321,color:#fff
+    style PERS fill:#F5A623,color:#fff
 ```
 
 **这张图要说的一句话**：整体表现**大于**各项单独表现之和，
@@ -321,10 +321,10 @@ flowchart TB
     W1 -.-> CLOSE
     CLOSE --> ABS["吸收进记忆<br/>带「为什么信它」"]
 
-    style ROOT fill:#2d6cdf,color:#fff
-    style AUTO fill:#5cb85c,color:#fff
-    style WORLD fill:#f0ad4e,color:#fff
-    style RED fill:#d9534f,color:#fff
+    style ROOT fill:#4A90E2,color:#fff
+    style AUTO fill:#7ED321,color:#fff
+    style WORLD fill:#F5A623,color:#fff
+    style RED fill:#E74C3C,color:#fff
 ```
 
 **这张图要说的一句话**：互联网不是小焦的**工具箱**，是它的**世界** ——
@@ -358,9 +358,9 @@ flowchart TB
     PERS --> SAVE["记忆落盘<br/>core/memory_deep：分层入库"]
     SAVE --> OUT["输出给用户<br/>用户看不到任何技术痕迹"]
 
-    style MODEL fill:#f0ad4e,color:#fff
-    style OUT fill:#5cb85c,color:#fff
-    style CUT fill:#d9534f,color:#fff
+    style MODEL fill:#F5A623,color:#fff
+    style OUT fill:#7ED321,color:#fff
+    style CUT fill:#E74C3C,color:#fff
 ```
 
 **这张图要说的一句话**：用户看到的是"一次问答"，
@@ -391,8 +391,8 @@ flowchart TB
     I6 --> R
     R --> OUT["单次请求的 token 是物理有限的<br/>但总处理量与用户感知是无限的"]
 
-    style C fill:#2d6cdf,color:#fff
-    style OUT fill:#5cb85c,color:#fff
+    style C fill:#4A90E2,color:#fff
+    style OUT fill:#7ED321,color:#fff
 ```
 
 **这张图要说的一句话**：六个无限**没有一个**是靠扩大 ctx 实现的，
@@ -421,8 +421,8 @@ flowchart TB
     D6 --> RES
     D7 --> RES
 
-    style G fill:#2d6cdf,color:#fff
-    style RES fill:#5cb85c,color:#fff
+    style G fill:#4A90E2,color:#fff
+    style RES fill:#7ED321,color:#fff
 ```
 
 **这张图要说的一句话**：这几项**都遵守同一个公式**——
@@ -454,8 +454,8 @@ flowchart TB
     P5 --> SUM
     SUM --> LV["按难度分档<br/>简单：1 次就够<br/>中等：1 次 + 1 次校验<br/>复杂：跑 N 次 + 校验 + 择一"]
     style S1 fill:#8c8c8c,color:#fff
-    style S2 fill:#5cb85c,color:#fff
-    style SUM fill:#2d6cdf,color:#fff
+    style S2 fill:#7ED321,color:#fff
+    style SUM fill:#4A90E2,color:#fff
 ```
 
 **这张图要说的一句话**：4B 是**存量**精度（一次用完），载体叠上去的是**流量**精度（可无限叠）——
@@ -477,10 +477,10 @@ flowchart TB
     R --> E["5. 智能路由<br/><b>现状：已落地</b><br/>简单任务单角色快答，复杂任务才挂补刀"]
     B --> GAP["目标 vs 现状<br/>日常提速 20–30% ｜ 未达成<br/>批量提速 60–70% ｜ 未达成<br/>重复问题秒回 ｜ 未达成"]
     C --> GAP
-    style R fill:#2d6cdf,color:#fff
-    style D fill:#5cb85c,color:#fff
-    style E fill:#5cb85c,color:#fff
-    style GAP fill:#f0ad4e,color:#fff
+    style R fill:#4A90E2,color:#fff
+    style D fill:#7ED321,color:#fff
+    style E fill:#7ED321,color:#fff
+    style GAP fill:#F5A623,color:#fff
 ```
 
 **这张图要说的一句话**：五条里**两条已落地、一条落了一半、两条还是设计**——
@@ -510,10 +510,10 @@ flowchart LR
         N5["模型权重"]
         N6["载体核心代码"]
     end
-    style B fill:#2d6cdf,color:#fff
-    style K fill:#5cb85c,color:#fff
-    style U fill:#f0ad4e,color:#fff
-    style NEVER fill:#d9534f,color:#fff
+    style B fill:#4A90E2,color:#fff
+    style K fill:#7ED321,color:#fff
+    style U fill:#F5A623,color:#fff
+    style NEVER fill:#E74C3C,color:#fff
 ```
 
 **这张图要说的一句话**：**没有回滚的自我改进就是自我损坏**——
@@ -543,8 +543,8 @@ flowchart TB
     EV --> P2["决策层读到 → 改走工具"]
     API --> P3["界面与验收用例取证"]
     ST -.->|"模块之间不互相 import"| C["加模块不用改老模块"]
-    style BOARD fill:#5cb85c,color:#fff
-    style C fill:#2d6cdf,color:#fff
+    style BOARD fill:#7ED321,color:#fff
+    style C fill:#4A90E2,color:#fff
 ```
 
 **这张图要说的一句话**：模块之间**不互相 import**，只往黑板上写、只读自己关心的那一片——
@@ -579,9 +579,9 @@ flowchart TB
     X5 --> B1["主题级语义：够用<br/>天气 / 记忆 / 工具 能正确聚合"]
     X5 --> B2["精细语义：弱<br/>喜欢 vs 讨厌 余弦 0.904，分不开"]
     X5 --> B3["长文区分度：随长度衰减<br/>500 字差 1 字 ≈ 0.9995"]
-    style PIPE fill:#5cb85c,color:#fff
-    style B2 fill:#f0ad4e,color:#fff
-    style B3 fill:#f0ad4e,color:#fff
+    style PIPE fill:#7ED321,color:#fff
+    style B2 fill:#F5A623,color:#fff
+    style B3 fill:#F5A623,color:#fff
 ```
 
 **这张图要说的一句话**：小脑是**感官和索引**，不是脑子——它不思考、不说话，只把话变成向量。
@@ -614,9 +614,9 @@ flowchart TB
     CARRIER --> EX1["执行：function calling"]
     CARRIER --> EX2["兜底：失败重试、降级"]
     CARRIER --> EX3["直答：「你有哪些工具」→ 列全部 77 个<br/>这是载体本来就知道的事实，不是理解"]
-    style MODEL fill:#2d6cdf,color:#fff
-    style GIVE fill:#5cb85c,color:#fff
-    style ASK fill:#f0ad4e,color:#fff
+    style MODEL fill:#4A90E2,color:#fff
+    style GIVE fill:#7ED321,color:#fff
+    style ASK fill:#F5A623,color:#fff
 ```
 
 **这张图要说的一句话**：载体**不替大脑判断该走哪条路**——规则永远列不全，加 100 条规则，第 101 种说法还是漏。
@@ -649,9 +649,9 @@ flowchart TB
     M1 --> SS
     LK --> EC
     EC --> WARN["最阴的一类 bug：写入不报错、读文件也正常，只是检索不到 → 用户只觉得「它忘了」"]
-    style FG fill:#5cb85c,color:#fff
+    style FG fill:#7ED321,color:#fff
     style BG fill:#8c8c8c,color:#fff
-    style WARN fill:#d9534f,color:#fff
+    style WARN fill:#E74C3C,color:#fff
 ```
 
 **这张图要说的一句话**：最终一致换来的是"前台不卡"，代价是"后台看到的世界可能晚几秒"——
@@ -673,11 +673,11 @@ flowchart TB
     L4 --> UI["设置页「系统状态」面板<br/><b>未落地</b>"]
     NEED --> WHY["为什么它属于设计哲学而不是 backlog<br/>没有它，前面各节都不可验证"]
     UI --> WHY
-    style L1 fill:#5cb85c,color:#fff
-    style L2 fill:#f0ad4e,color:#fff
-    style L3 fill:#f0ad4e,color:#fff
-    style L4 fill:#f0ad4e,color:#fff
-    style UI fill:#d9534f,color:#fff
+    style L1 fill:#7ED321,color:#fff
+    style L2 fill:#F5A623,color:#fff
+    style L3 fill:#F5A623,color:#fff
+    style L4 fill:#F5A623,color:#fff
+    style UI fill:#E74C3C,color:#fff
 ```
 
 **这张图要说的一句话**："协同网络整体大于部分之和""健康系统在预防""精度在叠加"——
@@ -738,11 +738,11 @@ flowchart TB
     N1 --> N2
     N2 -.->|"**反馈：成为下一轮硬改的输入之一**<br/>`suppress` 为真时把档位提到「中」<br/>（不是记完就完了）"| POL
 
-    style TICK fill:#2d6cdf,color:#fff
-    style P1 fill:#5cb85c,color:#fff
-    style P2 fill:#5cb85c,color:#fff
-    style P3 fill:#f0ad4e,color:#fff
-    style P4 fill:#5cb85c,color:#fff
+    style TICK fill:#4A90E2,color:#fff
+    style P1 fill:#7ED321,color:#fff
+    style P2 fill:#7ED321,color:#fff
+    style P3 fill:#F5A623,color:#fff
+    style P4 fill:#7ED321,color:#fff
 ```
 
 **这张图要说的一句话**：状态不是"写在提示词里劝它"，而是**代码层真的改了它这一轮看到什么、

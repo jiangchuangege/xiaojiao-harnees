@@ -78,15 +78,15 @@ flowchart TB
     H --> H1["5 个 daemon 线程名、3 把锁、1 处索引对账"]
     I --> I1["设置页无系统状态面板"]
 
-    style ROOT fill:#2d6cdf,color:#fff
-    style A fill:#f0ad4e,color:#fff
-    style B fill:#f0ad4e,color:#fff
-    style D fill:#d9534f,color:#fff
-    style E fill:#5cb85c,color:#fff
-    style F fill:#5cb85c,color:#fff
-    style G fill:#5cb85c,color:#fff
-    style H fill:#5cb85c,color:#fff
-    style I fill:#f0ad4e,color:#fff
+    style ROOT fill:#4A90E2,color:#fff
+    style A fill:#F5A623,color:#fff
+    style B fill:#F5A623,color:#fff
+    style D fill:#E74C3C,color:#fff
+    style E fill:#7ED321,color:#fff
+    style F fill:#7ED321,color:#fff
+    style G fill:#7ED321,color:#fff
+    style H fill:#7ED321,color:#fff
+    style I fill:#F5A623,color:#fff
 ```
 
 **图 0 · 八节实现状态全景**
@@ -148,11 +148,11 @@ flowchart TB
     P2 -.->|"现状：只有边界档案已接入主流程"| P2X["部分落地"]
     AGG -.->|"现状：没有投票器"| AGGX["未落地"]
 
-    style M fill:#f0ad4e,color:#fff
-    style P2X fill:#f0ad4e,color:#fff
-    style P1X fill:#d9534f,color:#fff
-    style AGGX fill:#d9534f,color:#fff
-    style FIN fill:#5cb85c,color:#fff
+    style M fill:#F5A623,color:#fff
+    style P2X fill:#F5A623,color:#fff
+    style P1X fill:#E74C3C,color:#fff
+    style AGGX fill:#E74C3C,color:#fff
+    style FIN fill:#7ED321,color:#fff
 ```
 
 **图 1 · 精度叠加流水线与真实落点**
@@ -361,13 +361,13 @@ flowchart TB
 
     A1 --> GAP["目标与现状的差距<br/>日常提速 20 至 30 百分比 未达成<br/>批量提速 60 至 70 百分比 未达成<br/>重复问题秒回 未达成"]
 
-    style R fill:#2d6cdf,color:#fff
-    style D fill:#5cb85c,color:#fff
-    style E fill:#5cb85c,color:#fff
-    style B2 fill:#5cb85c,color:#fff
-    style A fill:#d9534f,color:#fff
-    style B1 fill:#f0ad4e,color:#fff
-    style GAP fill:#f0ad4e,color:#fff
+    style R fill:#4A90E2,color:#fff
+    style D fill:#7ED321,color:#fff
+    style E fill:#7ED321,color:#fff
+    style B2 fill:#7ED321,color:#fff
+    style A fill:#E74C3C,color:#fff
+    style B1 fill:#F5A623,color:#fff
+    style GAP fill:#F5A623,color:#fff
 ```
 
 **图 2 · 五条速度方案的落地分布**
@@ -555,14 +555,14 @@ flowchart TB
     A1 --> NOTE["两者改的是数据，不是流程"]
     A2 --> NOTE
 
-    style DES fill:#2d6cdf,color:#fff
-    style B5 fill:#5cb85c,color:#fff
-    style B6 fill:#f0ad4e,color:#fff
-    style REAL fill:#d9534f,color:#fff
-    style R1 fill:#d9534f,color:#fff
-    style R2 fill:#d9534f,color:#fff
-    style ALT fill:#f0ad4e,color:#fff
-    style NOTE fill:#f0ad4e,color:#fff
+    style DES fill:#4A90E2,color:#fff
+    style B5 fill:#7ED321,color:#fff
+    style B6 fill:#F5A623,color:#fff
+    style REAL fill:#E74C3C,color:#fff
+    style R1 fill:#E74C3C,color:#fff
+    style R2 fill:#E74C3C,color:#fff
+    style ALT fill:#F5A623,color:#fff
+    style NOTE fill:#F5A623,color:#fff
 ```
 
 **图 4 · 自我改进闭环的设计形态与现状**
@@ -735,10 +735,10 @@ flowchart TB
     ST --> API
     EV --> API
 
-    style BOARD fill:#5cb85c,color:#fff
-    style ST fill:#2d6cdf,color:#fff
-    style EV fill:#2d6cdf,color:#fff
-    style ORPHAN fill:#f0ad4e,color:#fff
+    style BOARD fill:#7ED321,color:#fff
+    style ST fill:#4A90E2,color:#fff
+    style EV fill:#4A90E2,color:#fff
+    style ORPHAN fill:#F5A623,color:#fff
 ```
 
 **图 5 · 全局工作空间的结构与订阅分布**
@@ -964,10 +964,10 @@ flowchart TB
     E1 --> FB["兜底后端<br/>字符 2 与 3 元组哈希向量<br/>固定 512 维"]
     FB --> STORE
 
-    style PIPE fill:#5cb85c,color:#fff
-    style B2 fill:#f0ad4e,color:#fff
-    style B3 fill:#f0ad4e,color:#fff
-    style FB fill:#f0ad4e,color:#fff
+    style PIPE fill:#7ED321,color:#fff
+    style B2 fill:#F5A623,color:#fff
+    style B3 fill:#F5A623,color:#fff
+    style FB fill:#F5A623,color:#fff
 ```
 
 **图 6 · 小脑的三个职责与空间 v3 编码流水线**
@@ -1203,11 +1203,11 @@ flowchart TB
 
     AUX["载体保留的外围参数分派<br/>按意图装载工具子集<br/>按意图给温度<br/>一轮只挑一种补刀"] -.->|"给模型的参数，不是替模型选路"| MODEL
     AUX -.->|"仍是规则判据，见边界与限制"| AUXN["规则判据仍在"]
-    style MODEL fill:#2d6cdf,color:#fff
-    style GIVE fill:#5cb85c,color:#fff
-    style DIRECT fill:#5cb85c,color:#fff
-    style ASK fill:#f0ad4e,color:#fff
-    style AUXN fill:#f0ad4e,color:#fff
+    style MODEL fill:#4A90E2,color:#fff
+    style GIVE fill:#7ED321,color:#fff
+    style DIRECT fill:#7ED321,color:#fff
+    style ASK fill:#F5A623,color:#fff
+    style AUXN fill:#F5A623,color:#fff
 ```
 
 **图 7 · 意图理解的信息流与载体保留的判断**
@@ -1403,11 +1403,11 @@ flowchart TB
     GATE{"autonomy.enabled 是否为 true"}
     GATE -->|"否，默认值"| NOBG["一个后台线程都不起"]
     GATE -->|"是"| BG
-    style FG fill:#5cb85c,color:#fff
+    style FG fill:#7ED321,color:#fff
     style BG fill:#8c8c8c,color:#fff
-    style LK fill:#2d6cdf,color:#fff
-    style WARN fill:#d9534f,color:#fff
-    style NOBG fill:#f0ad4e,color:#fff
+    style LK fill:#4A90E2,color:#fff
+    style WARN fill:#E74C3C,color:#fff
+    style NOBG fill:#F5A623,color:#fff
 ```
 
 **图 8 · 前台后台分工、加锁点与索引对账**
@@ -1602,13 +1602,13 @@ flowchart TB
     L4 --> UI["设置页系统状态面板<br/>未落地"]
     L3 --> API["GET /api/central<br/>免鉴权 只读"]
 
-    style L1 fill:#5cb85c,color:#fff
-    style L2 fill:#f0ad4e,color:#fff
-    style L3 fill:#f0ad4e,color:#fff
-    style L4 fill:#f0ad4e,color:#fff
-    style NEED fill:#f0ad4e,color:#fff
-    style UI fill:#d9534f,color:#fff
-    style API fill:#2d6cdf,color:#fff
+    style L1 fill:#7ED321,color:#fff
+    style L2 fill:#F5A623,color:#fff
+    style L3 fill:#F5A623,color:#fff
+    style L4 fill:#F5A623,color:#fff
+    style NEED fill:#F5A623,color:#fff
+    style UI fill:#E74C3C,color:#fff
+    style API fill:#4A90E2,color:#fff
 ```
 
 **图 9 · 四个层次的观测能力与现状**

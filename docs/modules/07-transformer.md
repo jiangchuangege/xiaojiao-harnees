@@ -178,8 +178,8 @@ flowchart TB
 
     BODY --> OUT["同一个「小焦」<br/>换火种不换小焦，换插件立刻长能力"]
 
-    style OUT fill:#2d6cdf,color:#fff
-    style BODY fill:#5cb85c,color:#fff
+    style OUT fill:#4A90E2,color:#fff
+    style BODY fill:#7ED321,color:#fff
 ```
 
 ### 4.2 火种登记处的数据结构
@@ -253,9 +253,9 @@ flowchart TB
     NONE -->|"是"| SW["切换并记录原因"]
     SW --> OK["返回顶上来的火种<br/>用户侧表现为这一条消息慢了一点"]
 
-    style TRIG fill:#2d6cdf,color:#fff
-    style OK fill:#5cb85c,color:#fff
-    style NOREPLY fill:#d9534f,color:#fff
+    style TRIG fill:#4A90E2,color:#fff
+    style OK fill:#7ED321,color:#fff
+    style NOREPLY fill:#E74C3C,color:#fff
 ```
 
 探测的真伪由 `probe()` 决定：它真发一次 HTTP 请求到模型的模型列表接口，返回是否成功、状态码、可用模型名、错误信息与耗时。配置只说明「以为它在哪」，探测才知道「它到底是否存活」。
@@ -307,9 +307,9 @@ flowchart TB
 
     RES --> WIN["用户运行中丢入插件"] --> WATCH["看守线程每 30 秒比对指纹"] --> RES
 
-    style CALL fill:#2d6cdf,color:#fff
-    style RES fill:#5cb85c,color:#fff
-    style DIR fill:#d9534f,color:#fff
+    style CALL fill:#4A90E2,color:#fff
+    style RES fill:#7ED321,color:#fff
+    style DIR fill:#E74C3C,color:#fff
 ```
 
 三条自我约束：

@@ -33,6 +33,13 @@ flowchart LR
     A --> H["心：一句话<br/>可以复合、可以模糊"]
     H --> C["colors<br/>心的那句话本身拿去偏检索"]
     C --> M["下一个念头往这边走"]
+    style E fill:#4A90E2,color:#fff
+    style P fill:#4A90E2,color:#fff
+    style A fill:#4A90E2,color:#fff
+    style H fill:#7ED321,color:#fff
+    style C fill:#F5A623,color:#fff
+    style M fill:#7ED321,color:#fff
+
 ```
 
 载体在这条链上**只做两件事**：把自我背景摆给模型、把模型的回答收下来。

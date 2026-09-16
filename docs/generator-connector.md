@@ -55,9 +55,9 @@ flowchart TB
     P3 --> P4["等产物"]
     P4 --> OUT["结果直接给用户<br/>全程不需要点任何 UI"]
 
-    style Q fill:#2d6cdf,color:#fff
-    style ASK fill:#f0ad4e,color:#fff
-    style OUT fill:#5cb85c,color:#fff
+    style Q fill:#4A90E2,color:#fff
+    style ASK fill:#F5A623,color:#fff
+    style OUT fill:#7ED321,color:#fff
 ```
 
 **这张图要说的一句话**：**识别只出一个结果；出不了就反问，绝不替用户选。**

@@ -173,8 +173,8 @@ flowchart TB
     M4 -.->|"热插拔"| CARRIER
     CARRIER --> OUT["用户侧看到的同一个助手"]
 
-    style CARRIER fill:#dbe9ff
-    style OUT fill:#2d6cdf,color:#fff
+    style CARRIER fill:#EAF2FD
+    style OUT fill:#4A90E2,color:#fff
 ```
 
 ### 图 B · 一次请求在载体中的路径
@@ -194,8 +194,8 @@ flowchart LR
     C --> D["载体：输出续写与合并"]
     D --> E["用户看到的连续回答"]
 
-    style MODEL fill:#f0ad4e,color:#fff
-    style E fill:#2d6cdf,color:#fff
+    style MODEL fill:#F5A623,color:#fff
+    style E fill:#4A90E2,color:#fff
 ```
 
 图 B 的读法：橙色节点是模型，其余节点全部是载体。用户侧只看到入口与出口两端的连续体验。

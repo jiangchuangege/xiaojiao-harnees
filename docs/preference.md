@@ -28,6 +28,14 @@ flowchart LR
     Q --> M["它自己说：<br/>「我好像老是注意猫」"]
     M --> P["**这一句才是偏好**"]
     Q -->|"它没回看出东西"| N["不形成（不硬凑）"]
+    style H fill:#4A90E2,color:#fff
+    style R fill:#4A90E2,color:#fff
+    style C fill:#F5A623,color:#fff
+    style Q fill:#F5A623,color:#fff
+    style M fill:#7ED321,color:#fff
+    style P fill:#7ED321,color:#fff
+    style N fill:#8C8C8C,color:#fff
+
 ```
 
 - **聚堆是载体算的**（余弦像不像，和感受记忆同一条思路：像不像是个程度，不是分类）；

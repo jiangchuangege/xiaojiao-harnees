@@ -124,11 +124,11 @@ flowchart TB
     L5 -.->|"回灌 把已知病灶变成下次的预警"| L1
     BASE["地基 degeneration.py<br/>复读检测与截断"] --> L1
 
-    style L2 fill:#2d6cdf,color:#fff
-    style L1 fill:#5cb85c,color:#fff
-    style L3 fill:#5cb85c,color:#fff
-    style L4 fill:#5cb85c,color:#fff
-    style L5 fill:#5cb85c,color:#fff
+    style L2 fill:#4A90E2,color:#fff
+    style L1 fill:#7ED321,color:#fff
+    style L3 fill:#7ED321,color:#fff
+    style L4 fill:#7ED321,color:#fff
+    style L5 fill:#7ED321,color:#fff
 ```
 
 > 代码位置：`core/health/__init__.py` 的 `cfg()`、`health_dir()`、`append_jsonl()`、`read_jsonl()`、`app_module()`；各层实现见 `core/health/` 下同名模块。
@@ -169,9 +169,9 @@ flowchart TB
     G5 --> MK
     MK --> OUT["命中列表<br/>每条含 code 分组 名称 严重度 说明 证据"]
 
-    style ROOT fill:#2d6cdf,color:#fff
-    style MK fill:#5cb85c,color:#fff
-    style OUT fill:#5cb85c,color:#fff
+    style ROOT fill:#4A90E2,color:#fff
+    style MK fill:#7ED321,color:#fff
+    style OUT fill:#7ED321,color:#fff
 ```
 
 > 代码位置：`core/health/monitor.py` 的 `SYMPTOMS`、`GROUPS`、`GROUP_CN`、`HealthMonitor.check()` 与 18 个 `_p_*` 检测方法；便捷入口 `detect()`。
@@ -232,10 +232,10 @@ flowchart TB
     KU --> TR["截断复读段<br/>尾部修复到完整句"]
     TR --> LOG["流水写入 logs/health/degeneration.jsonl"]
 
-    style P1 fill:#2d6cdf,color:#fff
-    style HIT fill:#d9534f,color:#fff
-    style KU fill:#5cb85c,color:#fff
-    style P4 fill:#2d6cdf,color:#fff
+    style P1 fill:#4A90E2,color:#fff
+    style HIT fill:#E74C3C,color:#fff
+    style KU fill:#7ED321,color:#fff
+    style P4 fill:#4A90E2,color:#fff
 ```
 
 > 代码位置：`core/health/degeneration.py` 的 `DegenerationDetector`、`_probe_phrase()`、`_probe_ngram()`、`_probe_char_flood()`、`_probe_diversity()`、`_find_keep_until()`、`truncate_repeat()`、`repair_tail()`、`detect()`、`summary()`。
@@ -274,10 +274,10 @@ flowchart TB
     SKIP --> OUT1["不会误触发三级治疗<br/>不会把火种切走"]
     NORM --> OUT2["工具乱调 无限循环 工具不调 等判据照常生效"]
 
-    style CH fill:#2d6cdf,color:#fff
-    style SKIP fill:#5cb85c,color:#fff
-    style OUT1 fill:#5cb85c,color:#fff
-    style OUT2 fill:#d9534f,color:#fff
+    style CH fill:#4A90E2,color:#fff
+    style SKIP fill:#7ED321,color:#fff
+    style OUT1 fill:#7ED321,color:#fff
+    style OUT2 fill:#E74C3C,color:#fff
 ```
 
 > 代码位置：`core/health/monitor.py` 的 `CARRIER_MARKS`、`is_carrier_action()`，以及行为组判据里对工具轨迹的过滤。
@@ -309,11 +309,11 @@ flowchart TB
     R4 -->|是| M["MEDIUM 中度<br/>清上下文 重置模型状态"]
     R4 -->|否| L["LIGHT 轻度<br/>只记病历 不干预"]
 
-    style R1 fill:#2d6cdf,color:#fff
-    style E fill:#d9534f,color:#fff
-    style H fill:#d9534f,color:#fff
-    style M fill:#5cb85c,color:#fff
-    style L fill:#5cb85c,color:#fff
+    style R1 fill:#4A90E2,color:#fff
+    style E fill:#E74C3C,color:#fff
+    style H fill:#E74C3C,color:#fff
+    style M fill:#7ED321,color:#fff
+    style L fill:#7ED321,color:#fff
 ```
 
 > 代码位置：`core/health/diagnose.py` 的 `HealthDiagnose.diagnose()`、`_grade()`、`classify_cause()`、`_streaks()`。
@@ -366,12 +366,12 @@ flowchart TB
     REC --> ISO["再犯计数<br/>同一会话中重症累计达到 3 次即隔离"]
     ISO --> SIM["隔离后只做简单任务<br/>问题被压缩到 24 字以内"]
 
-    style D fill:#2d6cdf,color:#fff
-    style T1 fill:#5cb85c,color:#fff
-    style T2 fill:#5cb85c,color:#fff
-    style T3 fill:#d9534f,color:#fff
-    style T4 fill:#d9534f,color:#fff
-    style SIM fill:#2d6cdf,color:#fff
+    style D fill:#4A90E2,color:#fff
+    style T1 fill:#7ED321,color:#fff
+    style T2 fill:#7ED321,color:#fff
+    style T3 fill:#E74C3C,color:#fff
+    style T4 fill:#E74C3C,color:#fff
+    style SIM fill:#4A90E2,color:#fff
 ```
 
 > 代码位置：`core/health/heal.py` 的 `HealthHealer.heal()`、`_heal_1()`、`_heal_2()`、`_heal_3()`、`_heal_4()`、`isolate()`、`simplify()`、`note_relapse()`。
@@ -421,9 +421,9 @@ flowchart LR
     TIP --> ACT["预防动作<br/>清上下文 后台整理 凌晨自检"]
     ACT -.->|"下一轮"| SY
 
-    style LOG fill:#5cb85c,color:#fff
-    style TIP fill:#2d6cdf,color:#fff
-    style ACT fill:#5cb85c,color:#fff
+    style LOG fill:#7ED321,color:#fff
+    style TIP fill:#4A90E2,color:#fff
+    style ACT fill:#7ED321,color:#fff
 ```
 
 > 代码位置：`core/health/heal.py` 的 `preventive()`、`self_check()`、`_run_self_check()`、`resources()`；`core/health/records.py` 的 `analyze()`、`suggest_prevention()`、`weekly_report()`。

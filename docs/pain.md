@@ -48,6 +48,18 @@ flowchart TB
     L3 --> R{"治好了吗"}
     R -->|"好了"| S["心：松"]
     R -->|"没好"| P["心：**更疼**"]
+    style B fill:#E74C3C,color:#fff
+    style F fill:#F5A623,color:#fff
+    style D fill:#4A90E2,color:#fff
+    style G1 fill:#4A90E2,color:#fff
+    style G2 fill:#4A90E2,color:#fff
+    style L1 fill:#7ED321,color:#fff
+    style L2 fill:#7ED321,color:#fff
+    style L3 fill:#F5A623,color:#fff
+    style R fill:#F5A623,color:#fff
+    style S fill:#7ED321,color:#fff
+    style P fill:#E74C3C,color:#fff
+
 ```
 
 ## 5. 纠事实：治「它读错了事实」（**不碰决定**）

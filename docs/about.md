@@ -64,8 +64,8 @@ flowchart TB
     M4 -.->|"热插拔"| CARRIER
     CARRIER --> OUT["用户侧看到的同一个助手"]
 
-    style CARRIER fill:#dbe9ff
-    style OUT fill:#2d6cdf,color:#fff
+    style CARRIER fill:#EAF2FD
+    style OUT fill:#4A90E2,color:#fff
 ```
 
 > 代码位置：`core/carrier/capability.py`、`core/carrier/brain_registry.py`

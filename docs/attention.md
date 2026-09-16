@@ -23,6 +23,14 @@ flowchart TB
     B --> F["作为一个因素<br/>进它面前的上下文"]
     F --> M["**脑子自己决定关注什么**"]
     M --> D["这值得关注吗 / 该看猫吗 / 先放一放还是现在处理"]
+    style H fill:#4A90E2,color:#fff
+    style P fill:#4A90E2,color:#fff
+    style U fill:#4A90E2,color:#fff
+    style B fill:#F5A623,color:#fff
+    style F fill:#F5A623,color:#fff
+    style M fill:#7ED321,color:#fff
+    style D fill:#7ED321,color:#fff
+
 ```
 
 规格原话：**偏向是心的，决定是脑子的。两个一起。**

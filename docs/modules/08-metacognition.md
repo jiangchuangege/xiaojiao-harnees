@@ -78,10 +78,10 @@ flowchart TB
     S1 -.-> NL["尚未接入主流程"]
     S2 -.-> NL
 
-    style B1 fill:#5cb85c,color:#fff
-    style B2 fill:#5cb85c,color:#fff
-    style NL fill:#d9534f,color:#fff
-    style Q fill:#2d6cdf,color:#fff
+    style B1 fill:#7ED321,color:#fff
+    style B2 fill:#7ED321,color:#fff
+    style NL fill:#E74C3C,color:#fff
+    style Q fill:#4A90E2,color:#fff
 ```
 
 代码位置：模块侧为 `core/metacognition/boundary.py`、`core/metacognition/selfrate.py`、`core/metacognition/crosscheck.py`；接入点在 `xiaojiao_app.py` 的 `agent_run` 内。
@@ -104,10 +104,10 @@ flowchart LR
     C["C 没把握"] --> T["走工具或查记忆"]
     U["问号 解析不出档位"] --> T
 
-    style A fill:#5cb85c,color:#fff
-    style C1 fill:#5cb85c,color:#fff
-    style T fill:#d9534f,color:#fff
-    style U fill:#d9534f,color:#fff
+    style A fill:#7ED321,color:#fff
+    style C1 fill:#7ED321,color:#fff
+    style T fill:#E74C3C,color:#fff
+    style U fill:#E74C3C,color:#fff
 ```
 
 代码位置：`core/metacognition/selfrate.py`，常量 `RATINGS`、`ALL_RATINGS`、`ROUTES` 与函数 `route()`。
@@ -136,10 +136,10 @@ flowchart TB
     C2 --> O
     UN --> O
 
-    style J fill:#2d6cdf,color:#fff
-    style C1 fill:#5cb85c,color:#fff
-    style C2 fill:#d9534f,color:#fff
-    style UN fill:#d9534f,color:#fff
+    style J fill:#4A90E2,color:#fff
+    style C1 fill:#7ED321,color:#fff
+    style C2 fill:#E74C3C,color:#fff
+    style UN fill:#E74C3C,color:#fff
 ```
 
 代码位置：`core/metacognition/crosscheck.py`，常量 `CONSISTENT_MIN = 0.6`、`CONFLICT_MAX = 0.3`、`PREFER`，函数 `cross_check()`、`similarity()`、`prefer()`。取最小值会让偶发口误永久判为矛盾，取最大值会放过"两个相似、一个完全不同"的组合，平均值是两者的折中，严格性交给两刀阈值。
@@ -166,10 +166,10 @@ flowchart TB
     D -->|"C 档占比大于等于 0.5"| X2
     D -->|"其余情况"| X1
 
-    style F fill:#5cb85c,color:#fff
-    style M fill:#5cb85c,color:#fff
-    style D fill:#2d6cdf,color:#fff
-    style X2 fill:#d9534f,color:#fff
+    style F fill:#7ED321,color:#fff
+    style M fill:#7ED321,color:#fff
+    style D fill:#4A90E2,color:#fff
+    style X2 fill:#E74C3C,color:#fff
 ```
 
 代码位置：`core/metacognition/boundary.py`，常量 `MIN_SAMPLES = 3`、`C_RATIO = 0.5`、`SAME_TOPIC_MIN = 0.5`、`TOPIC_MIN_SAMPLES = 2`、`TOP_LIMIT = 5`，函数 `record()`、`stats()`、`should_use_tool()`、`summary()`。

@@ -42,11 +42,26 @@ flowchart TB
     E -->|"< 0.30"| T["它累了（这是它的**状态**，不是谁告诉它的）"]
     T --> Q["载体问一句：<br/>「我此刻的状态」对你意味着什么？<br/>**只给事实：精力 22%（满 100%）**"]
     Q --> H["它自己的感知 → 心起<br/>「累得撑不住了，想睡一会儿。」"]
-    H -->|"它的话里出现 休息/累/睡"| D["**它自己决定睡**"]
-    H -->|"它没说要休息"| K["不睡（载体不替它决定）"]
+    H --> M["载体再问一句：<br/>「你要不要现在休息？**这件事由你自己定**」<br/>**它自己写下一栏：睡：要 / 不要**"]
+    M -->|"它写下「睡：要」"| D["**它自己决定睡**"]
+    M -->|"它写下「睡：不要」"| K["不睡（载体不替它决定）"]
+    G1["**第一道关**：用户真的不在了<br/>（安静满 30 分钟 · USER_ONLINE_S）"] --> D
     D --> S["载体执行：挂起<br/>大脑不推理 / 载体不跑任务 / **心跳不停**"]
     S -->|"精力按时间回升"| W["回到 0.90 → **它自己醒**（不是被叫醒）"]
     W --> R
+    N["⚠️ 旧版（已废）：载体在它的话里**扫关键词**<br/>「累」→ 睡 —— 判据是反的，<br/>说「累但能撑」被睡了、说「想歇一会儿」反而不睡"]
+    style R fill:#4A90E2,color:#fff
+    style E fill:#F5A623,color:#fff
+    style T fill:#F5A623,color:#fff
+    style Q fill:#4A90E2,color:#fff
+    style H fill:#7ED321,color:#fff
+    style M fill:#4A90E2,color:#fff
+    style D fill:#7ED321,color:#fff
+    style K fill:#8C8C8C,color:#fff
+    style G1 fill:#F5A623,color:#fff
+    style S fill:#4A90E2,color:#fff
+    style W fill:#7ED321,color:#fff
+    style N fill:#E74C3C,color:#fff
 ```
 
 **"累"是它状态里长出来的**（那个数值），**"想休息"是它自己感知到的**，**挂起是载体执行的**。

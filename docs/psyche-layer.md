@@ -52,6 +52,10 @@ flowchart LR
     ST --> K --> R
     ST --> T --> G
     R --> G
+    style P fill:#4A90E2,color:#fff
+    style L fill:#F5A623,color:#fff
+    style B fill:#7ED321,color:#fff
+
 ```
 
 ## 3. 两条规矩：触发源、启停
@@ -107,6 +111,14 @@ flowchart TB
     E --> F["大脑想完，出话"]
     F --> G["心记住这一次<br/>印象进 feeling_memory"]
     G -.->|"下次遇到像的，起得更快"| A
+    style A fill:#4A90E2,color:#fff
+    style B fill:#4A90E2,color:#fff
+    style C fill:#4A90E2,color:#fff
+    style D fill:#F5A623,color:#fff
+    style E fill:#4A90E2,color:#fff
+    style F fill:#7ED321,color:#fff
+    style G fill:#7ED321,color:#fff
+
 ```
 
 三条：**心里先动、心一动改大脑往哪想、大脑想完心记住**。

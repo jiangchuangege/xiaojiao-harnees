@@ -116,10 +116,10 @@ flowchart TB
     M2 -.->|"同一套器官"| CORE
     M3 -.->|"同一套器官"| CORE
     CORE --> OUT["同一个助手<br/>同一份记忆 · 同一套工具 · 同一个性格"]
-    style ROOT fill:#2d6cdf,color:#fff
-    style CORE fill:#5cb85c,color:#fff
-    style MODEL fill:#f0ad4e,color:#fff
-    style OUT fill:#5cb85c,color:#fff
+    style ROOT fill:#4A90E2,color:#fff
+    style CORE fill:#7ED321,color:#fff
+    style MODEL fill:#F5A623,color:#fff
+    style OUT fill:#7ED321,color:#fff
 ```
 
 一句话解释"载体优先"：**模型负责生成当前这一小块，载体负责其余全部**。

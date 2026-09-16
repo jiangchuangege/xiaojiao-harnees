@@ -126,20 +126,20 @@ flowchart TB
     P7 --> P9["⑨ 冲突仲裁<br/>_resolve_llm_key"]
     P9 --> P10["⑩ 全局状态<br/>core.central 落账"]
     P10 --> OUT["回答交给用户"]
-    style IN fill:#2d6cdf,color:#fff
-    style ASM fill:#2d6cdf,color:#fff
-    style LM fill:#2d6cdf,color:#fff
-    style OUT fill:#2d6cdf,color:#fff
-    style P1 fill:#5cb85c,color:#fff
-    style P2 fill:#5cb85c,color:#fff
-    style P3 fill:#5cb85c,color:#fff
-    style P4 fill:#5cb85c,color:#fff
-    style P5 fill:#5cb85c,color:#fff
-    style P6 fill:#5cb85c,color:#fff
-    style P7 fill:#5cb85c,color:#fff
-    style P8 fill:#5cb85c,color:#fff
-    style P9 fill:#5cb85c,color:#fff
-    style P10 fill:#5cb85c,color:#fff
+    style IN fill:#4A90E2,color:#fff
+    style ASM fill:#4A90E2,color:#fff
+    style LM fill:#4A90E2,color:#fff
+    style OUT fill:#4A90E2,color:#fff
+    style P1 fill:#7ED321,color:#fff
+    style P2 fill:#7ED321,color:#fff
+    style P3 fill:#7ED321,color:#fff
+    style P4 fill:#7ED321,color:#fff
+    style P5 fill:#7ED321,color:#fff
+    style P6 fill:#7ED321,color:#fff
+    style P7 fill:#7ED321,color:#fff
+    style P8 fill:#7ED321,color:#fff
+    style P9 fill:#7ED321,color:#fff
+    style P10 fill:#7ED321,color:#fff
 ```
 
 ### 4.2 图 2 · 三段式分工
@@ -166,10 +166,10 @@ flowchart LR
     S1 --> S2
     S2 --> S3
     M["⑧ 记忆管理<br/>写入口在中段，读入口在前段"] -.-> S2
-    style S1 fill:#dbe9ff,color:#000
-    style S2 fill:#dbe9ff,color:#000
-    style S3 fill:#dbe9ff,color:#000
-    style M fill:#2d6cdf,color:#fff
+    style S1 fill:#EAF2FD,color:#000
+    style S2 fill:#EAF2FD,color:#000
+    style S3 fill:#EAF2FD,color:#000
+    style M fill:#4A90E2,color:#fff
 ```
 
 ### 4.3 图 3 · 载体与模型的职责边界
@@ -197,14 +197,14 @@ flowchart LR
     end
     CARRIER --> MODEL
     MODEL --> CARRIER
-    style K1 fill:#5cb85c,color:#fff
-    style K2 fill:#5cb85c,color:#fff
-    style K3 fill:#5cb85c,color:#fff
-    style K4 fill:#5cb85c,color:#fff
-    style K5 fill:#5cb85c,color:#fff
-    style L1 fill:#2d6cdf,color:#fff
-    style L2 fill:#2d6cdf,color:#fff
-    style L3 fill:#2d6cdf,color:#fff
+    style K1 fill:#7ED321,color:#fff
+    style K2 fill:#7ED321,color:#fff
+    style K3 fill:#7ED321,color:#fff
+    style K4 fill:#7ED321,color:#fff
+    style K5 fill:#7ED321,color:#fff
+    style L1 fill:#4A90E2,color:#fff
+    style L2 fill:#4A90E2,color:#fff
+    style L3 fill:#4A90E2,color:#fff
 ```
 
 ### 4.4 图 4 · 纠错调度的熔断判定
@@ -224,14 +224,14 @@ flowchart TB
     C -->|是| BR["返回熔断说明<br/>附最后一次报错原文"]
     BR --> STOP["停止重试该工具"]
     STOP --> CACHE["后续可读 _cached_tool_result<br/>复用上一次成功结果"]
-    style R fill:#2d6cdf,color:#fff
-    style F fill:#2d6cdf,color:#fff
-    style C fill:#2d6cdf,color:#fff
-    style BR fill:#d9534f,color:#fff
-    style STOP fill:#d9534f,color:#fff
-    style OK fill:#5cb85c,color:#fff
-    style RETRY fill:#5cb85c,color:#fff
-    style CACHE fill:#5cb85c,color:#fff
+    style R fill:#4A90E2,color:#fff
+    style F fill:#4A90E2,color:#fff
+    style C fill:#4A90E2,color:#fff
+    style BR fill:#E74C3C,color:#fff
+    style STOP fill:#E74C3C,color:#fff
+    style OK fill:#7ED321,color:#fff
+    style RETRY fill:#7ED321,color:#fff
+    style CACHE fill:#7ED321,color:#fff
 ```
 
 ### 4.5 图 5 · 全局状态与事件总线的读写关系
@@ -252,12 +252,12 @@ flowchart TB
     D -->|超出| DROP["丢弃并计入 dropped"]
     D -->|未超出| RUN["执行订阅者"]
     ST --> API["GET /api/central<br/>免鉴权只读观测口"]
-    style M1 fill:#2d6cdf,color:#fff
-    style M2 fill:#2d6cdf,color:#fff
-    style ST fill:#5cb85c,color:#fff
-    style BUS fill:#5cb85c,color:#fff
-    style DROP fill:#d9534f,color:#fff
-    style API fill:#5cb85c,color:#fff
+    style M1 fill:#4A90E2,color:#fff
+    style M2 fill:#4A90E2,color:#fff
+    style ST fill:#7ED321,color:#fff
+    style BUS fill:#7ED321,color:#fff
+    style DROP fill:#E74C3C,color:#fff
+    style API fill:#7ED321,color:#fff
 ```
 
 ---

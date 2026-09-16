@@ -33,6 +33,13 @@ flowchart TB
     H --> B["脑子：辨一下 —— 这是怎么回事？"]
     B --> S["**它自己辨出来的那句**"]
     S --> C["进上下文的是**它自己那句话**<br/>（不是载体摆的事实块）"]
+    style R fill:#4A90E2,color:#fff
+    style P fill:#4A90E2,color:#fff
+    style H fill:#7ED321,color:#fff
+    style B fill:#4A90E2,color:#fff
+    style S fill:#7ED321,color:#fff
+    style C fill:#7ED321,color:#fff
+
 ```
 
 载体只做两件事：**给原料、不给结论**。它辨对辨错，是它的事。

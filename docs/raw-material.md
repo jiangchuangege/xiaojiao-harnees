@@ -56,6 +56,14 @@ flowchart TB
     S1 --> S2["② 我为什么不知道过程<br/>→ 因为它是被塞给我的"]
     S2 --> S3["③ 用户问的是什么<br/>→ 不同问法问的是不同的事"]
     S3 --> S4["④ 自己组织成话<br/>→ **不背那一句**"]
+    style R fill:#4A90E2,color:#fff
+    style M fill:#4A90E2,color:#fff
+    style C fill:#F5A623,color:#fff
+    style S1 fill:#7ED321,color:#fff
+    style S2 fill:#7ED321,color:#fff
+    style S3 fill:#7ED321,color:#fff
+    style S4 fill:#7ED321,color:#fff
+
 ```
 
 **第三步为什么能成立**：因为给的是原料而不是话，它每一轮都得**重新推一遍

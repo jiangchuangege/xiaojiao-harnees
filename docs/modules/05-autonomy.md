@@ -210,9 +210,9 @@ flowchart TB
     W --> D2
     W --> D3
 
-    style ROOT fill:#2d6cdf,color:#fff
-    style DONE fill:#5cb85c,color:#fff
-    style NOPE fill:#d9534f,color:#fff
+    style ROOT fill:#4A90E2,color:#fff
+    style DONE fill:#7ED321,color:#fff
+    style NOPE fill:#E74C3C,color:#fff
 ```
 
 ### 4.3 调度器：三种触发方式
@@ -255,10 +255,10 @@ flowchart TB
     NOTIFY --> CLR
     CLR -.->|"无论成败都要走完收尾，否则该任务永久停摆"| LOOP
 
-    style LOOP fill:#2d6cdf,color:#fff
-    style LOG fill:#5cb85c,color:#fff
-    style NOTIFY fill:#5cb85c,color:#fff
-    style LOG2 fill:#d9534f,color:#fff
+    style LOOP fill:#4A90E2,color:#fff
+    style LOG fill:#7ED321,color:#fff
+    style NOTIFY fill:#7ED321,color:#fff
+    style LOG2 fill:#E74C3C,color:#fff
 ```
 
 关键取舍说明：
@@ -295,9 +295,9 @@ flowchart TB
     STORE -->|"成功"| DONE["写 learning.jsonl<br/>记录话题、字数、结果"]
     STORE -->|"拿不到记忆库"| JSONL["降级写入 JSONL<br/>仍然记账"]
 
-    style TOPIC fill:#2d6cdf,color:#fff
-    style DONE fill:#5cb85c,color:#fff
-    style SKIP fill:#d9534f,color:#fff
+    style TOPIC fill:#4A90E2,color:#fff
+    style DONE fill:#7ED321,color:#fff
+    style SKIP fill:#E74C3C,color:#fff
 ```
 
 三个接缝（读历史、抓取、写记忆）都允许「拿不到」，此时按离线模式运行。
@@ -342,9 +342,9 @@ flowchart TB
     SILENT --> POLL
     NOTIFY --> POLL
 
-    style POLL fill:#2d6cdf,color:#fff
-    style CHANGE fill:#5cb85c,color:#fff
-    style HONEST fill:#d9534f,color:#fff
+    style POLL fill:#4A90E2,color:#fff
+    style CHANGE fill:#7ED321,color:#fff
+    style HONEST fill:#E74C3C,color:#fff
 ```
 
 另外两条实现细节值得说明：
