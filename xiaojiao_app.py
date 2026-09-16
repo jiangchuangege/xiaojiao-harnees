@@ -3439,6 +3439,13 @@ def _idle_work_tick():
         _inner_tick()
     except Exception as e:      # noqa: silent-ok
         LOG.debug("内里 tick 失败（忽略）：%s", e)
+    # **视角状态**（第二阶段）：让它继续缓慢演化（不用模型、很便宜）
+    try:
+        _pv = _mod("perspective")
+        if _pv is not None:
+            _pv.update()
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("视角状态演化失败（忽略）：%s", e)
     # **元认知类走链**（空闲时挑最多一类辨一遍；不只靠对话里那一次）
     try:
         _meta_sweep(1)
@@ -9093,6 +9100,13 @@ def mind_done(mind, answer, truncated=False, skipped=False):
         _PS.stop(why="agent_run 收尾")
     except Exception:      # noqa: silent-ok — 心停不下来也不能影响回答
         pass
+    # **视角状态**：对话轮次只让它继续演化，**绝不清零**（规格铁律）
+    try:
+        _pv2 = _mod("perspective")
+        if _pv2 is not None:
+            _pv2.note_dialogue_turn(why="一轮对话收尾")
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("视角状态记录对话轮失败（忽略）：%s", e)
     try:
         if mind and mind.get("st") is not None:
             from core import mind_stream as _msx
