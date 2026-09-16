@@ -182,6 +182,7 @@ flowchart TB
 | **无限 7 · 上下文无限** | [`docs/context-infinity.md`](docs/context-infinity.md) |
 | **记忆污染（来源标记 / 清库 / 时间线检索）** | [`docs/memory-pollution.md`](docs/memory-pollution.md) |
 | **路径二 · 内感受与视角状态** | [`docs/interoception.md`](docs/interoception.md)、[`docs/perspective.md`](docs/perspective.md) |
+| **渠道隔离（外部通道只能聊天，不能执行任何工具）** | [`docs/channel-isolation.md`](docs/channel-isolation.md) |
 | 测试报告与实测数字 | [`docs/testing-report.md`](docs/testing-report.md) |
 | **项目介绍（一页看懂）** | [`docs/pitch.md`](docs/pitch.md) |
 | 为什么做这个项目 | [`docs/about.md`](docs/about.md) |

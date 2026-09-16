@@ -98,6 +98,29 @@ finally:
     CH.reload()
     CH.reset()
 
+print("\n【E】闸① · 工具表：渠道下模型**看不到**工具；非渠道行为不能被弄坏")
+SYS = "你是小焦。" + "规则。" * 40
+
+
+def plan(intent):
+    return app._plan_tools(intent, SYS, "帮我写个函数", max_ctx=20224)
+
+
+CH.reset()
+n_local = len(plan("shell")[0])
+ck("本机 shell 意图有工具（对照组，不能是 0）", n_local > 0, n_local)
+n_chat_local = len(plan("chat")[0])
+ck("本机 chat 意图仍走核心兜底（≥1 个）", n_chat_local > 0, n_chat_local)
+
+CH.set_channel("wechat")
+n_ch = len(plan("shell")[0])
+ck("★ 渠道下 shell 意图 → 工具表为 0", n_ch == 0, n_ch)
+n_chat_ch = len(plan("chat")[0])
+ck("★ 渠道下 chat 意图 → **也不落到核心兜底**（必须还是 0）", n_chat_ch == 0, n_chat_ch)
+CH.reset()
+ck("恢复本机后工具表回来了（没有把状态留在线程上）", len(plan("shell")[0]) == n_local,
+   len(plan("shell")[0]))
+
 print("\n" + "=" * 76)
 print("  通过 %d / 共 %d" % (_C["pass"], _C["total"]))
 if _C["failed"]:

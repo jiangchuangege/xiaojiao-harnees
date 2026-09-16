@@ -7469,6 +7469,30 @@ def _plan_tools(intent, system_text, current_text, max_ctx=None):
         _front = [n for n in names if any(x in str(n).lower() for x in _pol["front_tools"])]
         _rest = [n for n in names if n not in _front]
         names = _front + _rest
+    # ================== 渠道隔离 · 闸①：这条通道下**工具表就给空** ==================
+    # 【与 `run_tool` 那道执行闸的关系】执行闸是**硬闸**（拦住执行，绝对防线）；
+    #   这里只是**让模型别看到** —— 看不到就不会去点、不会去编工具名，少一轮无效往返。
+    #   ⚠️ 所以**不能只做这一道**：4B 会硬编工具名，看不到不等于调不到（执行闸才是底线）。
+    _chan_on = False
+    try:
+        from core import channel_policy as _CH
+        _allow = _CH.allowed_tools()
+        if _allow is not None:
+            _before_ch = len(names)
+            names = [n for n in names if str(n).strip() in _allow]
+            _chan_on = True
+            if _before_ch != len(names):
+                LOG.info("渠道隔离·工具表：%s 通道 → 本轮工具表 %d → %d（该通道只允许 %s）",
+                         _CH.current(), _before_ch, len(names),
+                         "纯聊天" if not _allow else sorted(_allow))
+    except Exception as _e:      # noqa: silent-ok — 拿不到策略就别动工具表（执行闸仍在兜底）
+        LOG.debug("渠道策略读取失败（忽略）(%s:%d): %s", __file__, 7472, _e)
+    if _chan_on and not names:
+        # ⚠️ **只在渠道生效时**才走这条早返回。不能写成"names 为空就返回"——
+        #    非渠道请求里 names 为空是**正常情况**（比如寒暄轮），下面那条
+        #    `_FULL_CORE_TOOLS` 兜底是它的既有语义，改了就把寒暄轮的工具表弄没了。
+        #    渠道下则相反：兜底正好会把工具又塞回来，必须挡住。
+        return [], 0
     budget = max_ctx - _estimate_tokens(system_text) - _estimate_tokens(current_text) - _MSG_OVERHEAD * 2
     keep = list(names) if names else list(_FULL_CORE_TOOLS)
     tok = _tools_tokens(keep)
