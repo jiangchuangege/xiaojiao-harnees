@@ -2053,12 +2053,38 @@ def _remember_turn(user_input, answer, tool_trace=None):
         #     问「我叫什么」时 cos 掉到阈值以下、一条都检索不到（注入 0 条）。
         #   · 注入用的正文里，回答只留**摘要**（spec 也是这么要求的）：去掉 Markdown 记号，
         #     压到一句话以内。存全量回答既占硬盘又冲淡事实。
-        _a = (answer or "").strip()
+        # ================== 修一 + 修二：写入侧过滤（堵源头）==================
+        # 【为什么必须在这一层、且在 Markdown 清洗**之前**】实测记忆库里混进了工具原始返回
+        #   与坏回复，后果是它答「我记得一些**你曾经提到过的内容**：…哔哩哔哩…」——
+        #   而那句里的东西**根本不是用户说的**，是抓取结果的残留。
+        #   **把「工具给的」说成「用户说的」，比检索不准更严重。**
+        #   判据在 `core/mem_filter.py`（确定性正则，可单测；写入路径上不调模型）。
+        #   顺序很关键：先按**原文**判，再做 Markdown 清洗 —— 反过来的话
+        #   `^[#>\-\*\s|]+` 会把行首的 `**` 记号先啃掉，`🌐 **URL**` 这类形状就认不出来了。
+        _raw_answer = (answer or "").strip()
+        try:
+            from core import mem_filter as _MF
+            _a, _mfw = _MF.clean_answer(_raw_answer)
+        except Exception as _e:      # noqa: silent-ok — 过滤器坏了不能反过来让写入全挂
+            LOG.debug("记忆写入过滤失败（照常写入）(%s:%d): %s", __file__, 1140, _e)
+            _MF, _mfw = None, "过滤器不可用（照常写入）"
+            _a = _raw_answer
+        if not _a:
+            LOG.info("这一轮不进对话记忆：%s", _mfw)
+            return ""
+        if _mfw != "照常进记忆":
+            LOG.info("这一轮进对话记忆：%s", _mfw)
         _a = re.sub(r"```.*?```", " ", _a, flags=re.S)          # 代码块不往记忆里塞
         _a = re.sub(r"^[#>\-\*\s|]+", "", _a, flags=re.M)       # 去掉标题/列表/表格记号
         _a = re.sub(r"\s+", " ", _a).strip()
         _q = (user_input or "").strip().replace("\n", " ")
-        text = "用户：%s\n小焦：%s" % (_q[:300], _a[:200] or "（已回答）")
+        # `_a` 走到这里**保证非空**（上面空壳一律提前 return）——
+        # 所以这里不再留 `or "（已回答）"` 那个兜底：那本身就是一个占位符，
+        # 留在代码里等于给"占位符进记忆"留了一条后路。
+        # 截断也走 `clip()`（**切在句末**）—— 直接 `[:200]` 会把话截在 URL 中间，
+        # 存进去就是一条"半截"，而"半截"按规则 2 本来就不该进记忆。
+        _a = _MF.clip(_a, 200) if _MF is not None else _a[:200]
+        text = "用户：%s\n小焦：%s" % (_q[:300], _a)
         ents = []
         for _m in re.finditer(r"https?://[^\s，。；]+", text):
             ents.append(_m.group(0)[:80])
