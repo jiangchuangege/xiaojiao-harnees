@@ -42,7 +42,8 @@ import threading
 import time
 
 __all__ = ["DIMS", "DECAY", "path", "load", "save", "update", "note_dialogue_turn",
-           "state", "bias", "stats", "timeline", "reset", "perturbation", "G"]
+           "state", "bias", "stats", "timeline", "reset", "perturbation", "G",
+           "policy", "POLICY", "EXPLORE_TOOLS", "KEEP_TOOLS"]
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DIR = os.path.join(_ROOT, "logs")
@@ -246,6 +247,56 @@ def reset(why="自测复位"):
         _S.update({"updates": 0, "since": 0.0, "turns": 0, "last_pert": {}, "_loaded": True})
     save()
     return {"ok": True, "why": why, "g": dict(G)}
+
+
+# ================== 第三阶段 · 策略：状态偏离时**硬改**什么 ==================
+# 【这不是提示词，是代码层的裁剪规则】阈值与清单都写在模块里（策略），
+#   下游按它**真的**去改"给它的输入 / 选什么行动 / 要不要主动做"。
+# ⚠️ 清单用的是**名字片段**（工具名里含这些片段就算这一类）——
+#   这样加新工具不用改策略表；代价是可能漏判，如实标注。
+EXPLORE_TOOLS = ("search", "scrape", "crawl", "browse", "explore", "download",
+                 "fetch", "web", "open_", "video", "podcast", "music", "archify")
+KEEP_TOOLS = ("read_file", "list_files", "check_env", "get_weather", "calc",
+              "time", "status", "memory", "recall")
+# 档位 → 硬改程度（**阈值写在代码里，不在提示词里**）
+POLICY = {
+    "轻": {"drop": False, "front": True, "no_browse": False, "memory": True, "ctx": 1.0},
+    "中": {"drop": True, "front": True, "no_browse": False, "memory": True, "ctx": 0.6},
+    "重": {"drop": True, "front": True, "no_browse": True, "memory": False, "ctx": 0.4},
+}
+
+
+def policy():
+    """**状态 → 硬改规则**（第三阶段的策略出口）。
+
+    返回 `{"level", "drop_tools", "front_tools", "no_browse", "memory", "context_scale",
+    "tone", "why"}`；下游据此**在代码层**裁剪，而不是"告诉模型你现在很紧"。
+    """
+    b = bias()
+    lv = b["level"]
+    vig = float(b["vigilance"])
+    cfg = dict(POLICY.get(lv, POLICY["轻"]))
+    # 警觉很高时，即使档位不到"重"，也先关掉主动行为（防失稳）
+    if vig > 0.60:
+        cfg["no_browse"] = True
+    why = []
+    if cfg["drop"]:
+        why.append("档位%s → 把探索类工具从本轮工具表里拿掉" % lv)
+    else:
+        why.append("档位%s → 只降权重（探索类往后排，不删）" % lv)
+    if cfg["no_browse"]:
+        why.append("警觉 %.2f → 这一轮**不主动逛、不主动分享**" % vig)
+    if not cfg["memory"]:
+        why.append("档位重 → 这一轮**不检索记忆**")
+    if cfg["ctx"] < 1.0:
+        why.append("档位%s → 上下文压到 %.0f%%" % (lv, cfg["ctx"] * 100))
+    return {"level": lv, "vigilance": vig, "openness": b["openness"], "wound": b["wound"],
+            "drop_tools": list(EXPLORE_TOOLS) if cfg["drop"] else [],
+            "front_tools": list(KEEP_TOOLS) if cfg["front"] else [],
+            "no_browse": bool(cfg["no_browse"]), "memory": bool(cfg["memory"]),
+            "context_scale": float(cfg["ctx"]), "tone": ("收紧" if vig > 0.25 else "中性"),
+            "why": why,
+            "note": "这是**裁剪规则**，不是提示词：下游按它真的改工具表/检索/主动行为"}
 
 
 def stats():

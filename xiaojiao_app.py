@@ -2742,6 +2742,19 @@ def _inner_mod():
     return _mod("inner")
 
 
+def _state_policy():
+    """**状态 → 硬改规则**（路径二第三阶段的唯一出口）。拿不到就返回中性规则（**不拦任何东西**）。"""
+    try:
+        pv = _mod("perspective")
+        if pv is not None:
+            return pv.policy()
+    except Exception as e:      # noqa: silent-ok — 拿不到策略绝不能影响这一轮
+        LOG.debug("状态策略读取失败（忽略）：%s", e)
+    return {"level": "轻", "vigilance": 0.0, "drop_tools": [], "front_tools": [],
+            "no_browse": False, "memory": True, "context_scale": 1.0, "tone": "中性",
+            "why": ["策略不可用 → 不拦"]}
+
+
 def _chain_mod():
     return _mod("chain")
 
@@ -3434,6 +3447,16 @@ def _idle_work_tick():
     if idle < IDLE_BEFORE_SLEEP:
         return {"act": "busy", "idle": round(idle, 1)}
     now = time.time()
+    # **第三阶段 · 硬改「要不要主动做什么」**：状态偏置说"这一轮不主动"时，
+    #   代码层**直接不发起**这些主动行为（不看模型的意愿）。
+    try:
+        _pol = _state_policy()
+        if _pol.get("no_browse"):
+            return {"act": "suppressed",
+                    "why": "状态偏置（档位%s / 警觉 %.2f）→ 这一轮不主动做任何事"
+                           % (_pol.get("level"), float(_pol.get("vigilance") or 0.0))}
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("状态策略读取失败（忽略）：%s", e)
     # 内里那 16 样：时间维度先走一步（谁都不用模型），有要问的再问
     try:
         _inner_tick()
@@ -7229,7 +7252,27 @@ def _plan_tools(intent, system_text, current_text, max_ctx=None):
     前者是撞墙，后者是削能力，两条路都不能走。
     """
     max_ctx = int(max_ctx or _max_context_tokens())
+    # ================== 第三阶段 · **状态偏离 → 代码层硬改工具表** ==================
+    # 【这不是提示词】`perspective.policy()` 给出裁剪规则，这里**真的**改了本轮装载的工具：
+    #   档位"中/重" → 把**探索类**工具从这一轮的表里**拿掉**（不是排后面、不是告诉模型别用）；
+    #   任何档位 → 把**保守类**排到前面。
+    #   判据是"**这一轮的工具表真的短了**"，而不是"它说它累了"。
+    _pol = _state_policy()
+    if _pol.get("context_scale", 1.0) < 1.0:
+        max_ctx = max(1500, int(max_ctx * float(_pol["context_scale"])))
     names = _intent_tool_names(intent)
+    if _pol.get("drop_tools"):
+        _before = len(names)
+        names = [n for n in names
+                 if not any(x in str(n).lower() for x in _pol["drop_tools"])]
+        if len(names) != _before:
+            LOG.info("状态硬改·输入：档位%s → 探索类工具从本轮拿掉 %d 个（%d→%d）｜%s",
+                     _pol.get("level"), _before - len(names), _before, len(names),
+                     "；".join(_pol.get("why") or [])[:80])
+    if _pol.get("front_tools"):
+        _front = [n for n in names if any(x in str(n).lower() for x in _pol["front_tools"])]
+        _rest = [n for n in names if n not in _front]
+        names = _front + _rest
     budget = max_ctx - _estimate_tokens(system_text) - _estimate_tokens(current_text) - _MSG_OVERHEAD * 2
     keep = list(names) if names else list(_FULL_CORE_TOOLS)
     tok = _tools_tokens(keep)
@@ -8533,7 +8576,23 @@ def _browse_decide():
 
     返回 `{"door", "why", "want"}`。判不出来就退回"半开半关 + 不指定主题"——
     保守值只在模型没给可用答案时用，不是载体的默认节奏。
+
+    ⚠️ **第三阶段：这里也被状态硬改** —— 状态偏置说"这一轮不主动做"时，
+    **代码层直接返回 locked，门都不问模型**（不是"告诉它别逛"）。
     """
+    # ================== 第三阶段 · 硬改「要不要主动做什么」==================
+    # 【为什么放在最前面】规格：**代码层决定"这一轮要不要发起"，不是模型自己决定**。
+    #   所以状态偏置说 no_browse 时，这里**直接锁门、不调模型**，
+    #   并在日志里写明是哪一条状态导致的（可复核）。
+    try:
+        _pol = _state_policy()
+        if _pol.get("no_browse"):
+            LOG.info("状态硬改·主动：**这一轮不主动逛**（档位%s / 警觉 %.2f）→ 直接锁门，不问模型",
+                     _pol.get("level"), float(_pol.get("vigilance") or 0.0))
+            return {"door": "locked", "want": "",
+                    "why": "状态偏置：%s" % "；".join(_pol.get("why") or [])[:60]}
+    except Exception as _e:      # noqa: silent-ok — 策略读不到就不拦（保守）
+        LOG.debug("状态策略读取失败（忽略）：%s", _e)
     try:
         # 【按原理：兴趣由模型从**最近 7 天对话**里自己判断，载体不预设、不统计】
         #   第一版我喂的是"世界模型的话题表"—— 那是载体已经统计过的结果，
