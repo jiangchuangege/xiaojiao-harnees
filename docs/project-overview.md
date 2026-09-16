@@ -229,8 +229,8 @@ python -m ruff check --select E9,F63,F7,F82 .     # 真 bug 级 3 处
 | `web_monitor.py` 与 `xiaojiao_tools.py` 是独立入口 | 两者各自是独立 Flask 程序，默认都占 5000，与主程序互斥，主程序**不**挂载它们。`web_monitor.py` 的三个路由（看板首页、状态接口、蒸馏触发接口）因此不在主程序路由表里 —— 早先文档把它们当成主程序接口，是错的 |
 | `learn_from_neko.py` 不解析命令行参数 | 脚本只执行一轮 `learn_once()` 就退出；`start_xiaojiao.py` 传入的 `--daemon --interval 300` 不产生循环效果，启动器打印的「每 5 分钟学一次」目前不成立 |
 | 实机脚本不在 `run_all.py` 里 | `live_check.py`、`ui_check.py`、`preset_check.py`、`stability_30m.py` 改动主程序后建议单独跑一次 |
-| ruff 真 bug 级规则未清零 | 实测 3 处：`core/world/firewall.py` 的 `__all__` 含未定义名；`xiaojiao_app.py` 两处未定义变量 |
-| `check_principles.py` 未全过 | 实测 9/12，未过的是 P1（ruff）、P6（面向用户的英文 error 文案）、P8（文档一致性） |
+| ruff 真 bug 级规则未清零 | **2026-09-16 更正：已全过（0 处）**。原记录写"实测 3 处：`core/world/firewall.py` 的 `__all__` 含未定义名；`xiaojiao_app.py` 两处未定义变量" —— 那 3 处已经修完，现在 `ruff check --select E9,F63,F7,F82 .` 报 `All checks passed` |
+| `check_principles.py` 未全过 | **2026-09-16 更正：实测 10/12**。原记录写"9/12，未过 P1（ruff）、P6、P8" —— 已过期：**P1 与 P8 现已通过**，现在未过的是 **P6**（面向用户的英文 error 文案 1 处）与 **P9**（版本号自洽，`neko_plugin` README 引的 `v3.13.13` 被判成"查无此版"） |
 
 ---
 
