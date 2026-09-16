@@ -45,9 +45,14 @@ print("【A】结构：源码里时间与路径必须**分开**，且时间无�
 src = io.open(os.path.join(ROOT, "xiaojiao_app.py"), encoding="utf-8", errors="replace").read()
 
 ck("存在独立的 time_ctx（时间不再捆在 path_ctx 里）", "time_ctx = " in src, "")
+_pl = src.splitlines()
+_pi = next((i for i, l in enumerate(_pl) if l.strip().startswith("path_ctx = ")), -1)
+# ⚠️ 按行查，别用 `split("path_ctx = ")[1].split("\n\n")[0]` —— 那个切法太脆：
+#    文档里/注释里只要先出现一次 "path_ctx = " 就会切错位置，报出**假的**"又捆回去了"。
+_ptxt = "\n".join(_pl[_pi:_pi + 6]) if _pi >= 0 else ""
 ck("存在 path_ctx 且**不含**「当前时间」",
-   "path_ctx = " in src and "当前时间" not in src.split("path_ctx = ")[1].split("\n\n")[0],
-   "path_ctx 里还有当前时间 → 又捆回去了")
+   _pi >= 0 and "当前时间" not in _ptxt,
+   "path_ctx 里还有当前时间 → 又捆回去了（实际内容：%s）" % _ptxt[:80])
 
 # 注入点：time_ctx 必须在 `if intent != "chat"` **之外**
 m = re.search(r"sys_text \+= time_ctx\s*\n(.*?)if intent != \"chat\":", src, re.S)
@@ -117,16 +122,15 @@ if requests is not None:
         print("     「你好」→ %s" % a3.replace("\n", " ")[:80])
         ck("闲聊仍正常（有回答、没报错）", len(a3.strip()) > 0, a3[:60])
 
-print("\n【C】载体直答（**不问模型** → 换任何模型答案都一样）")
+print("\n【C】死模板必须不存在（用户要求：任何死模板都不许有）")
 try:
     import xiaojiao_app as _app
-    _HIT = ["今天几号", "今天几号？", "现在几点", "今天是星期几", "今年是哪一年", "几号"]
-    _MISS = ["几点睡比较好", "今天的新闻有哪些", "2026年世界杯冠军是谁", "帮我写个函数", "你好"]
-    for q in _HIT:
-        r = _app._direct_time_answer(q)
-        ck("载体直答接住「%s」" % q, bool(r) and TODAY in r, (r or "没接住")[:50])
-    for q in _MISS:
-        ck("不误伤「%s」（该走模型）" % q, not _app._direct_time_answer(q), "被误判成时间问题")
+    ck("★ 载体**没有**写死的时间答案函数（_direct_time_answer 已删）",
+       not hasattr(_app, "_direct_time_answer"), "它还在 → 载体又在替它说话")
+    _src2 = io.open(os.path.join(ROOT, "xiaojiao_app.py"), encoding="utf-8",
+                    errors="replace").read()
+    ck("★ 源码里没有对它的真调用（只剩注释说明为什么删）",
+       not re.search(r"^\s*[^#\n]*_direct_time_answer\(", _src2, re.M), "还有真调用")
 except Exception as e:      # noqa: silent-ok — 拿不到主程序就如实跳过
     print("  ⏭️  跳过（%s）" % e)
 
