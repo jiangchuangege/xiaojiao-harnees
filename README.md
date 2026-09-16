@@ -116,7 +116,7 @@ python start_xiaojiao.py
 | 维度 | 小焦（本地小模型 + 载体） | 云端大模型裸用 | 数据来源 | 可复现 |
 | --- | --- | --- | --- | --- |
 | 记忆持久化 | 本地向量库，长期保存，可检索、降级、不删除 | 由服务方决定，通常不长期保存 | `core/memory_vec.py`、`tools/test_memory_depth.py` | 是 |
-| 记住"你是谁"（用户画像） | 画像**独立成一个库**（与对话 / 精神 / 偏好分开存）；**记不记、记什么由模型自己判断**，载体只执行存储、下一轮把它当事实摆回来。两遍实测（各 8 条）：事实进库 **7/8**、注入 **7/7**、**换新会话真的用上 1/7 与 2/7** | 无跨会话用户画像 | `core/user_profile.py`、`tools/test_closed_loop.py` | 部分 |
+| 记住"你是谁"（印象） | **两条链并存**：**血管**（`xiaojiao_recall.py`，10 路血管投票，自带快慢分路：触发词命中就不调模型）+ **画像系统**（`xiaojiao_profile.py`，写入链 + 10 路召回），各自召回、各自写自己的库。实测：印象进 system **5/5**、**回复里真用上 4/5**、负对照干净 | 无跨会话用户印象 | `xiaojiao_recall.py`、`xiaojiao_profile.py`、`tools/test_impression_usage.py` | 部分 |
 | 检索命中率（本机实测） | 5 / 5 = 100%（20 条记忆、5 个问题） | 不适用 | `tools/test_memory_recall.py` | 是 |
 | 向量检索延迟（本机实测） | 平均 3.2ms · 最大 4.3ms | 不适用 | 同上 | 是 |
 | 输出长度 | 载体负责续写与无缝拼接 | 受单次输出上限约束 | `core/continuation.py`、`tools/test_longform_quality.py` | 是 |
@@ -167,7 +167,7 @@ flowchart TB
 | 想了解 | 看这篇 |
 | --- | --- |
 | 设计哲学与工程依据（22 节） | [`docs/design-philosophy.md`](docs/design-philosophy.md) |
-| 架构图册（21 张 Mermaid） | [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) |
+| 架构图册（22 张 Mermaid） | [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) |
 | 每个模块的独立文档 | [`docs/modules/`](docs/modules/) |
 | 七个无限 | [`docs/six-infinity.md`](docs/six-infinity.md) |
 | 感知层（先感知意义，再判断任务） | [`docs/perception-layer.md`](docs/perception-layer.md) |

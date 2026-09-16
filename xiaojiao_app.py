@@ -10327,6 +10327,24 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("画像召回：空（按无印象版 system 正常走）")
             except Exception as _e:      # noqa: silent-ok — 召回层不在也不能影响回答
                 LOG.debug("画像召回接入失败（忽略）：%s", _e)
+            # ---- 【接入·画像系统】`xiaojiao_profile.py`（与上面那条**并存**，不替换、不互斥）----
+            # 两条是**同一件事的两个机制**：`xiaojiao_recall` 是"血管"那条，
+            # `xiaojiao_profile` 是后面那套（写入链 + 10 路血管 + 自己的 JSON 库）。
+            # 两条都注入、都写盘、各用各的库（`xiaojiao_profiles.json` / `logs/psyche/profiles.json`）。
+            # 加前缀标签是为了让它一眼分得清哪条是哪条 —— 不许因为"都是画像"就混成一段。
+            _pfp_txt = ""
+            try:
+                from xiaojiao_profile import recall as _pfp_recall, build_system as _pfp_build
+                _pfp_imps = _pfp_recall(user_input)
+                if _pfp_imps:
+                    _pfp_txt = "\n[印象·画像系统]\n" + _pfp_build(_pfp_imps) + "\n"
+                    LOG.info("印象（画像系统）：命中 %d 条 → 已注入 system｜%s",
+                             len(_pfp_imps),
+                             " ／ ".join(str(p.get("text"))[:24] for p in _pfp_imps))
+                else:
+                    LOG.info("印象（画像系统）：空（按无印象版 system 正常走）")
+            except Exception as _e:      # noqa: silent-ok — 画像系统不在也不能影响回答
+                LOG.debug("印象（画像系统）接入失败（忽略）：%s", _e)
             if intent != "chat":
                 # 闲聊轮不需要工具用法与技能文档（更不需要路径）—— 按需加载，
                 # system 才能压到 1000 token 以内。**但时间不在此列，它已经在上面注进去了。**
@@ -10427,6 +10445,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             # ---- 【接入·画像召回层】同样放最后：`build_system()` 出来的那段也是"关于用户"的事实 ----
             if _recall_txt:
                 sys_text += _recall_txt
+            # ---- 【接入·画像系统】也放最后（两条并存，各带自己的标签）----
+            if _pfp_txt:
+                sys_text += _pfp_txt
             messages = [{"role": "system", "content": sys_text}]
             # ---- 自我绑定：把"我的连续状态流"接进上下文 ----
             #   每一条 S_k 都是**一体**的：感受写在同一条正文里（`nervous_bus._render_one`），
@@ -12637,29 +12658,47 @@ KNOW_FILE = os.path.join(ROOT, "self_learn", "little_brain_knowledge.txt")
 
 
 def _profile_recall_write_async(user):
-    """【接入·画像召回层】回复已经交给用户之后，**后台**把这一句过一遍写入链。
+    """【接入】回复已经交给用户之后，**后台**把这一句过一遍**两条**写入链。
 
     为什么必须异步（规格硬性要求）：写入链要调 2~3 次本地模型（判该不该记 → 生成画像 → 判重），
     串在请求里会让用户白等好几秒。所以扔进 daemon 线程，**失败一律吞掉**：
     写盘失败绝不影响这一轮回复（也绝不影响下一轮对话）。
+
+    两条链并存：血管那条（`xiaojiao_recall`）与画像系统那条（`xiaojiao_profile`），
+    各写各的库。**一条失败不许拖累另一条** —— 所以各自单独 try。
     """
     def _run():
+        # ① 血管那条
         try:
-            from xiaojiao_recall import remember_from_message
-            if not CAP.get("profile_recall_write", True):
-                return
-            p = remember_from_message(user)
-            if p:
-                LOG.info("画像写入：**已记一条**｜type=%s｜text=%s", p.get("type"), p.get("text"))
-            else:
-                LOG.info("画像写入：这一句没记（不记 / 判重 / 没生成）")
+            if CAP.get("profile_recall_write", True):
+                from xiaojiao_recall import remember_from_message
+                p = remember_from_message(user)
+                if p:
+                    LOG.info("印象写入（血管）：**已记一条**｜type=%s｜text=%s",
+                             p.get("type"), p.get("text"))
+                else:
+                    LOG.info("印象写入（血管）：这一句没记（不记 / 判重 / 没生成）")
+        except Exception as e:      # noqa: silent-ok — 一条链失败不许拖累另一条
+            LOG.debug("印象写入（血管）失败（忽略）：%s", e)
+        # ② 画像系统那条
+        try:
+            if CAP.get("profile_system_write", True):
+                from xiaojiao_profile import remember as _pfp_remember
+                r = _pfp_remember(user)
+                if r.get("written"):
+                    LOG.info("印象写入（画像系统）：**已记一条**｜type=%s｜text=%s",
+                             (r.get("profile") or {}).get("type"), (r.get("profile") or {}).get("text"))
+                else:
+                    LOG.info("印象写入（画像系统）：这一句没记（判了不记=%s / 重复=%s / %s）",
+                             r.get("judged"), r.get("duplicate"), r.get("reason") or "未给原因")
         except Exception as e:      # noqa: silent-ok — 后台写盘失败不影响任何东西
-            LOG.debug("画像写入失败（忽略）：%s", e)
+            LOG.debug("印象写入（画像系统）失败（忽略）：%s", e)
+
     try:
         import threading
         threading.Thread(target=_run, name="xj-profile-write", daemon=True).start()
     except Exception as e:      # noqa: silent-ok — 连线程都起不来也不能影响回答
-        LOG.debug("画像写入线程启动失败（忽略）：%s", e)
+        LOG.debug("印象写入线程启动失败（忽略）：%s", e)
 
 
 def _record_interaction(user, answer, tool_trace):
