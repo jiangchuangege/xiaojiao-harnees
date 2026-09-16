@@ -3446,8 +3446,35 @@ def _dream_tick():
         return {"act": "error", "why": type(e).__name__}
 
 
+def _soma_tick():
+    """**身体那一拍**：内感受采样 + 视角状态演化（服务与自测走的是**同一个函数**）。
+
+    【为什么要抽出来】自测原来**手动调** `IN.update()`，于是"服务进程里根本没人调它"
+    这个真问题被掩盖了（`survival` 的累积永远是 0）。抽成一个函数之后，
+    **自测驱动的就是服务驱动的那条链**，接没接上一跑就知道。
+    """
+    done = {}
+    try:
+        _inem = _mod("interoceptive")
+        if _inem is not None:
+            done["survival"] = _inem.update()
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("内感受采样失败（忽略）：%s", e)
+    try:
+        _pv0 = _mod("perspective")
+        if _pv0 is not None:
+            done["vigilance"] = _pv0.update().get("vigilance")
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("视角状态演化失败（忽略）：%s", e)
+    return done
+
+
 def _idle_work_tick():
     """醒着且用户安静时的那点活（思考 / 体检 / 睡着乱转由各自的时间闸控制）。"""
+    # ================== 先采样、再演化（**必须放在最前面**）==================
+    # 【为什么必须在"抑制"判断之前】状态偏置说"这一轮不主动"时函数会提前返回 ——
+    #   而"状态已经偏了"恰恰是最该继续采样的时刻。放后面 = 越偏越不采，累积永远起不来。
+    _soma_tick()
     hb = _heartbeat_mod()
     if hb is not None and hb.is_sleeping():
         return {"act": "sleeping"}
@@ -8298,6 +8325,23 @@ def _rag_concurrent(query):
     # ---- 思考圈 ①：心理 → 大脑（**改"往哪想"**）----
     #   只**重排**候选，不增删、不改写任何文本 —— 这是"改方向"而非"传消息"的硬证据：
     #   上下文里一个字都不多，变的是"先冒哪一类"。
+    # ---- 硬改·疼：**命被真伤时，先冒"被伤的那件事"相关的记忆** ----
+    # 【规格：疼 → 当前话题的相关记忆优先】这是"疼"与"紧"的分工：
+    #   紧 = 偏向危险（早就在跑，见 psyche.bias 的 keywords → adjust_candidates + 温度收紧）；
+    #   疼 = **先处理被伤的那件事** —— 所以这里把与"那次事件"相关的候选**硬提到前面**。
+    try:
+        from core import psyche as _PSp
+        _h = _PSp.heart()
+        if str(_h.get("feeling") or "") == "疼":
+            _ev = str(_h.get("event") or "")
+            _toks = [w for w in re.findall(r"[\u4e00-\u9fa5]{2,4}", _ev)][:6]
+            if _toks:
+                cands = sorted(cands, key=lambda c: -sum(
+                    1 for w in _toks if w in str((c or {}).get("text") or "")))
+                LOG.info("状态硬改·疼：命被真伤 → **被伤那件事的相关记忆优先**（按「%s」重排）",
+                         "、".join(_toks[:3]))
+    except Exception as _e:      # noqa: silent-ok — 疼的重排失败不影响检索
+        LOG.debug("疼的重排失败（忽略）：%s", _e)
     try:
         from core import thinking_loop as _TL
         cands, _lr = _TL.adjust_candidates(cands)
@@ -9895,6 +9939,14 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             _wake_text = _wake_block()
             # 它自己的东西（偏好 / 叙事 / 试过的）当**素材**拼进去；一条都没有就一个字不加
             _self_material = _meta_text()      # **它自己辨过的那些话**（元认知类走链的产物）
+            # **因果归属的事实**（第四阶段）：我自己那一阵的状态导致了什么 ——
+            #   带前值→后值，**不是叙事**。之前只落盘、没喂回它面前，这是补上的那一处。
+            try:
+                _smm = _mod("self_model")
+                if _smm is not None:
+                    _self_material += _smm.render(3)
+            except Exception:      # noqa: silent-ok
+                pass
             # **原料块**（结果/谁产的/有没有参与/怎么来的）—— 摆在它面前，话由它自己组织。
             #   没有原料时返回空串，一个字都不加。
             # 【元认知类不再直接摆事实】`raw.render()` 那块**不再进上下文** ——

@@ -103,6 +103,24 @@ def main():
     ck("模块里**没有任何模型调用**（这一层不生成文字）",
        "llm" not in src and "requests" not in src, "")
 
+    print("\n[G] **服务进程里 survival 自己会涨**（不许靠自测手动调 update）")
+    import xiaojiao_app as app
+    IN.reset()
+    EN.set_level(0.10, why="自测：精力低")
+    ck("采样前 survival 是 0（起点）", IN.survival() == 0.0, IN.survival())
+    # **只调服务的那条空闲链**，不手动调 IN.update() —— 这才是"接入对不对"的验法
+    for _ in range(6):
+        app._idle_work_tick()
+    ck("**服务进程的空闲链自己把它推起来了**（>0，不靠手动调）",
+       IN.survival() > 0.0, IN.survival())
+    ck("**时间线里真的落了账**（可回放，不是内存里的假数）",
+       len(IN.timeline(50)) >= 6, len(IN.timeline(50)))
+    ck("链上带着真实读数（精力那一项不是 None）",
+       bool(IN.timeline(1)[0].get("raw", {}).get("精力") is not None),
+       IN.timeline(1)[0].get("raw"))
+    EN.reset()
+    IN.reset()
+
     print("\n" + "=" * 78)
     print("  通过 %d / 共 %d" % (_COUNT["pass"], _COUNT["total"]))
     if _FAILED:

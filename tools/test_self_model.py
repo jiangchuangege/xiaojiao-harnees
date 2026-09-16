@@ -53,10 +53,13 @@ def _iso():
 
 
 def _drive(level, n=25):
+    """把状态驱到某个精力档 —— **走服务那同一条链**（`app._soma_tick`）。
+
+    不再手动调 `IN.update()` / `P.update()`：手动调会**掩盖**"服务里没人接"的真问题。
+    """
     EN.set_level(level, why="自测")
     for _ in range(n):
-        IN.update()
-        P.update()
+        app._soma_tick()
 
 
 def main():
