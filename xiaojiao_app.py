@@ -2021,6 +2021,47 @@ def _memory_cfg():
             "max_tokens": int(CAP.get("memory_max_tokens", 2000) or 2000)}
 
 
+# ================== 修五：时间性问题 → 时间线检索 ==================
+# 规格点名的触发词（**用户问法里出现就走时间线**，不再走语义检索）。
+# ⚠️ 「前面」「之前」这类词在日常话里也会出现（"前面提到的那个函数"），
+#    所以它们**会**有误触发的可能 —— 这一条实测之后如实记在文档里，不藏。
+_TIME_QUESTION_WORDS = ("上一次", "上次", "刚才", "刚刚", "之前", "昨天",
+                        "接着上次", "前面")
+
+
+def _is_time_question(q):
+    """用户这句话是不是在问**时间上的某一次**（而不是在问某个主题）。"""
+    s = (q or "").strip()
+    if not s:
+        return False
+    return any(w in s for w in _TIME_QUESTION_WORDS)
+
+
+def _timeline_memory(query, n=6):
+    """时间线检索：按时间倒序取最近 N 轮对话（含会话边界），拼成可注入文本。
+
+    与语义检索的区别就一句话：**这里完全不看"像不像"**，只看时间。
+    所以它给的是一段**连续的**对话，而不是几条孤立的相似片段 ——
+    "上一次我们聊到哪了"这种问题，要的正是连续性。
+    """
+    try:
+        from core import memory_vec as _mv
+        from core import retriever as _r
+    except Exception:      # noqa: silent-ok — 拿不到模块就当没有时间线
+        return ""
+    rows = _mv.recent(n)
+    lines = []
+    for r in rows:
+        line = _r.format_memory_line(r.get("text") or "")
+        if line:
+            lines.append(_r.clip_line(line, 220))
+    if not lines:
+        return ""
+    head = ("（以下是**按时间顺序**排的最近 %d 轮对话，越靠下越新；"
+            "这一条走的是**时间线**，不是相似度检索。）" % len(lines))
+    return head + "\n" + "\n".join(lines)
+
+
 def _retrieve_memory(query):
     """从对话向量库检索相关历史；返回注入文本（失败一律返回空串，绝不拖垮对话）。"""
     if not CAP.get("memory", True) or not (query or "").strip():
@@ -2035,6 +2076,21 @@ def _retrieve_memory(query):
             return ""
     except Exception:      # noqa: silent-ok — 判不出来就当普通问题，照常检索
         pass
+    # ================== 修五：时间性问题走**时间线检索**，不走语义检索 ==================
+    # 【为什么】用户问「你还记得上一次吗」时，语义检索是按"像不像"找的，
+    #   而"上一次"这句话本身跟任何一段历史都不像 —— 它捞回来的是一堆**别的**记忆，
+    #   再被贴上"你提到过"，就答出了"哔哩哔哩"那种驴唇不对马嘴的东西（真实症状）。
+    #   时间性问题要的是**时间顺序**：按 ts 排、取最近几轮，就这么简单。
+    #   非时间性问题**一个字都不动**，照旧走语义检索。
+    try:
+        if _is_time_question(query):
+            t = _timeline_memory(query)
+            if t:
+                LOG.info("时间性问题 → 走时间线检索（按时间倒序取最近几轮，不走语义检索）")
+                return t
+            LOG.info("时间性问题，但时间线里没有可用的最近对话 → 退回语义检索")
+    except Exception as e:      # noqa: silent-ok — 时间线挂了不能拖垮正常对话
+        LOG.debug("时间线检索失败（忽略）(%s:%d): %s", __file__, 2051, e)
     try:
         root = os.path.dirname(os.path.abspath(__file__))
         if root not in sys.path:

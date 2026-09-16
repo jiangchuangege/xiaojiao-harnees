@@ -306,6 +306,27 @@ def search_memory(query, top_k=5, threshold=0.0, dedup_text=True):
         return hits
 
 
+def recent(n=6, kinds=None):
+    """修五：按**时间倒序**取最近的 N 条对话记忆（**不走语义检索**）。
+
+    【为什么必须另开一条路】用户问「你还记得上一次吗」时，语义检索是按"像不像"找的，
+    而"上一次"这句话本身跟任何一段历史都不像 —— 于是它捞回来的是一堆**别的**记忆，
+    再被贴上"你提到过"，就答出了"哔哩哔哩"那种驴唇不对马嘴的东西。
+    时间性问题要的是**时间顺序**，不是相似度：按 ts 排、取最近几轮就对了。
+
+    `kinds` 默认只要对话类（dialogue / tool），不要 fact —— 那些是联网学到的知识，
+    不是"我们上一次聊了什么"。返回**按时间正序**（老的在前），便于直接读成一段连续对话。
+    """
+    with _LOCK:
+        _ensure_loaded()
+        rows = list(_INDEX["meta"])
+    if kinds is None:
+        kinds = ("dialogue", "tool")
+    pick = [r for r in rows if str(r.get("kind") or "dialogue") in kinds]
+    pick.sort(key=lambda r: float(r.get("ts") or 0.0))
+    return pick[-max(1, int(n)):] if n else []
+
+
 # ------------------------------------------------------------------ 统计 / 维护
 def count():
     with _LOCK:
