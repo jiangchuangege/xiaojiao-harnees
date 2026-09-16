@@ -128,6 +128,10 @@ jobs:
         shell: pwsh
         run: python tools/test_user_profile.py
 
+      - name: 画像召回层自测（10 路血管/权重门槛/system 模板/触发词过滤，离线可跑）
+        shell: pwsh
+        run: python tools/test_recall_layer.py
+
       - name: 全新克隆自检（干净目录能不能起、能不能跑绿）
         shell: pwsh
         run: python tools/test_fresh_clone.py
