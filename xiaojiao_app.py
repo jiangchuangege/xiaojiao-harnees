@@ -10074,12 +10074,24 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     if has_llm and answer is None:
         home = os.path.expanduser("~")
         desktop = os.path.join(home, "Desktop")
-        path_ctx = ("\n[环境] 当前时间：%s（本地时间，回答「现在几点/今天几号」必须用它，不要自己猜）；"
-                    "当前工作目录：%s；用户主目录：%s；桌面：%s。"
+        # ================== 「当前时间」必须与「路径」拆开 ==================
+        # 【实测 bug（用户报的）】问「2026 年世界杯冠军是谁」，它答「现在还是 2025 年」——
+        #   而系统时间是 2026-09-17。根因：这一整块（含"当前时间"）原来被
+        #   `if intent != "chat":` 一起跳过了，**chat 意图下模型手里没有当前时间**，
+        #   只能拿训练数据里的年份猜，就猜成了 2025。
+        # 【为什么必须拆】两件事的适用范围根本不同：
+        #   · **路径**只在"要动文件"时才有用 —— 闲聊轮确实不需要，跳过是对的（省 token）；
+        #   · **时间是所有轮次都要的** —— 闲聊里问"今天几号"也是闲聊意图。
+        #   把时间捆在路径里 = 让"省 token"顺手把时间也省掉了。
+        time_ctx = ("\n[环境] 当前时间：%s（本地时间）。"
+                    "回答「现在几点 / 今天几号 / 今年是哪一年」**必须用它**，"
+                    "**绝不可以用训练数据里的年份自己猜**。"
+                    % time.strftime("%Y-%m-%d %H:%M:%S %A"))
+        path_ctx = ("\n[环境] 当前工作目录：%s；用户主目录：%s；桌面：%s。"
                     "凡是要创建文件/文件夹/读写文件，一律用绝对路径（如桌面文件用 %s\\文件名）。"
                     "上面给的都是**真实路径，请照抄**；禁止输出 [用户名] / <username> / %%USERPROFILE%% "
                     "这类占位符（写占位符会导致找不到文件）。"
-                    % (time.strftime("%Y-%m-%d %H:%M:%S %A"), os.getcwd(), home, desktop, desktop))
+                    % (os.getcwd(), home, desktop, desktop))
         # 运行时只再补两样：工具用法细则 + .md 技能文档（规则与清单已在 system 里，
         # 这里绝不能再拼一遍 _TOOL_RULES，否则提示词白涨一大截）
         tool_guidance = "\n[工具用法] 写文件/建网站/代码用 write_file(路径用 Windows 绝对路径, 会自动建目录); 查信息/运行命令用 run_command(PowerShell 语法, 不能用并字连接命令要用分号; 不要用 run_command 去写文件)。\n"
@@ -10173,8 +10185,12 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                         pass
             except Exception as e:      # noqa: silent-ok — 补刀失败就用原提示词，绝不能答不了
                 LOG.debug("极限补刀接入失败（忽略）：%s", e)
+            # **时间无条件注入**（不管什么意图）—— 见上面 time_ctx 的说明：
+            #   闲聊里也会问「今天几号」，chat 意图跳过它就会让模型拿训练数据里的年份瞎猜。
+            sys_text += time_ctx
             if intent != "chat":
-                # 闲聊轮不需要工具用法与技能文档 —— 按需加载，system 才能压到 1000 token 以内
+                # 闲聊轮不需要工具用法与技能文档（更不需要路径）—— 按需加载，
+                # system 才能压到 1000 token 以内。**但时间不在此列，它已经在上面注进去了。**
                 sys_text += path_ctx + tool_guidance + skills
             # ---- 第 2 步：从对话向量库检索相关历史，注入 system（无限 1：记忆无限）----
             # 为什么注入 system 而不是拼进用户消息：

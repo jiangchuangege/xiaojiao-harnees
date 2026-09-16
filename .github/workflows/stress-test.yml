@@ -112,6 +112,10 @@ jobs:
         shell: pwsh
         run: python tools/test_docs_audit.py
 
+      - name: 时间注入自测（chat 意图下也必须知道"今天是几号"）
+        shell: pwsh
+        run: python tools/test_time_context.py
+
       - name: 渠道隔离自测（外部通道只能聊天，不能执行任何工具）
         shell: pwsh
         run: python tools/test_channel_policy.py
