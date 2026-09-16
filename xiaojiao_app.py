@@ -10306,6 +10306,27 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("用户画像：作为事实注入 %d 条", _UPr.count())
             except Exception as _e:      # noqa: silent-ok — 画像读不到不影响回答
                 LOG.debug("用户画像注入失败（忽略）：%s", _e)
+            # ---- 【接入·画像召回层】`xiaojiao_recall.py`（**只加，上面那段一个字没动**）----
+            # 机制：`recall()` 自带快慢分路 —— 触发词那一路命中就**直接返回 1 条**（不调模型，零延迟）；
+            #       没命中才跑完整 10 路血管投票（3 规则票 1.0 + 7 模型票 0.5，
+            #       门槛：有规则票要 2 票、纯模型票要 4 票；取前 2，第 2 条要够第 1 条的 0.6 倍）。
+            # 位置：紧挨上面那段画像注入（同一个"关于用户"的位置），**排在时间之后、生成之前**。
+            # 拿不到就把这一段当不存在，绝不影响回答（异常全部吞掉）。
+            _recall_txt = ""
+            try:
+                from xiaojiao_recall import recall as _rc_recall, build_system as _rc_build
+                _rc_imps = _rc_recall(user_input)
+                if _rc_imps:
+                    _recall_txt = "\n" + _rc_build(_rc_imps) + "\n"
+                    # 把**注入内容本身**记进日志：只写"命中 N 条"证明不了它进了 system，
+                    # 出问题时得能一眼看出"注了什么"（下面第 10426 行就是把它拼进 sys_text）。
+                    LOG.info("画像召回：命中 %d 条 → 已按 build_system 注入 system｜%s",
+                             len(_rc_imps),
+                             " ／ ".join(str(p.get("text"))[:24] for p in _rc_imps))
+                else:
+                    LOG.info("画像召回：空（按无印象版 system 正常走）")
+            except Exception as _e:      # noqa: silent-ok — 召回层不在也不能影响回答
+                LOG.debug("画像召回接入失败（忽略）：%s", _e)
             if intent != "chat":
                 # 闲聊轮不需要工具用法与技能文档（更不需要路径）—— 按需加载，
                 # system 才能压到 1000 token 以内。**但时间不在此列，它已经在上面注进去了。**
@@ -10403,6 +10424,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             # ---- 闭环第五步（收口）· 见上面 `_profile_txt` 的说明：**放最后** ----
             if _profile_txt:
                 sys_text += _profile_txt
+            # ---- 【接入·画像召回层】同样放最后：`build_system()` 出来的那段也是"关于用户"的事实 ----
+            if _recall_txt:
+                sys_text += _recall_txt
             messages = [{"role": "system", "content": sys_text}]
             # ---- 自我绑定：把"我的连续状态流"接进上下文 ----
             #   每一条 S_k 都是**一体**的：感受写在同一条正文里（`nervous_bus._render_one`），
@@ -12612,8 +12636,37 @@ LOGS_DIR = os.path.join(ROOT, "logs")
 KNOW_FILE = os.path.join(ROOT, "self_learn", "little_brain_knowledge.txt")
 
 
+def _profile_recall_write_async(user):
+    """【接入·画像召回层】回复已经交给用户之后，**后台**把这一句过一遍写入链。
+
+    为什么必须异步（规格硬性要求）：写入链要调 2~3 次本地模型（判该不该记 → 生成画像 → 判重），
+    串在请求里会让用户白等好几秒。所以扔进 daemon 线程，**失败一律吞掉**：
+    写盘失败绝不影响这一轮回复（也绝不影响下一轮对话）。
+    """
+    def _run():
+        try:
+            from xiaojiao_recall import remember_from_message
+            if not CAP.get("profile_recall_write", True):
+                return
+            p = remember_from_message(user)
+            if p:
+                LOG.info("画像写入：**已记一条**｜type=%s｜text=%s", p.get("type"), p.get("text"))
+            else:
+                LOG.info("画像写入：这一句没记（不记 / 判重 / 没生成）")
+        except Exception as e:      # noqa: silent-ok — 后台写盘失败不影响任何东西
+            LOG.debug("画像写入失败（忽略）：%s", e)
+    try:
+        import threading
+        threading.Thread(target=_run, name="xj-profile-write", daemon=True).start()
+    except Exception as e:      # noqa: silent-ok — 连线程都起不来也不能影响回答
+        LOG.debug("画像写入线程启动失败（忽略）：%s", e)
+
+
 def _record_interaction(user, answer, tool_trace):
     """答完自动记录这次交互（稳定记录），返回 log_id。"""
+    # 【接入·画像召回层】这里是**两个聊天接口（/api/chat 与 /api/chat/stream）共同的汇聚点**，
+    # 而且调用时回复已经生成完毕 —— 放在这里一次接入两处都覆盖，且天然"在回复之后"。
+    _profile_recall_write_async(user)
     try:
         os.makedirs(LOGS_DIR, exist_ok=True)
         log_id = datetime.now().strftime("%Y%m%d_%H%M%S%f")
