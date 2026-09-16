@@ -269,13 +269,26 @@ POLICY = {
 def policy():
     """**状态 → 硬改规则**（第三阶段的策略出口）。
 
+    【第四阶段的回流】本函数还会读 **`core/self_model.py` 的立场状态** ——
+    "上一次因为精力低被裁了工具"这件事会**累积进这一轮的裁剪程度**（不是记完就完了）。
     返回 `{"level", "drop_tools", "front_tools", "no_browse", "memory", "context_scale",
-    "tone", "why"}`；下游据此**在代码层**裁剪，而不是"告诉模型你现在很紧"。
+    "tone", "why", "stance"}`；下游据此**在代码层**裁剪，而不是"告诉模型你现在很紧"。
     """
     b = bias()
     lv = b["level"]
     vig = float(b["vigilance"])
     cfg = dict(POLICY.get(lv, POLICY["轻"]))
+    # ---- 第四阶段：**立场状态回流进这一轮的硬改** ----
+    stance = {}
+    try:
+        from core import self_model as _SM
+        stance = _SM.stance()
+        if stance.get("suppress") and not cfg["drop"]:
+            # 最近被裁惯了 → 这一轮**直接从"轻"抬到"中"**（真的改，不是提一句）
+            cfg = dict(POLICY["中"])
+            lv = "中"
+    except Exception:      # noqa: silent-ok — 立场读不到就不回流（保守）
+        stance = {}
     # 警觉很高时，即使档位不到"重"，也先关掉主动行为（防失稳）
     if vig > 0.60:
         cfg["no_browse"] = True
@@ -290,11 +303,15 @@ def policy():
         why.append("档位重 → 这一轮**不检索记忆**")
     if cfg["ctx"] < 1.0:
         why.append("档位%s → 上下文压到 %.0f%%" % (lv, cfg["ctx"] * 100))
+    if stance.get("suppress"):
+        why.append("立场：最近被裁过 %d 次 → 这一轮直接按「中」处理"
+                   % int(stance.get("updates") or 0))
     return {"level": lv, "vigilance": vig, "openness": b["openness"], "wound": b["wound"],
             "drop_tools": list(EXPLORE_TOOLS) if cfg["drop"] else [],
             "front_tools": list(KEEP_TOOLS) if cfg["front"] else [],
             "no_browse": bool(cfg["no_browse"]), "memory": bool(cfg["memory"]),
             "context_scale": float(cfg["ctx"]), "tone": ("收紧" if vig > 0.25 else "中性"),
+            "stance": stance,
             "why": why,
             "note": "这是**裁剪规则**，不是提示词：下游按它真的改工具表/检索/主动行为"}
 

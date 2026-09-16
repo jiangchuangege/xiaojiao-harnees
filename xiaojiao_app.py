@@ -7269,6 +7269,15 @@ def _plan_tools(intent, system_text, current_text, max_ctx=None):
             LOG.info("状态硬改·输入：档位%s → 探索类工具从本轮拿掉 %d 个（%d→%d）｜%s",
                      _pol.get("level"), _before - len(names), _before, len(names),
                      "；".join(_pol.get("why") or [])[:80])
+            # **第四阶段 · 因果归属**：记"状态 → 真的改了什么"（带前值/后值，可核对）
+            try:
+                _sm = _mod("self_model")
+                if _sm is not None:
+                    _sm.note("输入被裁", cause="精力低/档位%s" % _pol.get("level"),
+                             effect="探索类工具从本轮工具表里拿掉",
+                             before=_before, after=len(names), level=_pol.get("level"))
+            except Exception as _e:      # noqa: silent-ok — 记不上不影响裁剪本身
+                LOG.debug("因果归属记录失败（忽略）：%s", _e)
     if _pol.get("front_tools"):
         _front = [n for n in names if any(x in str(n).lower() for x in _pol["front_tools"])]
         _rest = [n for n in names if n not in _front]
@@ -8589,6 +8598,15 @@ def _browse_decide():
         if _pol.get("no_browse"):
             LOG.info("状态硬改·主动：**这一轮不主动逛**（档位%s / 警觉 %.2f）→ 直接锁门，不问模型",
                      _pol.get("level"), float(_pol.get("vigilance") or 0.0))
+            try:
+                _sm = _mod("self_model")
+                if _sm is not None:
+                    _sm.note("主动被压", cause="档位%s / 警觉 %.2f" % (_pol.get("level"),
+                                                                    float(_pol.get("vigilance") or 0.0)),
+                             effect="这一轮不主动逛（门直接锁死，没问模型）",
+                             before="门可开", after="locked", level=_pol.get("level"))
+            except Exception as _e:      # noqa: silent-ok
+                LOG.debug("因果归属记录失败（忽略）：%s", _e)
             return {"door": "locked", "want": "",
                     "why": "状态偏置：%s" % "；".join(_pol.get("why") or [])[:60]}
     except Exception as _e:      # noqa: silent-ok — 策略读不到就不拦（保守）
