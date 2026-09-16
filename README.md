@@ -8,15 +8,13 @@
 
 <br>
 
-### 把智力从模型里搬出来，放进载体。
+### 一个住在你自己电脑里的 AI 助手 —— 会记事、会用工具干活、还能生成视频与播客。
 
-> 小焦是一套**载体优先架构**的本地 AI 助手。**模型是可替换的火种，能力住在载体里** ——
-> 记忆、拆解、编排、工具、校验、世界、自主，全部由框架提供；模型只负责"当前这一小块"的生成。
+> **不联网也能用，数据不出本机。** 你换掉它背后的大脑（模型），它还是同一个它 ——
+> 记忆、性格、工具、聊天记录一条都不丢。
 >
-> 由此得到一条别的方案给不了的性质：**换模型，助手不变。**
-> 4B / 70B / 360B / 未来任意模型接进来，都是同一个它 —— 记忆、人格、工具与安全边界一条不丢。
->
-> **它能力的上限由架构决定，不由模型的参数量决定。**
+> 它跑在自己的机器上：能记住你说过的事、会自己找工具干活、能画图/剪视频/做播客，
+> 也可以对接开源 N.E.K.O. 桌面形象层（猫娘为可选组件，不装也能用）。
 
 <br>
 
@@ -36,6 +34,25 @@
 </div>
 
 ---
+
+## 先跑起来（约 2 分钟）
+
+```bash
+git clone https://github.com/jiangchuangege/xiaojiao-harness.git
+cd xiaojiao-harness
+python start_xiaojiao.py
+```
+
+启动后按终端提示打开本机地址即可。
+
+- **服务本身不依赖模型**：全新目录实测能直接起（`/health`、`/api/models` 都正常返回）。
+  但**要真正聊天、干活，得给它一个大脑** —— 本地模型（4B 起）或任意 OpenAI 兼容端点。
+- **一键装齐**（模型 / llama-server / Chrome / ComfyUI）→ [`docs/install.md`](docs/install.md)
+- **装完自检** → [`docs/quickstart.md`](docs/quickstart.md)
+- **为什么要这么费劲装**？因为全程本地 —— 模型、记忆、会话都不离开你的机器。
+
+> 想看它"能干嘛"的完整清单 → [功能总览](#功能总览)｜
+> 想直接读代码 → [核心设计](#核心设计)
 
 ## 这是什么
 
@@ -105,16 +122,6 @@
 | 一次任务的完成方式 | 拆步（输入切片、长文分段）+ 循环（逐段生成）+ 拼接（跨段去重合并）：任务多大就拆多少步 | 一次前向对应一个答案 | `core/input_splitter.py`、`core/continuation.py` | 是 |
 | 校验这一环 | 已接入：答前自评 + 复读检测（检出即截断重来）。**未落地**：「同题跑 N 次 + 投票择一」的完整流水线 | 无中间校验，一次输出即成品 | `core/metacognition/`、`core/health/degeneration.py`；未落地部分见 `docs/design-philosophy.md` 第十四节 | 部分 |
 | 回答质量 | 不可比 | 不可比 | 无对照实验 | 否 |
-
-## 30 秒体验
-
-```bash
-git clone https://github.com/jiangchuangege/xiaojiao-harness.git
-cd xiaojiao-harness
-python start_xiaojiao.py
-```
-
-启动后按终端提示访问本机地址即可。详细步骤见 [`docs/install.md`](docs/install.md)。
 
 ## 核心设计
 

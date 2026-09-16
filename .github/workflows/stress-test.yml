@@ -87,6 +87,27 @@ jobs:
         shell: pwsh
         run: python tools/check_docs.py
 
+      # ================== 文档质量两道闸（2026-09-16 补接）==================
+      # 为什么必须进 CI（有真实代价，不是"最好有"）：
+      #   有一次改 README 的定位块，把 `tools/test_docs_audit.py` 的 6 条断言跑红、
+      #   `tools/test_fresh_clone.py` 也红了，**改的人不知道** —— 因为手动跑的回归清单里
+      #   没有这两个测试。文档说错话，对外就是"项目没做完/在做假"，CI 是唯一能兜住的。
+      - name: 文档质量体检（孤儿文档 / 模块没文档 / 旧说法残留）
+        shell: pwsh
+        run: python tools/check_docs_quality.py
+
+      - name: 落地状态核对（已落地却写成"未落地/没接"）
+        shell: pwsh
+        run: python tools/check_landed_status.py
+
+      - name: 文档守则自测（README 定位块九条要义 / 设计哲学分节）
+        shell: pwsh
+        run: python tools/test_docs_audit.py
+
+      - name: 全新克隆自检（干净目录能不能起、能不能跑绿）
+        shell: pwsh
+        run: python tools/test_fresh_clone.py
+
       - name: 真 bug 级静态检查（未定义名 / 语法，ruff）
         shell: pwsh
         run: |
