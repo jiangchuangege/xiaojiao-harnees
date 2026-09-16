@@ -169,10 +169,18 @@ flowchart TB
 | 自己会睡（累自己长，想休息自己决定） | [`docs/self-sleep.md`](docs/self-sleep.md) |
 | 完整体（疼/医生/期待/叙事/偏好/关系/边界/梦/情绪恢复） | [`docs/pain.md`](docs/pain.md) 等八篇，见正文 |
 | 给原料不给成品（工具/计算来源） | [`docs/raw-material.md`](docs/raw-material.md) |
+| **中文数字翻译（为什么不让模型干）** | [`docs/cn-number.md`](docs/cn-number.md) |
 | **通用原则：元认知类走感知→心→脑子** | [`docs/meta-via-chain.md`](docs/meta-via-chain.md) |
 | 内里（注意力/孤独/内疚/骄傲/审美/信念/爱/原谅/成长…16 样） | [`docs/attention.md`](docs/attention.md)、[`docs/loneliness.md`](docs/loneliness.md)、[`docs/inner-life.md`](docs/inner-life.md)、[`docs/more-inner-life.md`](docs/more-inner-life.md) |
+| **EYC 进行时自述（第一人称把状态说给它听）** | [`docs/eyc-self-narration.md`](docs/eyc-self-narration.md) |
+| **无限 7 · 上下文无限** | [`docs/context-infinity.md`](docs/context-infinity.md) |
+| **记忆污染（来源标记 / 清库 / 时间线检索）** | [`docs/memory-pollution.md`](docs/memory-pollution.md) |
+| **路径二 · 内感受与视角状态** | [`docs/interoception.md`](docs/interoception.md)、[`docs/perspective.md`](docs/perspective.md) |
 | 测试报告与实测数字 | [`docs/testing-report.md`](docs/testing-report.md) |
+| **项目介绍（一页看懂）** | [`docs/pitch.md`](docs/pitch.md) |
 | 为什么做这个项目 | [`docs/about.md`](docs/about.md) |
+| **项目手记（一条没人走过的路）** | [`docs/一条没人走过的路.md`](docs/一条没人走过的路.md) |
+| 设计哲学后半篇（第十四至二十二节） | [`docs/modules/11-post-chapters.md`](docs/modules/11-post-chapters.md) |
 | 媒体素材 | [`docs/press-kit.md`](docs/press-kit.md) |
 | 安装与配置 | [`docs/install.md`](docs/install.md)、[`docs/quickstart.md`](docs/quickstart.md) |
 | 插件与扩展 | [`docs/PLUGINS.md`](docs/PLUGINS.md)、[`docs/extend.md`](docs/extend.md) |
