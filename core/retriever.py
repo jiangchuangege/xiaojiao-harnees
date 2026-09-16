@@ -115,6 +115,77 @@ def estimate_tokens(text):
     return int(cjk * 1.5 + (len(t) - cjk) / 3) + 1
 
 
+# ================== 修三：注入必须**标明来源**（谁说的）==================
+# 【实测症状 —— 这条比"检索不准"严重】
+#   用户问「你还记得上一次吗」，它答：
+#   「我记不起上一次我们聊了什么 —— 不过，我确实记得一些**你曾经提到过的内容**：…哔哩哔哩…」
+#   那些东西**根本不是用户说的**（是抓取结果的残留），却被冠上了"你曾经提到过"。
+#   根因就在这里的老实现：**只要正文不是「用户：…」的形状，就一律贴"用户曾说过"** ——
+#   等于把「它说的」「工具给的」「它学到的」统统说成了「用户说的」。
+# 【现在怎么标】按正文里**真实的分段**标；标不出"用户说的"，就不许说是用户说的：
+#   「用户：X」+「小焦：Y」   → 【你说过的】X ／【小焦说过的】Y
+#   只有「小焦：Y」           → 【小焦说过的】Y
+#   只有「用户：X」           → 【你说过的】X
+#   其它（学到的知识／工具结论等）→ 【它自己记下的一条】…
+#     ⚠️ 最后这一类**绝不写"你说过的"** —— 宁可标得保守，也不许把来源说错。
+_SRC_USER = "【你说过的】"
+_SRC_SELF = "【小焦说过的】"
+_SRC_OTHER = "【它自己记下的一条】"
+
+
+def format_memory_line(text):
+    """把一条记忆正文格式化成**带来源标记**的一行（修三的唯一出口）。
+
+    【为什么要跟踪"当前说话人"】对话记忆是「用户：…\\n小焦：…」两段，
+    但一段可能折成多行。逐行判前缀之后，**没带前缀的续行应该算上一个说话人的**，
+    而**从头到尾都没有说话人前缀的**（学到的知识、工具结论）**一个都不算"你说的"**。
+    实测踩到过：把 `【http】HTTP 是一个协议…` 这种知识行当成"小焦说的" ——
+    那同样是把来源标错了，只是方向反过来。
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    user_part, self_part, other_part = "", "", ""
+    cur = None
+    for seg in raw.split("\n"):
+        seg = seg.strip()
+        if not seg:
+            continue
+        if seg.startswith("用户："):
+            cur = "user"
+            user_part = (user_part + " " + seg[len("用户："):].strip()).strip()
+        elif seg.startswith("小焦："):
+            cur = "self"
+            self_part = (self_part + " " + seg[len("小焦："):].strip()).strip()
+        elif cur == "user":
+            user_part = (user_part + " " + seg).strip()
+        elif cur == "self":
+            self_part = (self_part + " " + seg).strip()
+        else:
+            other_part = (other_part + " " + seg).strip()
+    bits = []
+    if user_part:
+        bits.append("%s%s" % (_SRC_USER, user_part))
+    if self_part:
+        bits.append("%s%s" % (_SRC_SELF, self_part))
+    if other_part:
+        bits.append("%s%s" % (_SRC_OTHER, other_part))
+    if not bits:
+        return "- %s%s" % (_SRC_OTHER, raw.replace("\n", " "))
+    return "- " + " ｜ ".join(bits)
+
+
+def clip_line(line, limit):
+    """把注入行截到 `limit` —— 尽量切在分隔符/句末，别把来源标记截成半截。"""
+    if len(line) <= limit:
+        return line
+    head = line[:limit]
+    cut = max(head.rfind(" ｜ "), head.rfind("。"), head.rfind("！"), head.rfind("？"))
+    if cut >= limit // 2:
+        return head[:cut]
+    return head + "…"
+
+
 def retrieve(query, top_k=None, threshold=None, max_tokens=None,
              log=True, kind=None, now=None):
     """检索相关记忆并拼成可注入的文本。
@@ -198,15 +269,9 @@ def retrieve(query, top_k=None, threshold=None, max_tokens=None,
     # 按 token 预算装（至少装 1 条：命中了就一定要给模型看到）
     used, lines, tok = [], [], 0
     for h in hits:
-        # 「说话人是谁」必须由载体写清楚，不能指望模型自己猜到 —— 实测不加这层框定，
-        # 模型会把记忆里的「我叫张三」当成在说它自己，回答"你叫小焦"。
-        # 若正文已经是「用户：…／小焦：…」的对话格式，就不必再加前缀（别叠成"用户曾说过：用户：…"）。
-        body = (h["text"] or "").replace("\n", " ").strip()
-        line = body if body.startswith("用户：") else "- 用户曾说过：" + body
-        if not line.startswith("-"):
-            line = "- " + line
+        line = format_memory_line(h["text"])
         if len(line) > 240:
-            line = line[:240] + "…"
+            line = clip_line(line, 240)
         add = estimate_tokens(line) + 1
         if used and tok + add > max_tokens:
             break
