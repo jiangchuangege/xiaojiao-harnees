@@ -2143,6 +2143,53 @@ def _memory_used(inject_text, question, answer):
         return False, ""
 
 
+# ================== 闭环 第三步 + 第四步：**模型判断 → 载体存储** ==================
+# 【谁来判断"该记什么"】—— **模型**。理由（规格原文）：
+#   载体自己去判"用户喜欢体育"就是**死模板**（代码写"关键词含篮球/NBA/湖人就记体育"）。
+#   它的三个必然误判：① 随口问一次 ≠ 长期关注；② 帮别人问 ≠ 他自己关注；
+#   ③ 关键词匹配一定会误伤。而模型能区分这些、能结合上下文、判错了还能修正。
+#   **载体要做的是给它"判断的机会"** —— 就是下面这一问，而不是替它判断。
+# 【载体在这条链上只做两件事】① 问它一句；② 照它说的**执行存储**。
+# 【失败方向必须朝"不记"】解析不出 / 它说 false / 类别不合格 → **一个字都不写**。
+#   宁可漏记（下次还能再判），也不许污染画像库（错记会**固化**下来）。
+# 【一个必须如实说的代价】这一步**每轮多一次模型调用**（也就要多花一份精力）。
+#   换来的是"下次答得准"。这是明确的交换，不是免费的。
+_PROFILE_ASK = (
+    "这是刚才一轮对话。请判断：**这一轮里有没有关于用户的、值得长期记住的信息？**\n"
+    "只输出 JSON，不要任何解释、不要 Markdown 代码块：\n"
+    '{"remember": true 或 false, "kind": "兴趣/事实/偏好/关系", '
+    '"content": "一句话", "why": "为什么值得记", "evidence": "依据（用户原话）"}\n'
+    "【什么不该记】\n"
+    "· 只问了一次、或明显随口问的 → 不记（一次不等于长期关注）\n"
+    "· 替别人问的（「我朋友让我问…」）→ 不记（那不是用户自己的事）\n"
+    "· 寒暄、闲聊、与用户本人无关的 → 不记\n"
+    "【什么该记】确实能看出**用户是谁 / 在乎什么 / 跟谁什么关系**的 → 记，并写清依据。\n\n"
+    "用户说：%s\n它回答：%s")
+
+
+def _profile_judge(user_input, answer):
+    """闭环第三、四步：问模型"要不要记"；它说要 → 载体写进用户画像库。返回记录 id。"""
+    try:
+        from core import user_profile as _UP
+        _out = llm_chat([{"role": "user",
+                          "content": _PROFILE_ASK % (str(user_input)[:300], str(answer)[:400])}],
+                        temperature=0.0)
+        _v = _UP.parse_verdict(_out)
+        if not _v.get("remember"):
+            LOG.debug("用户画像：**它自己判断不记**（%s）", str(_v.get("why"))[:60])
+            return ""
+        _rid = _UP.add(_v.get("kind"), _v.get("content"),
+                       why=_v.get("why"),
+                       evidence=_v.get("evidence") or str(user_input)[:120])
+        if _rid:
+            LOG.info("用户画像：**它自己判断要记** → 已写入｜kind=%s｜content=%s｜why=%s",
+                     _v.get("kind"), str(_v.get("content"))[:40], str(_v.get("why"))[:40])
+        return _rid
+    except Exception as e:      # noqa: silent-ok — 判断失败绝不能影响这一轮对话
+        LOG.debug("用户画像判断失败（忽略）：%s", e)
+        return ""
+
+
 def _remember_turn(user_input, answer, tool_trace=None):
     """把这一轮对话永久写进向量库（无限 1：所有历史对话永久保存）。"""
     if not CAP.get("memory", True) or not (user_input or "").strip() or not (answer or "").strip():
@@ -10208,6 +10255,18 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             # **时间无条件注入**（不管什么意图）—— 见上面 time_ctx 的说明：
             #   闲聊里也会问「今天几号」，chat 意图跳过它就会让模型拿训练数据里的年份瞎猜。
             sys_text += time_ctx
+            # ---- 闭环第五步：把**它自己判断记下的、关于用户的事**当事实摆回来 ----
+            # 这一条就是闭环的收口：上次它自己判断"用户关注 NBA" → 这次作为**事实**给它 →
+            # 它不用再重新推理一遍，直接就能答得更准。**依赖那一跳的次数因此变少。**
+            # ⚠️ render() 里只列它自己记下的那句话，**不加任何结论**（见模块注释）。
+            try:
+                from core import user_profile as _UPr
+                _up_txt = _UPr.render(8)
+                if _up_txt:
+                    sys_text += "\n[关于用户] " + _up_txt + "\n"
+                    LOG.info("用户画像：作为事实注入 %d 条", _UPr.count())
+            except Exception as _e:      # noqa: silent-ok — 画像读不到不影响回答
+                LOG.debug("用户画像注入失败（忽略）：%s", _e)
             if intent != "chat":
                 # 闲聊轮不需要工具用法与技能文档（更不需要路径）—— 按需加载，
                 # system 才能压到 1000 token 以内。**但时间不在此列，它已经在上面注进去了。**
@@ -10536,6 +10595,10 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     #     这条回填就是验收里"使用率 ≥70%"的唯一依据，必须如实记，不能自己给自己打高分。
     if answer and not lean:
         _remember_turn(user_input, answer, tool_trace)
+        # ---- 闭环第三、四步：**模型判断该不该记 → 载体执行存储** ----
+        # 放在回答之后：要让它看得见自己刚说了什么再判断（"你挺关注 NBA 啊"这句
+        # 是它自己说的，判断依据就在里面）。**载体不参与判断。**
+        _profile_judge(user_input, answer)
         if _MEMORY_LAST.get("rid"):
             _mu, _mhit = _memory_used(_MEMORY_LAST.get("text", ""), user_input, answer)
             try:
