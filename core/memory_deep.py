@@ -568,12 +568,77 @@ def compress(now=None, force=False, rows=None):
     return {"compressed": len(out), "impressions": out, "applied": bool(out and live)}
 
 
+def _content_chars(s):
+    """取一句话里的**实义汉字**（去掉虚词/高频功能字），用于判断"两句是不是在说一件事"。
+
+    为什么要去虚词：中文里"的了是我你他在就都还"这些字几乎每句都有，
+    拿它们当"重合"等于没判 —— 什么都能跟什么扯上关系。
+    """
+    return {ch for ch in str(s or "") if "\u4e00" <= ch <= "\u9fff" and ch not in _CAUSAL_STOP}
+
+
+# 因果链要用的虚词/高频字（不是"内容"，不能拿它们当关联证据）
+_CAUSAL_STOP = set("的了是我你他她它在有就都还很这那与和因为所以于结果后来被把得地个些不没"
+                   "要会能一二三四五六七八九十上中下大小多少们吗呢吧啊呀什么怎样么"
+                   "今明天年月日时分秒前后里外来去做说想知")
+
+
+def _content_grams(s):
+    """取一句话里的**词级片段**（汉字 2-gram，全虚词的丢掉）。
+
+    【为什么用词级、不用单字】修因果链时连红三次，全是"单字重合"惹的：
+      中文单字太泛 —— 自/家/老/我 几乎每句都有；拿它当"接得上"，等于什么都能接上。
+      实测反例：`【自测M3】我在济南工作` 的实体邻居是「…把我裁了」，
+      于是"裁"进了参照集，而「自/测」又被并了进去 —— 结果连
+      「2027 年诺贝尔物理学奖得主是谁」都被判成了它的因果邻居。
+      换成 **2-gram（词级）** 之后这类噪声基本消失：要真的**共用一个词**才算数。
+    """
+    t = re.sub(r"[^\u4e00-\u9fff]", "", str(s or ""))
+    out = set()
+    for i in range(len(t) - 1):
+        a, b = t[i], t[i + 1]
+        if a in _CAUSAL_STOP and b in _CAUSAL_STOP:
+            continue
+        out.add(t[i:i + 2])
+    return out
+
+
+def _causal_clause(txt, words):
+    """取"因果词**紧跟着的那一小句**"（因果词后最多 12 个字，到标点为止）。
+
+    【为什么必须收窄到这一小句】真正的因果证据只在**因果词领起的那半句**里：
+      「**因为裁员**，我就开始自己接活了」里，跟"公司裁员了"接得上的是「裁员」，
+      不是整句话。拿整句去比，噪声会多一个量级。
+    """
+    t = str(txt or "")
+    for w in words:
+        i = t.find(w)
+        if i < 0:
+            continue
+        seg = t[i + len(w): i + len(w) + 12]
+        seg = re.split(r"[，。！？；、,!?;\n]", seg)[0]
+        if seg.strip():
+            return seg.strip()
+    return ""
+
+
 def associations(memory_id, limit=5, now=None):
     """机制④ **联想**：给一条记忆找"因果链 + 时间链"上的邻居。
 
     为什么需要它：单条记忆只能回答"这件事"，联想能回答"后来呢/为什么"。
     判据（纯载体规则，不调模型）：**时间相邻** + **共享实体** → 时间链；
     时间相近且出现"因果词"→ 因果链。
+
+    【⚠️ 因果链的判据修过一次 —— 原来的太松，是**真 bug**】
+      老判据只有三条：**没有共享实体 + 时间差 ≤10 天 + 正文含因果词**。
+      于是**任何一条**近十天里带「因为/所以/于是/后来/结果」的记忆，
+      都会成为**任何一条**记忆的"因果邻居" —— 那根本不是联想，是噪声。
+      后果可观测：排序分 `2.0 - gap/30天`，真实库里最近几天的因果句（gap≈0）
+      分数≈2.0，把**真正相关**的那条（gap=2 天 → 1.933）挤出了 top-10。
+      `tools/test_memory_depth.py` 的「含因果链」就是这么红的
+      （换回清理前的库跑，结果一模一样 —— 不是数据清理引入的）。
+      **修法**：因果链必须**真的接得上** —— 候选句要么跟本条、
+      要么跟本条的**一跳邻居**有**实义字重合**；只靠"时间近 + 有个因果词"不算。
     """
     now = time.time() if now is None else float(now)
     rows = _all_rows()
@@ -583,7 +648,12 @@ def associations(memory_id, limit=5, now=None):
     my_ents = set(x for x in (me.get("entities") or []) if x)
     my_ts = float(me.get("ts") or 0)
     causal_words = ("因为", "所以", "于是", "导致", "结果", "后来", "因为这样", "害得")
-    out = []
+
+    # ---- 第一遍：一跳邻居（实体 / 时间）----
+    # ⚠️ `hop_content` **只收"共享实体"那批**，绝不能把所有近十天的行都并进来。
+    #    我第一版就是并了全部时间邻居，结果几十上百行拼起来的字集合几乎覆盖常用汉字，
+    #    "接得上"这个判据当场变成永真 —— 跟没修一样（自测连着红两次才看出来）。
+    one_hop, hop_content = [], set()
     for r in rows:
         if r.get("id") == memory_id:
             continue
@@ -598,14 +668,23 @@ def associations(memory_id, limit=5, now=None):
             kind = "时间"
         if kind is None:
             continue
+        one_hop.append((r, kind, gap, shared))
+        if shared:                      # 只有"实打实共享实体"的邻居才配当因果链的中转
+            hop_content |= _content_grams(r.get("text") or "")
+
+    # ---- 第二遍：因果链必须在**接得上**的前提下才认 ----
+    now_content = _content_grams(me.get("text") or "")
+    out = []
+    for r, kind, gap, shared in one_hop:
         txt = (r.get("text") or "")
         if kind == "时间" and any(w in txt for w in causal_words):
-            kind = "因果"
+            clause = _causal_clause(txt, causal_words)
+            if clause and (_content_grams(clause) & (now_content | hop_content)):
+                kind = "因果"
+            # 接不上就**老实算时间链**（分低、排后面），不许冒充因果
         # ---- 排序分：为什么这么加权 ----
         # 共享实体的联想最有用（"同一件事的其他侧面"），因果次之（"后来呢"），
         # 纯时间相邻最弱（一个时间段里本来就挤着很多无关的事）。
-        # 上一版是"先按 kind 排、再按时间排"，结果 limit 一截，
-        # 全被时间链占满、实体链一条都进不来（自测当场判红）。
         score = {"实体": 3.0, "因果": 2.0, "时间": 1.0}.get(kind, 0.5)
         score -= min(0.9, gap / (30 * _DAY))          # 越近越靠前，但最多只扣 0.9
         out.append({"id": r.get("id"), "kind": kind, "text": txt[:60],
