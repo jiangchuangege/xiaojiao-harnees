@@ -4166,6 +4166,27 @@ def run_tool(name, args, force=False):
     "所有文件/命令入口都拦得住"这句话才成立**。
     """
     args = _fix_args_paths(name, args or {})   # 补充任务 7：先把 [用户名] 这类占位符展开成真实路径
+    # ---- 渠道隔离：**外部通道下只能聊天，任何工具都不给执行** ----
+    # 【为什么排在最前面、连delete红线都排在它后面】这是"别人能给它发消息"那条链路的**总闸**。
+    #   小焦手上有 run_command / read_file / write_file，接到任何 IM 上就等于把电脑钥匙递出去；
+    #   "不能删文件"那条红线挡不住 run_command。所以这条闸必须在**任何**工具动作之前生效。
+    # 【为什么放在这里而不是只过滤工具表】只过滤工具表 = **假隔离**：
+    #   4B 会硬编工具名（实测出现过），看不到不等于调不到。**必须执行时再拦一次。**
+    try:
+        from core import channel_policy as _CH
+        if not _CH.is_allowed(name):
+            _ch = _CH.render()
+            LOG.warning("渠道隔离：**%s 通道下的工具调用被拒绝**（工具=%s，该通道只允许 %s）",
+                        _ch.get("channel"), name,
+                        "纯聊天" if _ch.get("chat_only") else _ch.get("allowed"))
+            return ("⚠️ 这个接入通道只开放聊天，不能执行任何工具（%s）。"
+                    "如需执行请在本机网页上操作。" % name)
+    except Exception as _e:      # noqa: silent-ok — 见下面"为什么这里允许失败放行"
+        # 【为什么这里失败是放行，而不是拦截】因为**渠道是在同一个模块里设置**的：
+        #   如果这个模块根本导入不了，那么入口处的 `set_channel()` 也从来没有生效过 ——
+        #   也就是**当前根本没有活跃渠道**，没有任何东西可泄漏。
+        #   反过来强行拦死会让"模块坏了 → 本机网页也全瘫"，那是拿可用性换一个假的安全。
+        LOG.debug("渠道策略读取失败（忽略）(%s:%d): %s", __file__, 4168, _e)
     # ---- 安全红线：删除禁区（**第一道，优先于一切**）----
     # 为什么排在权限判断、去重、执行之前：删除是唯一不可逆的动作，
     # 它不该有机会走到"要不要问用户确认"那一步 —— 直接拒绝，不给模型任何周旋空间。
@@ -10687,6 +10708,31 @@ def rate_limited():
             limited = True
             wait = int((1.0 - _RATE["tokens"]) / rate) + 1   # 向上取整：别让用户等完还差一点
     return limited, wait
+
+
+# ================== 渠道隔离：一个 before_request 挂住所有入口 ==================
+# 【为什么用钩子而不是改每个入口】入口有 `/api/chat`、`/api/chat/stream`、`/v1/chat/completions`
+#   好几个；逐个改一定会漏一个，而**漏掉的那个就是缺口**。挂在全局钩子上，新增入口自动被覆盖。
+# 【桥接方怎么声明自己】请求头 `X-Xiaojiao-Channel: wechat`。
+# ⚠️ 这个头是**桥接方自己填的**，**不是身份认证** —— 它只防"我配置错了把危险工具暴露出去"，
+#   不防"有人伪造这个头"。真正的鉴权在桥那边（只允许白名单 userid），这一点必须说清楚。
+@app.before_request
+def _bind_channel():
+    try:
+        from core import channel_policy as _CH
+        _CH.set_channel(request.headers.get("X-Xiaojiao-Channel") or "")
+    except Exception as e:      # noqa: silent-ok — 挂不上钩子等于"没有渠道"，与原来行为一致
+        LOG.debug("渠道绑定失败（忽略）：%s", e)
+
+
+@app.teardown_request
+def _unbind_channel(exc=None):
+    """**必须清掉** —— Flask 里线程是复用的，不清就会把限权带到下一个请求上（串权）。"""
+    try:
+        from core import channel_policy as _CH
+        _CH.reset()
+    except Exception as e:      # noqa: silent-ok — 清不掉时下一请求的 before_request 会重设
+        LOG.debug("渠道解绑失败（忽略）：%s", e)
 
 
 def _client_is_local():

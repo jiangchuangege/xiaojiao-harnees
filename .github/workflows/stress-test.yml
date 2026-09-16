@@ -104,6 +104,10 @@ jobs:
         shell: pwsh
         run: python tools/test_docs_audit.py
 
+      - name: 渠道隔离自测（外部通道只能聊天，不能执行任何工具）
+        shell: pwsh
+        run: python tools/test_channel_policy.py
+
       - name: 中文数字翻译自测（载体直算那一路，错一位就是十倍）
         shell: pwsh
         run: python tools/test_cn_number.py
