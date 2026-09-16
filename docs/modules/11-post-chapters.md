@@ -1777,7 +1777,7 @@ for k, v in c.most_common():
 | 序号 | 设计文档的写法 | 代码实际情况 | 处理方式 |
 |---|---|---|---|
 | 1 | 采样精度的落点是"`core/health/degeneration.py` 检出复读到 `_gen_out` 重出" | 仓库中不存在 `_gen_out`。检出后的动作是截断与停止推送；仅有的重生成入口是健康一级治疗的 `_h_retry`，最多一次 | 本文档如实写作部分落地，并说明真实的三条路径 |
-| 2 | 校验精度标记为已落地 | `selfrate.self_rate()` 与 `crosscheck.cross_check()` 未接入主流程，仅 `tools/test_metacognition.py` 调用。主流程只接入 `boundary.should_use_tool()` 与 `boundary.record()` | 本文档改标为部分落地 |
+| 2 | 校验精度标记为已落地 | ~~`selfrate.self_rate()` 与 `crosscheck.cross_check()` 未接入主流程，仅 `tools/test_metacognition.py` 调用。主流程只接入 `boundary.should_use_tool()` 与 `boundary.record()`~~ **2026-09-16 再更正**：`self_rate()` **已接入 `agent_run`**（两级：载体规则先判、判不出才交模型自评，见 `xiaojiao_app.py:9660` 附近）；**仍未接入**的只剩 `cross_check()` | 本文档先改标为部分落地，后按接入实况再更正为"自评已接入、交叉检查未接入" |
 | 3 | 聚合精度的落点是"`core/central/` 冲突仲裁，多 LLM key 择一、工具结果择一" | `core/central/__init__.py` 中不含任何仲裁代码。密钥优先级解析在 `xiaojiao_app.py` 的 `_resolve_llm_key()`，与 `core/central/` 无关；多条大工具结果走 `_history_summary_line()` 压成一行摘要，不是择一 | 本文档改标为设计未落地，并指明误认的来源 |
 | 4 | 记忆精度实测库内 1002 条 | 该数字是历史某次实测值。本次读取为 1171 至 1192 条，随时间增长 | 本文档给出读取时刻与条数，并说明不是固定值 |
 | 5 | `core/health/heal.py` 的 `reload_kv()` 在模型状态异常时清 KV 并重新预热 | `heal.py` 的 `_d_reload_kv()` 默认返回 False，理由是载体层无法隔空重置推理服务；主程序注册的 `_h_reload_kv()` 只记一条 INFO 日志后返回 True，不发起服务调用 | 本文档分两侧写明真实语义 |

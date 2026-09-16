@@ -115,7 +115,7 @@ flowchart TB
 | 下发与调用 | `llm_chat_tools`（第 3339 行）、`_build_tools(only=...)`（第 1159 行） |
 | 点名装载 | `_named_tools`（第 4351 行）、`_noarg_named_tool`（第 4380 行） |
 | 工具熔断 | `_tool_breaker`（第 3554 行） |
-| 第 5 步设计 | 见 [six-infinity.md](../six-infinity.md) 的「设计目标（尚未落地）」一节 |
+| 第 5 步（**已落地**，2026-09-16 更正） | 见 [six-infinity.md](../six-infinity.md) 的「第 5 步已落地的四项」一节（4.4.5）。早先本行写的是「设计目标（尚未落地）」，属过期标注 |
 
 ## 3. 为什么不能一轮全发
 
