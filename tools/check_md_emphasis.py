@@ -93,7 +93,23 @@ for root, dirs, files in os.walk(ROOT):
             if s.startswith("```"):
                 in_fence = not in_fence
                 continue
-            if in_fence or "**" not in ln:
+            if "**" not in ln:
+                continue
+            # ⚠️ **代码块里也要查**：代码块里的 `**` 一定原样显示（CommonMark 不处理），
+            #    但用户看到的就是"字带星号"。第一版我 `if in_fence: continue` 直接跳过，
+            #    于是"提示词示例"那一类**全漏了** —— 用户截图抓到的正是这一批。
+            #    这里单列一类（`代码块内`），因为它和正文那类**修法不一样**：
+            #    正文能换 <b>，代码块里换 <b> 也照样显示字面标签 —— 得改fence或去掉星号。
+            if in_fence:
+                # ⚠️ 但**不能把正当代码也报出来**：`config(**kw)`、`x**2` 是 Python 语法，
+                #    星号本来就是代码的一部分。判据：星号之间**含中文**才算"想强调"。
+                pos2 = [m.start() for m in re.finditer(r"\*\*", ln)]
+                hit = any(
+                    re.search(r"[\u4e00-\u9fff]", ln[pos2[k] + 2:pos2[k + 1]])
+                    for k in range(0, len(pos2) - 1, 2))
+                if hit and not s.startswith("%%"):
+                    bad.append((rel, i, "代码块内（一定是字面星号，换 <b> 也没用，要去星号）",
+                                ln.strip()[:56], ln.strip()[:150]))
                 continue
             # ⚠️ 配对要**按出现顺序两两配**（第 1 个配第 2 个、第 3 个配第 4 个 …）。
             #    第一版用非贪婪正则 `\*\*(.+?)\*\*` 去配，结果把**前一句加粗的收尾**

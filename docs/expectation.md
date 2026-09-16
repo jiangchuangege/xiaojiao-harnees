@@ -70,7 +70,7 @@
 ## 4. 实测（`tools/test_wholeness.py` [B] 组）
 
 ```
-留下一件没做完的 → carried=1，brought_up=[]        ← 这时**还没有期待**
+留下一件没做完的 → carried=1，brought_up=[]        ← 这时还没有期待
 它自己提起了     → brought_up=1（记下它当时那句话）  ← 这才叫期待
 做完了           → carried=0                        ← 不再压着
 ```
