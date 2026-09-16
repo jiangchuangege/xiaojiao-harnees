@@ -245,6 +245,7 @@ llama-server 直接报 `request (N tokens) exceeds the available context size`�
 | **给原料不给成品** | [`docs/raw-material.md`](../docs/raw-material.md) |
 | **路径二 · 内感受** | [`docs/interoception.md`](../docs/interoception.md) |
 | **路径二 · 视角状态与硬改策略** | [`docs/perspective.md`](../docs/perspective.md) |
+| **EYC 进行时自述（第一人称把状态说给它听）** | [`docs/eyc-self-narration.md`](../docs/eyc-self-narration.md) |
 | **记忆污染（来源标记 / 清库 / 时间线检索）** | [`docs/memory-pollution.md`](../docs/memory-pollution.md) |
 | **项目手记（一条没人走过的路）** | [`docs/一条没人走过的路.md`](../docs/一条没人走过的路.md) |
 | 期待（只能来自真实逛世界） | [`docs/expectation.md`](../docs/expectation.md) |
