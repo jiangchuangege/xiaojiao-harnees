@@ -104,6 +104,10 @@ jobs:
         shell: pwsh
         run: python tools/test_docs_audit.py
 
+      - name: 中文数字翻译自测（载体直算那一路，错一位就是十倍）
+        shell: pwsh
+        run: python tools/test_cn_number.py
+
       - name: 全新克隆自检（干净目录能不能起、能不能跑绿）
         shell: pwsh
         run: python tools/test_fresh_clone.py
