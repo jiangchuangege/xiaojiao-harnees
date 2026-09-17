@@ -198,7 +198,11 @@ def build_system(impressions):
 def recall_with_hit(user_msg):
     """血管召回（**只召回、不写盘**）：命中就把 `hit_count` 记在 user_profile 上。
 
-    返回的是 `user_profile` 的**原始记录**（dict：id/ts/kind/content/why/evidence/source/hit_count），
+    ⚠️ 这里 +1 的是 **`hit_count`（被召回几次）**，**不动 `said_count`（用户说过几次）** ——
+       两个计数 2026-09-17 拆开了（见 `core/user_profile.py` 头部）。"被召回"不是"用户说过"。
+
+    返回的是 `user_profile` 的**原始记录**
+    （dict：id/ts/kind/content/why/evidence/source/said_count/hit_count），
     上层直接拿去合并、注入 —— 不再经手第二份画像库。
     """
     from core import user_profile as up

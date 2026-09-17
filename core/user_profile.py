@@ -33,12 +33,20 @@
       "content": "用户关注 NBA 篮球赛事",   # 模型给的一句话
       "source": "模型自己判断",             # **如实标：这不是载体推的**
       "evidence": "用户问了湖人 vs 勇士",    # 模型给的依据（载体照抄，不改写）
-      "hit_count": 0                      # 命中一次 +1：用得越多的兴趣越稳
+      "said_count": 1,                    # 用户说过几次（第一次就是 1；同一句话再说一次 +1）
+      "hit_count": 0                      # 被召回几次（命中一次 +1：用得越多的兴趣越稳）
     }
+  ⚠️ 这两个计数**故意分开**（2026-09-17 用户定的）：
+    · `said_count` = **用户**说的次数（`add()` 去重命中时 +1）
+    · `hit_count`  = **载体**召回它的次数（`hit()` 命中时 +1）
+    拆之前两者共用 `hit_count`：连说三次「我 25 岁」库里只有 1 条、但计数是 6（3 次去重 + 3 次召回），
+    **一个数字两种含义**，"用户强调过"和"这条好用"分不出来。现在各记各的。
+    ⚠️ 拆分之前的老记录 `said_count` 是 **0**（那时候没人记过这个数），**不代表用户没说过** ——
+    如实标着缺口，不拿 hit_count 反推、也不假装补过。
 
 【载体在这一层做的全部事情】（不多做一件）
   1. 追加写盘（原子、只追加）
-  2. 命中时把 `hit_count` +1
+  2. 说过的次数记 `said_count`、被召回的次数记 `hit_count`（**两个计数语义不许混**）
   3. 把画像作为**事实**渲染给模型（`render()`）—— 渲染时**不加任何结论句**
   4. **不判断、不推断、不补全**：模型说记什么就记什么；模型说不记就一个字都不写
 """
@@ -88,9 +96,16 @@ def _all_raw():
             if not line:
                 continue
             try:
-                out.append(json.loads(line))
+                d = json.loads(line)
             except Exception:      # noqa: silent-ok — 坏行跳过（不因为一行坏了丢掉整个库）
                 continue
+            if isinstance(d, dict):
+                # 老记录（拆分之前写的）没有这两个字段 —— **读的时候就补齐默认值**，
+                # 免得每个读的人自己写 `.get(k, 0)` 各写各的、写歪一个就整条链错。
+                # 注意：`said_count` 补 0 是"那时候没人记过这个数"，不是"用户没说过"（不拿 hit_count 反推）。
+                d.setdefault("said_count", 0)
+                d.setdefault("hit_count", 0)
+                out.append(d)
     return out
 
 
@@ -139,9 +154,11 @@ def add(kind, content, why="", evidence="", source="模型自己判断"):
 
     【去重（用户报的 bug：同一个事实写了三遍）】
       `content` **完全相同**（strip 后逐字相等，不做模糊匹配）→ **不追加新行**，
-      把旧记录的 `hit_count` +1，返回**旧记录的 id**。
+      把旧记录的 `said_count` +1，返回**旧记录的 id**。
       为什么按"完全相等"：模糊匹配会把"我爱吃香菜"和"我不吃香菜"并成一条 ——
       那是**载体替它判断**（本项目最忌讳的事）。宁可留两条，也不许并错。
+      ⚠️ 这里 +1 的是 `said_count`（**用户**说过几次），**不动 `hit_count`** ——
+      `hit_count` 只由 `hit()` 记，表示**召回**过几次。两个计数不许互相加。
     """
     k = clean_kind(kind)
     c = str(content or "").strip()
@@ -154,7 +171,7 @@ def add(kind, content, why="", evidence="", source="模型自己判断"):
         rows = _all_raw()
         for r in rows:
             if str(r.get("content") or "").strip() == c:
-                r["hit_count"] = int(r.get("hit_count") or 0) + 1
+                r["said_count"] = int(r.get("said_count") or 0) + 1
                 _rewrite(rows)
                 return str(r.get("id") or "")
         rec = {
@@ -166,6 +183,8 @@ def add(kind, content, why="", evidence="", source="模型自己判断"):
             "why": str(why or "")[:200],
             "evidence": str(evidence or "")[:200],
             "source": str(source or "模型自己判断"),
+            # 第一次说就是 1（"说过几次"从这一次算起）—— 起始值 0 会让"连说三次"只数到 2
+            "said_count": 1,
             "hit_count": 0,
         }
         # 上限保护：超了就丢掉最老的（画像要精，不是要全）
@@ -371,8 +390,10 @@ if __name__ == "__main__":       # 自带的冒烟自测（写临时库，不动
         assert count() == 2, count()
         assert "NBA" in render(), render()
         assert hit(keyword="NBA") == 1
-        rows = {r["content"]: r["hit_count"] for r in all_records()}
-        assert rows.get("用户关注 NBA 篮球赛事") == 1, rows
+        # 两个计数分开看：这条 **add 过一次（said=1）**、**hit 过一次（hit=1）**
+        rows = {r["content"]: {"said": r.get("said_count", 0), "hit": r.get("hit_count", 0)}
+                for r in all_records()}
+        assert rows.get("用户关注 NBA 篮球赛事") == {"said": 1, "hit": 1}, rows
         v = parse_verdict('```json\n{"remember": true, "kind": "兴趣", '
                           '"content": "用户关注 NBA", "why": "问了湖人"}\n```')
         assert v["remember"] is True and v["kind"] == "兴趣", v

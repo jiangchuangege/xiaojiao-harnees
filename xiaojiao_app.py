@@ -10398,7 +10398,10 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                         "kind": _p.get("kind"),
                         "content": _p.get("content"),
                         "ts": _p.get("ts"),
+                        # 这里是**透传**（不改判据）：`should_solidify` 读的是 `hit_count`（召回频率），
+                        # 但两个计数都递过去 —— 少带一个，下游想按"用户强调过几次"看一眼就看不到了。
                         "hit_count": _p.get("hit_count", 0),
+                        "said_count": _p.get("said_count", 0),
                         "id": _p.get("id"),
                     }
                     _ok, _why = _WL.should_solidify(_rec, now=_now)

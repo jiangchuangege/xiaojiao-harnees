@@ -11,6 +11,7 @@
 
 运行：python tools/test_user_profile.py
 """
+import json
 import os
 import sys
 
@@ -115,7 +116,7 @@ def main():
         ck("没有 JSON → 不算不一致",
            UP.contradiction("我觉得这事值得记一下") == "")
 
-        print("五、去重与 hit 保护（2026-09-17 用户报的 bug：同一个事实写了三遍 —— 实测存量里写了 15 遍）")
+        print("五、去重与两个计数（2026-09-17：修去重 bug，并把 hit_count 拆成 said_count/hit_count）")
         # 这一段**换到独立的临时库**跑：本段会故意造重复，用同一个库会把后面几节的条数假设弄乱
         _real_path = UP._PATH
         UP._PATH = os.path.join(tempfile.gettempdir(), "_up_dedupe.jsonl")
@@ -128,18 +129,70 @@ def main():
             ck("同一内容重复 add → **不追加新行**（3 次 add 只有 1 行）", UP.count() == 1, UP.count())
             ck("返回的是**旧记录的 id**（不是新的）", bool(_i1) and _i1 == _i2 == _i3, (_i1, _i2, _i3))
             _row = UP.all_records()[0]
-            ck("旧记录的 hit_count 被 +1（两次重复 → +2）", int(_row.get("hit_count") or 0) == 2,
-               _row.get("hit_count"))
+            # 连说三次 → **said_count=3**（第一次就是 1，后两次各 +1）
+            ck("连说三次 → said_count=3", int(_row.get("said_count") or 0) == 3, _row.get("said_count"))
+            ck("add 去重**不动** hit_count（说得多 ≠ 被召回过）",
+               int(_row.get("hit_count") or 0) == 0, _row.get("hit_count"))
             ck("**不做模糊匹配**：说法不同就各存一条",
                UP.add("事实", "25 岁的年轻人，处于事业起步阶段。") != _i1 and UP.count() == 2, UP.count())
             ck("hit(不存在的 id) → 静默返回 0，不崩", UP.hit("这个 id 不存在") == 0)
+            # 再召回三次 → hit_count=3，said_count 一动不动
             ck("hit(id) 认单个字符串 id", UP.hit(_i1) == 1)
-            ck("hit 之后 hit_count 再 +1", int(UP.all_records()[0].get("hit_count") or 0) == 3,
-               UP.all_records()[0].get("hit_count"))
+            UP.hit(_i1)
+            UP.hit(_i1)
+            _row2 = UP.all_records()[0]
+            ck("召回三次 → hit_count=3", int(_row2.get("hit_count") or 0) == 3, _row2.get("hit_count"))
+            ck("召回**不动** said_count（还是 3）",
+               int(_row2.get("said_count") or 0) == 3, _row2.get("said_count"))
+            # 老记录（拆分前写的、没有这两个字段）→ 读的时候补默认值，不许 KeyError
+            with open(UP._PATH, "a", encoding="utf-8") as _f:
+                _f.write(json.dumps({"id": "old-1", "ts": 1.0, "kind": "事实",
+                                     "content": "老记录没有这两个字段"}, ensure_ascii=False) + "\n")
+            _old = [r for r in UP.all_records() if r.get("id") == "old-1"]
+            ck("老记录读出来自动补 said_count=0 / hit_count=0",
+               bool(_old) and _old[0].get("said_count") == 0 and _old[0].get("hit_count") == 0,
+               _old[0] if _old else "没读到")
         finally:
             if os.path.exists(UP._PATH):
                 os.remove(UP._PATH)
             UP._PATH = _real_path
+
+        print("五之二、去重工具的合并口径（tools/dedupe_user_profile.py / merge_duplicates）")
+        import importlib
+        _dd = importlib.import_module("tools.dedupe_user_profile")
+        _rows = [
+            {"id": "a", "ts": 1.0, "kind": "事实", "content": "同一句",
+             "said_count": 1, "hit_count": 0},
+            {"id": "b", "ts": 2.0, "kind": "事实", "content": "同一句",
+             "said_count": 0, "hit_count": 2},          # 老记录形态：没有 said_count
+            {"id": "c", "ts": 3.0, "kind": "事实", "content": "同一句",
+             "said_count": 4, "hit_count": 1},
+            {"id": "d", "ts": 4.0, "kind": "事实", "content": "另一句",
+             "said_count": 1, "hit_count": 5},
+        ]
+        _keep, _merged = _dd.merge_duplicates(_rows)
+        _host = [r for r in _keep if r.get("content") == "同一句"][0]
+        ck("去重后只剩 2 条", len(_keep) == 2, len(_keep))
+        ck("第 2 条（另一句）没被并", len(_keep) == 2 and _keep[1].get("content") == "另一句")
+        # said_count = max(1,1) + max(1,0) + max(1,4) = 1+1+4 = 6（保留那条自己也算一次；老记录按 1 算，不是 0）
+        ck("said_count 并成 6（老记录按 1 算、保留那条自己也算 1）",
+           int(_host.get("said_count") or 0) == 6, _host.get("said_count"))
+        ck("hit_count 取**最大值** 2（不是求和 3）",
+           int(_host.get("hit_count") or 0) == 2, _host.get("hit_count"))
+        ck("并的过程有账可查（1 组、并掉 2 行）",
+           len(_merged) == 1 and _merged[0][5] == 2, _merged)
+        ck("没重复的那条一个字没动（said_count 还是 1）",
+           int(_keep[1].get("said_count") or 0) == 1, _keep[1].get("said_count"))
+        # 15 行一模一样（存量里真出现过）→ said_count 必须是 **15**，不是 14（自己也算一次）
+        _r15 = [{"id": "x%d" % i, "ts": float(i), "kind": "事实", "content": "用户 25 岁",
+                 "said_count": 0, "hit_count": 0} for i in range(15)]
+        _r15[0]["hit_count"] = 3
+        _k15, _m15 = _dd.merge_duplicates(_r15)
+        ck("15 行一模一样 → 1 条，said_count=15（不是 14）",
+           len(_k15) == 1 and int(_k15[0].get("said_count") or 0) == 15,
+           (len(_k15), _k15[0].get("said_count")))
+        ck("15 行并存时 hit_count 取 max=3", int(_k15[0].get("hit_count") or 0) == 3,
+           _k15[0].get("hit_count"))
 
         print("六、落盘与渲染")
         rid = UP.add("职业/技术栈", "用户是后端开发者")
@@ -153,10 +206,13 @@ def main():
         ck("render 里保留类别与依据",
            "[职业/技术栈]" in txt and "依据" in txt, txt[:120])
 
-        print("七、命中记账")
+        print("七、命中记账（召回次数记在 hit_count 上，said_count 不许被带偏）")
         ck("hit 命中 1 条", UP.hit(keyword="后端") == 1)
         ck("hit_count 真的 +1", UP.all_records()[0].get("hit_count") == 1,
            UP.all_records()[0].get("hit_count"))
+        ck("这条 add 过一次 → said_count=1（召回不改它）",
+           UP.all_records()[0].get("said_count") == 1,
+           UP.all_records()[0].get("said_count"))
         ck("上限保护存在（MAX_ROWS）", UP.MAX_ROWS == 500, UP.MAX_ROWS)
     finally:
         if os.path.exists(UP._PATH):

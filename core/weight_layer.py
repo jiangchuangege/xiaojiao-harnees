@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """小焦 · 载体层 · 固化层（memory_deep 的第四层）
 前三层住文件，这一层住权重。
 不新造器官，是 memory_deep 三层的上一层。
@@ -30,6 +30,11 @@ def should_solidify(rec, now=None):
     age_days = (now - ts) / 86400.0
     if age_days < MIN_AGE_DAYS:
         return False, f"存在 {age_days:.1f} 天，不足 {MIN_AGE_DAYS} 天"
+    # 读 `hit_count`（**被召回几次**），不是 `said_count`：
+    #   本层这一关的语义写在上面那句注释里 —— "被命中过至少 3 次"，问的是
+    #   **这条记忆在真实对话里被用过几次**（用得多 = 稳 = 值得进权重），
+    #   不是"用户强调过几次"。用户把同一句话说过三遍，不能证明它该固化。
+    #   （拆计数时特意逐个看过：`MIN_HIT` 在这层只服务"召回频率"这一个语义，故保持不变。）
     hits = int(rec.get("hit_count") or 0)
     if hits < MIN_HIT:
         return False, f"命中 {hits} 次，不足 {MIN_HIT} 次"
