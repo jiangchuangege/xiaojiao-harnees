@@ -49,11 +49,17 @@ def _score(text, keywords):
     return sum(1 for k in keywords if k in t)
 
 
-def adjust_candidates(cands, state=None):
+def adjust_candidates(cands, state=None, event_what=None):
     """**心理 → 大脑：改"往哪想"**。
 
     按当前心理状态的关键词偏置，把检索候选**重排**（稳定排序：同分保持原相对顺序）。
     **只重排，不增删、不改写任何候选文本** —— 这是"改方向"而非"传消息"的硬证据。
+
+    `event_what`（2026-09-18 加，可选）：**感知层那一轮抠出来的「事」**。
+    为什么要这个参数：原来检索那句只能从**心**里取（`psyche.colors()`），
+    于是**心没起的那一轮 = 没有「事」= 检索退回用「我」（甚至只有关键词）**。
+    但「事」来自感知层、心起不起它都有 —— 这条缺口由调用方把它递进来补上。
+    优先级：**心的「事」→ 传进来的「事」→ 心的「我」**（心自己有就用心的，那是同一轮里更近的判断）。
 
     返回 `(重排后的候选, 记录)`；记录里写明"什么状态、把哪一条提前了"，供日志取证。
     """
@@ -75,6 +81,8 @@ def adjust_candidates(cands, state=None):
     #   拿「我」（心里起了什么）只有 5/10 —— **感受词通用会漂，事具体不漂**。
     #   心的那句（我）照旧给心用；检索这一路要的是"这件事跟哪条记忆是同一件事"。
     # 【抠不出「事」时】**退回用「我」**（`_rq = _ew or _q`）—— 不让检索因为少一栏就瘫掉。
+    # 【心没起的那一轮】用调用方递进来的 `event_what`（感知层给的）——
+    #   这条是 2026-09-18 补的缺口：原来"心没起 → 这一轮没有「事」可用"。
     _q = ""
     _ew = ""
     try:
@@ -83,6 +91,11 @@ def adjust_candidates(cands, state=None):
         _q = str(_c.get("query") or "").strip()
     except Exception:      # noqa: silent-ok — 读不到心的偏向就退回关键词检索，不让检索整条瘫掉
         pass
+    _ew_src = "心" if _ew else ""
+    if not _ew:
+        _in_ew = str(event_what or "").strip()
+        if _in_ew:
+            _ew, _ew_src = _in_ew, "感知"
     _rq = _ew or _q
     if not _rq and not kws:
         return items, {"state": b["state"], "keywords": [], "moved": [], "note": "方向中性，未重排"}
@@ -118,8 +131,9 @@ def adjust_candidates(cands, state=None):
             try:
                 import logging as _lg
                 _lg.getLogger("xiaojiao.thinking_loop").info(
-                    "心带模型走：检索用「%s」= %s",
-                    "事" if _ew else "我", _rq[:60])
+                    "心带模型走：检索用「%s%s」= %s",
+                    "事" if _ew else "我",
+                    ("·来自%s" % _ew_src) if _ew_src else "", _rq[:60])
             except Exception:      # noqa: silent-ok — 日志写不出去不影响重排
                 pass
         except Exception:
@@ -135,7 +149,8 @@ def adjust_candidates(cands, state=None):
             if len(moved) >= 3:
                 break
     rec = {"state": b["state"], "keywords": list(kws)[:5], "moved": moved,
-           "note": b["note"], "count": len(items)}
+           "note": b["note"], "count": len(items),
+           "query_used": _rq[:80], "query_kind": ("事·%s" % _ew_src) if _ew else ("我" if _q else "无")}
     with _LOCK:
         LOOP["rounds"] += 1
         LOOP["reorders"].append(rec)

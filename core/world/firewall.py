@@ -1391,7 +1391,11 @@ class PollutionFirewall:
                                                  "reason": "内部异常，未完成筛查"}})
             self._log_absorption({"event": "screen", "url": r.url, "domain": r.domain,
                                   "decision": r.decision, "passed": 0, "score": 0.0,
-                                  "classes": [], "error": "internal"})
+                                  # 【2026-09-18 改成中文】原来是英文短码 "internal" ——
+                                  #   这条记录会进隔离区日志给人看，按项目铁律 P6「面向用户的
+                                  #   error 文案都是中文」，改成中文；同时保留原因（异常类型在
+                                  #   `reasons` 那一栏里，见上面 ScreenResult）。
+                                  "classes": [], "error": "内部异常（筛查未完成，已按最保守方式处理）"})
             return r
 
     def _screen_inner(self, url, content, title, topic, profile, known_facts, sources):

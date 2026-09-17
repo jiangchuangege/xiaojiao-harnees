@@ -186,6 +186,14 @@ def main() -> int:
             t = io.open(f, encoding="utf-8", errors="ignore").read()
         except OSError:
             continue
+        # 【2026-09-18 收窄一处误报】**写在代码块/行内代码里的版本号不是"发版声明"，是数据**。
+        #   实测踩到：`neko_plugin/xiaojiao_install/README.md` 里引了一段 N.E.K.O. 的**真实响应**
+        #   （反引号包着 `{"info":"v3.13.13",…}`），那是**别的项目**的版本号，
+        #   却被判成"查无此版"。这跟上面"self_learn/ 里是 Node 的版本号"是同一类噪音。
+        #   口径：**只在正文里出现的 vX.Y.Z 才算声明**；代码块与行内代码里的一律不审。
+        t = re.sub(r"```.*?```", " ", t, flags=re.S)      # 围栏代码块
+        t = re.sub(r"~~~.*?~~~", " ", t, flags=re.S)
+        t = re.sub(r"`[^`\n]*`", " ", t)                  # 行内代码
         unknown = sorted(set(re.findall(r"v\d+\.\d+\.\d+", t)) - known)
         if unknown:
             ghosts.append("%s:%s" % (rel, unknown))

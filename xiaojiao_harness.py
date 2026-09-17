@@ -376,6 +376,47 @@ def _looks_like_question(q):
     return bool(_QUESTION_RE.search(q))
 
 
+def _memory_gate(content):
+    """**长期记忆的写闸**（与 `plugins/memory.py` 同一套判据）。返回 `(能不能写, 正文或原因)`。
+
+    【为什么老入口也要有】这个文件（`xiaojiao_memory.txt`）就是污染那一轮里被写满的那份；
+    主链路已经上了闸，老入口还是裸 append 就等于**留了后门**（见 docs/memory-pollution.md 第 10 节）。
+    【为什么不另写一套判据】两套判据早晚会打架，而打架的 bug 最难查 —— 这里复用
+    `core/mem_filter.clean_answer`（工具原文 / 坏回复 / 占位符），再加查重与复读/不成话两条。
+    **不写就说实话**（返回原因），不假装"已记住"。判据不可用时**照常写入**（不能因为闸门坏了把功能弄没）。
+    """
+    c = str(content or "").strip()
+    if len(c) <= 1:                 # 与旧行为一致：空壳/一个字不写
+        return False, "内容太短（旧版这里也是不写的）"
+    try:
+        from core import mem_filter as MF
+        cleaned, why = MF.clean_answer(c)
+        if not cleaned:
+            return False, str(why or "被判为不该进记忆的内容")
+        c = cleaned
+    except Exception as e:      # noqa: silent-ok — 闸门不在就照常写（不能因闸门坏了把功能弄没）
+        LOG.debug("老入口写闸不可用，照常写入(%s:%d): %s", __file__, 380, e)
+    try:
+        if os.path.exists(MEMORY_PATH):
+            with open(MEMORY_PATH, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    body = line.strip()
+                    if body and body == c:
+                        return False, "这条已经记过了（完全一样，不重复写）"
+    except Exception as e:      # noqa: silent-ok — 查重失败照常写
+        LOG.debug("老入口查重失败(%s:%d): %s", __file__, 388, e)
+    if re.search(r"(.)\1{4,}", c):
+        return False, "判为复读（同一个字符连着 5 次以上）"
+    if not re.search(r"[\u4e00-\u9fa5A-Za-z0-9]", c):
+        return False, "判为不成话（整条没有中文也没有字母数字）"
+    # 清完之后要有**实质内容**：本条格式是「用户 … 小焦 …」，清洗会把工具原文/坏回复啃掉，
+    # 啃完只剩壳（例如「用户 x 小焦」）就不该写 —— 那不是一条记忆，是一个空壳。
+    _ans = c.split("小焦", 1)[-1].strip() if "小焦" in c else c
+    if len(_ans) < 2:
+        return False, "清完之后没有实质内容（工具原文 / 坏回复会被这条挡掉）"
+    return True, c
+
+
 def main():
     model, char2idx, idx2char = load_model()
 
@@ -447,12 +488,22 @@ def main():
             print(f"🤖 小焦: {record}")
 
         # 记录到记忆
-        if len(record) > 1:
+        # 【2026-09-18 补上写闸】这里原来是**裸 append**（拿到什么写什么）——
+        #   同一个文件 `xiaojiao_memory.txt` 就是后来污染那一轮里被工具原文/退化乱码写满的那份
+        #   （见 docs/memory-pollution.md 第 10 节）。主链路 `plugins/memory.py` 已经上了三道闸，
+        #   老入口这份仍然是裸的 —— 那就是**留了一个后门**：走老入口跑一次，垃圾照样进同一个文件。
+        #   所以这里接上**同一道闸**（`core/mem_filter.clean_answer` 判据 + 查重 + 复读/不成话），
+        #   判据不另写一套（两套判据早晚会打架）。
+        content = f"用户 {user_input} 小焦 {record[:80]}"
+        ok, payload = _memory_gate(content)
+        if ok:
             try:
                 with open(MEMORY_PATH, "a", encoding="utf-8") as f:
-                    f.write(f"用户 {user_input} 小焦 {record[:80]}\n")
+                    f.write(payload + "\n")
             except Exception as e:
                 LOG.debug("忽略异常(%s:%d): %s", __file__, 447, e)
+        else:
+            print("（这条没记进长期记忆：%s）" % payload)
 
 
 if __name__ == "__main__":

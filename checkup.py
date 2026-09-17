@@ -122,7 +122,7 @@ if rows2:
         if t:
             try:
                 tss2.append(time.mktime(time.strptime(t[:19], "%Y-%m-%dT%H:%M:%S")))
-            except Exception:
+            except Exception:      # noqa: silent-ok — 探针脚本：这条时间戳读不出来就跳过它
                 pass
     if tss2:
         print("  时间跨度：%s ～ %s" % (ts_fmt(min(tss2)), ts_fmt(max(tss2))))

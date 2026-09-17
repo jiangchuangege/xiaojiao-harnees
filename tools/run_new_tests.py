@@ -12,6 +12,8 @@
   test_memory_plugin_gate（写记忆闸门）、test_brain_line_cleanup（直连清理）、
   test_thinking_loop_vector（向量路径硬化）、test_heart_back（心接回）、
   test_mind_facts（思维流事实块）、test_inner_facts（内里只列事实）。
+【2026-09-18 再补 2 个】收尾那批：test_self_echo（自我回灌）、
+  test_cross_check_wired（答后交叉检查真的接进主流程 —— 这条钉的是"接线"，不是模块本身）。
 **故意没登进来**的两个：`tools/test_event_what_retrieval.py` 与 `tools/test_last_jump.py`
 —— 它们**必须调本地大脑**（要 llama-swap 在 :9292 跑着），登进来会让这个脚本在大脑没起时红。
 """
@@ -53,6 +55,9 @@ TESTS = [
     ("tools/test_heart_back.py", "心接回（心跳 n 变了才接、原文照搬、assistant 角色）"),
     ("tools/test_mind_facts.py", "思维流事实块（只列事实、剥掉载体框）"),
     ("tools/test_inner_facts.py", "内里只列事实（不再写孤独/低沉这些词）"),
+    # ---- 2026-09-18 第二批：收尾那一批（自我回灌 / 交叉检查接线）----
+    ("tools/test_self_echo.py", "自我回灌（它自己说过的话不算事实来源）"),
+    ("tools/test_cross_check_wired.py", "答后交叉检查**真的接进主流程**（接线 + 触发判据 + 边界）"),
 ]
 
 

@@ -169,17 +169,22 @@ curl -X POST http://127.0.0.1:5000/api/video \
 第 2 步会带上 `chat_template_kwargs` 关闭思考。`/api/video/promptkb` 想读的是
 `video_service/knowledge_vec.json` 中标签为 `video_prompt` 的条目，用于展示"学到了什么"。
 
-#### ⚠️ 一处对不上的地方（如实标注）
+#### 那处对不上的地方**已经修了**（2026-09-18）
 
-| | |
-|---|---|
-| **提示词真的写进了哪** | `self_learn/knowledge_vec.json`（第 2 步走的是 `self_learn/vstore`） |
-| **接口读的是哪** | `video_service/knowledge_vec.json` |
-| **后果** | 那个文件**不存在**。`video_service/video_api.py` 按 `__file__` 拼路径打开它 → 抛异常 → 被吞掉 → `count` 保持 **0** |
-| **所以** | 这个接口**目前永远展示不出"学到了什么"**；学到的东西得去 `self_learn/` 那边看 |
+原来这里是"如实标注一处 bug"：写入方与读取方**不是同一个文件**，于是那个接口**永远显示 0**。
+现在**修好了**，两边的记录都留在这儿：
+
+| | 修之前 | 修之后 |
+|---|---|---|
+| **提示词真的写进了哪** | `self_learn/knowledge_vec.json`（`_refine_prompt` 第 2 步走 `self_learn/vstore`） | 同左（没动写入侧） |
+| **接口读的是哪** | `video_service/knowledge_vec.json` | **同一个库**：直接问 `vstore`（拿不到 API 才退回读它自己的 `VS` 路径） |
+| **后果** | 那个文件**不存在** → 按 `__file__` 拼路径打开抛异常 → 被吞掉 → `count` 永远 **0**，而且**没有任何报错** | 写入与读取只有一个事实来源，读得到就读得到、读不到就如实返回 0 |
+| **实测** | 接口返回 `count: 0` | 直接调用视图函数：**`count: 3`**，并列出三条真实精炼结果（女孩漫步 / 樱花树下漫步 / 樱花树下散步） |
+
+**根因不是"少建了一个文件"，是"同一份数据有两个地址"** —— 那种 bug 不会报错，只会一直显示空。
+所以修法是让读取方走写入方那个库，而不是再建一个空文件糊上。
 
 详见 [`../video_service/README.md`](../video_service/README.md) 的核对记录。
-**本轮没有改代码**，只把文档改成了与代码一致的说法。
 
 ## 9. 显存让位与温存策略
 

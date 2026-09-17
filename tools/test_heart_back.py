@@ -18,6 +18,7 @@
 """
 import os
 import sys
+import time
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -101,6 +102,24 @@ def main():
         PS.stop()
     except Exception as e:      # noqa: silent-ok
         ck("真 psyche 上跑一遍", False, repr(e))
+
+    print("\n八、「事」的暂存：心没起的那一轮也能用它检索（2026-09-18 补的缺口）")
+    # 【缺口】检索那句原来只从心里取；心没起 = 这一轮没有「事」可用。
+    #   现在感知完存一份（`_set_event_what`），检索那一步取（`_event_what_now`）——
+    #   但必须**限时**：后台空闲线程也走同一条检索路，过期了还拿去用就是"拿旧话查新事"。
+    real_txt, real_at = app._EVENT_WHAT.get("text"), app._EVENT_WHAT.get("at")
+    try:
+        app._EVENT_WHAT["text"], app._EVENT_WHAT["at"] = "", 0.0
+        ck("没存过 → 空串（等于没有）", app._event_what_now() == "", app._event_what_now())
+        app._set_event_what("服务器被入侵了")
+        ck("存进去 → 取得回来", app._event_what_now() == "服务器被入侵了", app._event_what_now())
+        app._EVENT_WHAT["at"] = time.time() - (app._EVENT_WHAT_TTL + 5)
+        ck("超过 TTL → 一律当没有（不许拿旧话查新事）", app._event_what_now() == "",
+           app._event_what_now())
+        app._set_event_what("")
+        ck("存空串 → 也没有", app._event_what_now() == "", app._event_what_now())
+    finally:
+        app._EVENT_WHAT["text"], app._EVENT_WHAT["at"] = real_txt or "", real_at or 0.0
 
     print("\n" + "=" * 66)
     print("心接回判据自测：通过 %d / 共 %d" % (len(PASS), len(PASS) + len(FAIL)))

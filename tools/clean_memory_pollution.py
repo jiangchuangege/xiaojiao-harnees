@@ -89,6 +89,14 @@ WATCH_PATTERNS = [
 ]
 # 极短判据的豁免：像一句完整的话就留着
 _SENTENCE_OK = re.compile(r"^[我你他她它这那](是|在|有|爱|喜欢|不|最|住|叫|会|想|要)")
+# 【2026-09-18 再补两条豁免 —— 实测这次差点删掉两条**真事实**】
+#   干跑抓到的：「用户住在杭州」（6 字）、「用户喜欢猫」（5 字）被判成"极短且不像完整的话"。
+#   它们**不是垃圾**，是用户亲口说的事实（中文短 ≠ 垃圾；本文件开头就写过这个坑）。
+#   原因：原判据只看"以代词开头"，而这两条以「用户」开头 —— 于是豁免不生效。
+#   现在：① 先剥掉说话人前缀再判；② 再加一条"主语 + 谓语"的事实形状（宁可漏清，不许删真东西）。
+_SPEAKER = re.compile(r"^\s*(用户|小焦)\s*[:：]\s*")     # 只剥「用户：」这种**带冒号**的前缀
+_FACT_OK = re.compile(r"^\s*([我你他她它这那]|用户)\s*"
+                      r"(是|住在|喜欢|叫|在|有|爱|不|最|会|想|要|养|做|用|吃|喝|睡|来自|从事|讨厌|怕)")
 
 
 def load():
@@ -123,8 +131,8 @@ def classify(rows):
                     why = "坏回复：" + w
                     break
         if not why and len(text.strip()) < 8:
-            body = text.strip().split("\n")[-1].replace("小焦：", "").strip()
-            if kind != "fact" and not _SENTENCE_OK.match(body):
+            body = _SPEAKER.sub("", text.strip().split("\n")[-1].replace("小焦：", "")).strip()
+            if kind != "fact" and not _SENTENCE_OK.match(body) and not _FACT_OK.match(body):
                 why = "极短且不像完整的话（%d 字）" % len(text.strip())
         if why:
             plan["清"].append((ln, why, text, r.get("ts")))
@@ -136,9 +144,53 @@ def classify(rows):
     return plan
 
 
+def plan_exact_dupes(rows, already_killed=()):
+    """**完全重复的正文**：算出去重方案（纯函数，可自测）。返回 `(要删的行号集, 组信息)`。
+
+    【为什么现在敢自动做了】（原来本工具只统计不动手，写着"交给人决定"）
+    实测把键钉死到**四个字段全同**：`text` + `key`（检索键）+ `kind` + `entities`。
+    实测 2962 条里 228 组重复、可去 636 行；其中 `key` **没有一组不同**
+    （所以删掉不会让任何一条变得检索不到）、只有 4 组 `kind` 不同、1 组 `entities` 不同 ——
+    这 5 组**不并**（字段不一致就不是"一模一样"，宁可留着）。
+    → 留下的那条与删掉的那些**在这四个字段上完全相同**，因此这次去重是**无损的**。
+    【保留哪条】**最早的那条**（ts 最小、同 ts 取行号最小）—— 原记录留在这儿，后来重写的那些才是多余的。
+    """
+    groups = {}
+    for ln, raw in rows:
+        if ln in already_killed:
+            continue
+        try:
+            r = json.loads(raw)
+        except Exception:
+            continue                       # 坏行不在这里处理（classify 会单独判）
+        if not isinstance(r, dict):
+            continue
+        key = (str(r.get("text") or ""), str(r.get("key") or ""), str(r.get("kind") or ""),
+               json.dumps(r.get("entities") or [], ensure_ascii=False, sort_keys=True))
+        if not key[0]:
+            continue                       # 空正文不是"重复"，不借这次机会处理别的
+        groups.setdefault(key, []).append((ln, r))
+    kill, info = set(), []
+    for key, members in groups.items():
+        if len(members) <= 1:
+            continue
+        members.sort(key=lambda ir: (float(ir[1].get("ts") or 0), ir[0]))
+        keep = members[0]
+        dead = members[1:]
+        info.append({"text": key[0], "n": len(members), "kept_len": keep[0],
+                     "dead": [ln for ln, _ in dead]})
+        for ln, _r in dead:
+            kill.add(ln)
+    return kill, info
+
+
 def main():
     ap = argparse.ArgumentParser(description="记忆库污染清理（默认只干跑）")
     ap.add_argument("--apply", action="store_true", help="备份后真删（不加就只列）")
+    ap.add_argument("--dedupe-exact", action="store_true",
+                    help="连**完全重复的正文**一起去重（判据见 plan_exact_dupes；无损）")
+    ap.add_argument("--dedupe-only", action="store_true",
+                    help="**只做去重**，不动污染判据清出来的那些（去重是无损的，污染判据不是）")
     args = ap.parse_args()
 
     if not os.path.exists(P):
@@ -148,6 +200,14 @@ def main():
     rows = load()
     plan = classify(rows)
     kill = {ln for ln, *_ in plan["清"]}
+    if args.dedupe_only:
+        # **只去重**：污染判据清出来的那些一条都不动（那些判据有误报风险，去重没有）
+        kill = set()
+    # ---- 完全重复：加 --dedupe-exact 才并（默认仍只统计，不擅自动手）----
+    dkill, dinfo = plan_exact_dupes(rows, already_killed=kill)
+    if args.dedupe_exact or args.dedupe_only:
+        for ln in dkill:
+            kill.add(ln)
 
     print("库文件：%s" % P)
     print("总条数：%d" % len(rows))
@@ -173,7 +233,7 @@ def main():
             when = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "无时间"
             print("   行%-5d %s  %s" % (ln, when, str(text).replace("\n", " ⏎ ")[:88]))
 
-    # 完全重复（新发现的污染类型：只列不清）
+    # 完全重复（新发现的污染类型：默认只列不清；--dedupe-exact 时才并）
     seen = {}
     for ln, raw in rows:
         if ln in kill:
@@ -188,6 +248,12 @@ def main():
     print("  重复组 %d 组，涉及 %d 行（其中可去重掉 %d 行）"
           % (len(dups), sum(len(v) for v in dups.values()),
              sum(len(v) - 1 for v in dups.values())))
+    print("  【--dedupe-exact】按 text+key+kind+entities **四字段全同**才算重复："
+          "%d 组、可去 %d 行（保留每组最早的那条）" % (len(dinfo), len(dkill)))
+    if args.dedupe_exact:
+        print("  已把 %d 行并入本次清除（无损：留下那条与删掉的那些四字段完全相同）" % len(dkill))
+    else:
+        print("  这次**没有**并它们（没加 --dedupe-exact）；本来只统计，交给人决定。")
     for k, v in sorted(dups.items(), key=lambda z: -len(z[1]))[:6]:
         print("   ×%-4d %s" % (len(v), k.replace("\n", " ⏎ ")[:92]))
 

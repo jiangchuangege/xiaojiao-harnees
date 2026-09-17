@@ -151,6 +151,52 @@ def main():
     ck("【如实记录】空文本候选不会废掉整批向量排序 —— 若失败即证明有隐患",
        bool(still_vec), t6[:3])
 
+    print("\n七、心**没起**的那一轮：调用方把「事」递进来，检索仍要用「事」（2026-09-18 补的缺口）")
+    # 【缺口是什么】检索那句原来只从**心**里取（`psyche.colors()`）——
+    #   心没起（感知没给出「我」）的那些轮次就拿不到「事」，只能退回「我」甚至只按关键词排。
+    #   现在调用方（`xiaojiao_app`）把感知层抠出来的「事」作为 `event_what=` 递进来。
+    _rc, _rb = TL._psyche.colors, TL._psyche.bias
+    # 打桩成"心没起"（query 与 event_what 都空），只有关键词
+    TL._psyche.colors = lambda: {"query": "", "heart": "", "event_what": "", "state": "平"}
+    TL._psyche.bias = lambda state=None: {"state": "平", "keywords": [], "note": "打桩：心没起"}
+    try:
+        ordered7, rec7 = TL.adjust_candidates([dict(c) for c in CANDS],
+                                              event_what="服务器被入侵")
+        t7 = [c["text"] for c in ordered7]
+        # 用同一句「事」自己算一遍排序，作为"应该是什么样"的基准
+        _qv = EM.embed("服务器被入侵")
+        def _cosv(a, b):
+            if not a or not b:
+                return 0.0
+            d = sum(x * y for x, y in zip(a, b))
+            na = sum(x * x for x in a) ** 0.5
+            nb = sum(x * x for x in b) ** 0.5
+            return d / (na * nb) if na and nb else 0.0
+        _want = sorted([dict(c) for c in CANDS], key=lambda c: -_cosv(_qv, EM.embed(c["text"])))
+        ck("心没起时，检索仍按「事」做语义重排（与直接拿「事」算的排序一致）",
+           t7 == [c["text"] for c in _want], t7[:3])
+        ck("记录里写明这一轮用的是「事·来自感知」", rec7.get("query_kind") == "事·感知", rec7.get("query_kind"))
+        ck("且用的那句就是递进来的「事」", rec7.get("query_used") == "服务器被入侵", rec7.get("query_used"))
+
+        print("\n八、心起了的时候：仍以**心**的「事」为准（传进来的不许篡位）")
+        TL._psyche.colors = lambda: {"query": "有人闯进我的房间", "heart": "有人闯进我的房间",
+                                     "event_what": "心的那句事", "state": "紧"}
+        try:
+            _o8, rec8 = TL.adjust_candidates([dict(c) for c in CANDS], event_what="感知给的那句事")
+            ck("用的是心的「事」（事·来自心）", rec8.get("query_kind") == "事·心", rec8.get("query_kind"))
+            ck("传进来的那句被忽略（不是它）", rec8.get("query_used") == "心的那句事", rec8.get("query_used"))
+        finally:
+            pass
+
+        print("\n九、两边都没有「事」：退回用「我」（行为与以前一致）")
+        TL._psyche.colors = lambda: {"query": "有人闯进我的房间", "heart": "有人闯进我的房间",
+                                     "event_what": "", "state": "紧"}
+        _o9, rec9 = TL.adjust_candidates([dict(c) for c in CANDS])
+        ck("用「我」检索且如实标注", rec9.get("query_kind") == "我", rec9.get("query_kind"))
+        ck("没「事」就传空 → 不许把空串当检索词", rec9.get("query_used") != "", rec9.get("query_used"))
+    finally:
+        TL._psyche.colors, TL._psyche.bias = _rc, _rb
+
     psyche.stop()
     print("\n" + "=" * 66)
     print("心带模型走 v2 判据自测：通过 %d / 共 %d" % (len(PASS), len(PASS) + len(FAIL)))

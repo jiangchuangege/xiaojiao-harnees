@@ -168,7 +168,7 @@ flowchart TB
 | 附加精度 | 真实落点与行为 | 状态 |
 |---|---|---|
 | 采样精度 | `core/health/degeneration.py` 检出复读后走截断与停止推送，不重跑；`core/boost/creative.py` 的 `resample()` 只拼装 N 个视角提示词，N 次生成并未执行；仅有的重生成入口是健康一级治疗的 `_h_retry`，换措辞重试一次 | 部分落地，低于设计文档描述 |
-| 校验精度 | 已接入主流程的只有 `core/metacognition/boundary.py`：答前 `should_use_tool()` 查历史档案，答后 `record()` 写入一条样本。`selfrate.self_rate()` 与 `crosscheck.cross_check()` 已实现但只被测试调用 | 部分落地 |
+| 校验精度 | 已接入主流程的有 `core/metacognition/boundary.py`（答前 `should_use_tool()` 查历史档案，答后 `record()` 写一条样本）、`selfrate.self_rate()`（答前自评两级）、以及 **`crosscheck.cross_check()`（2026-09-18 接上：答后那一段，默认关、只在自评没把握的轮次跑）** | 已落地（交叉检查默认关，属"接线完成、默认不启用以省调用"） |
 | 聚合精度 | 仓库中没有多答案投票器，`core/central/__init__.py` 内也不含仲裁逻辑。密钥优先级解析在 `xiaojiao_app.py` 的 `_resolve_llm_key()`，多条大工具结果走 `_history_summary_line()` 压成一行历史摘要 | 设计未落地 |
 | 记忆精度 | `core/memory_vec.py` 提供向量库读写，`core/memory_deep.py` 提供分层与清晰度降级。读取时实测库内 1192 条 | 已落地 |
 | 工具精度 | 工具总数由 `all_tool_names()` 给出，实测 77 个；插件路由表 `real_tool_names()` 实测 63 个；`plugins/` 目录当前 19 个文件、注册插件 16 个 | 已落地 |
@@ -295,8 +295,10 @@ print(B.should_use_tool("小焦的记忆存在哪"))
 
 1. 答前自评**已接入主流程**（`self_rate()` 在 `agent_run` 里，两级：载体规则先判、
    规则判不出才交模型自评，见 [`08-metacognition.md`](08-metacognition.md) 第 4.1 节）。
-   **仍未接入**的是答后交叉检查 —— `cross_check()` 在仓库中只被
-   `tools/test_metacognition.py` 调用，用户对话时不会触发。
+   **答后交叉检查也接上了**（2026-09-18）：`cross_check()` 现在在 `agent_run` 的答后那一段被调用，
+   **默认关**（`capabilities.cross_check`）、**只在"已经怀疑它"的轮次跑**（自评 B/C 或回答自带不确定措辞），
+   判 `conflict` 时给回答加"请当参考"的标注；判 `unknown` 时一个字都不加。
+   接线本身由 `tools/test_cross_check_wired.py`（17 项）钉住 —— 免得再出现"模块全绿、接线没接"。
 2. 边界档案的档位**多数来自载体规则**（第一级），只有规则判不出来时才由模型自评（第二级）。
    这与设计哲学"让模型给把握打分"的写法一致，但**规则那一级不花模型算力**。
 3. 档案判据要求同类样本不少于 3 条才给建议。样本不足时返回"先按常规走"，不干预。
@@ -1777,7 +1779,7 @@ for k, v in c.most_common():
 | 序号 | 设计文档的写法 | 代码实际情况 | 处理方式 |
 |---|---|---|---|
 | 1 | 采样精度的落点是"`core/health/degeneration.py` 检出复读到 `_gen_out` 重出" | 仓库中不存在 `_gen_out`。检出后的动作是截断与停止推送；仅有的重生成入口是健康一级治疗的 `_h_retry`，最多一次 | 本文档如实写作部分落地，并说明真实的三条路径 |
-| 2 | 校验精度标记为已落地 | ~~`selfrate.self_rate()` 与 `crosscheck.cross_check()` 未接入主流程，仅 `tools/test_metacognition.py` 调用。主流程只接入 `boundary.should_use_tool()` 与 `boundary.record()`~~ **2026-09-16 再更正**：`self_rate()` **已接入 `agent_run`**（两级：载体规则先判、判不出才交模型自评，见 `xiaojiao_app.py:9660` 附近）；**仍未接入**的只剩 `cross_check()` | 本文档先改标为部分落地，后按接入实况再更正为"自评已接入、交叉检查未接入" |
+| 2 | 校验精度标记为已落地 | ~~`selfrate.self_rate()` 与 `crosscheck.cross_check()` 未接入主流程，仅 `tools/test_metacognition.py` 调用。主流程只接入 `boundary.should_use_tool()` 与 `boundary.record()`~~ **2026-09-16 再更正**：`self_rate()` **已接入 `agent_run`**（两级：载体规则先判、判不出才交模型自评，见 `xiaojiao_app.py:9660` 附近）；~~**仍未接入**的只剩 `cross_check()`~~ **2026-09-18 三更正**：`cross_check()` **也接上了**（答后那一段，默认关、只在自评 B/C 或回答带不确定措辞的轮次跑，判 conflict 加标注、判 unknown 一个字不加；接线由 `tools/test_cross_check_wired.py` 17 项钉住） | 本文档随接入实况逐次更正：先"都没接"→"自评已接"→"交叉检查也接了" |
 | 3 | 聚合精度的落点是"`core/central/` 冲突仲裁，多 LLM key 择一、工具结果择一" | `core/central/__init__.py` 中不含任何仲裁代码。密钥优先级解析在 `xiaojiao_app.py` 的 `_resolve_llm_key()`，与 `core/central/` 无关；多条大工具结果走 `_history_summary_line()` 压成一行摘要，不是择一 | 本文档改标为设计未落地，并指明误认的来源 |
 | 4 | 记忆精度实测库内 1002 条 | 该数字是历史某次实测值。本次读取为 1171 至 1192 条，随时间增长 | 本文档给出读取时刻与条数，并说明不是固定值 |
 | 5 | `core/health/heal.py` 的 `reload_kv()` 在模型状态异常时清 KV 并重新预热 | `heal.py` 的 `_d_reload_kv()` 默认返回 False，理由是载体层无法隔空重置推理服务；主程序注册的 `_h_reload_kv()` 只记一条 INFO 日志后返回 True，不发起服务调用 | 本文档分两侧写明真实语义 |

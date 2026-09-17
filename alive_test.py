@@ -26,7 +26,7 @@ def lastj(p):
                 return json.loads(l)
             except Exception:
                 continue
-    except Exception:
+    except Exception:      # noqa: silent-ok — 探针脚本：这份日志读不到就返回空，别的判定照常
         pass
     return {}
 
@@ -73,7 +73,7 @@ hb_recent = False
 try:
     mt = os.path.getmtime(os.path.join(ROOT, "logs/psyche/heartbeat.jsonl"))
     hb_recent = (time.time() - mt) < 15
-except Exception:
+except Exception:      # noqa: silent-ok — 这是探针脚本：读不到某份日志就跳过那一项，不影响别的判定
     pass
 
 print("  心跳计数：第 %s 下 ｜ 清醒：%s" % (hb_last.get("n", "?"), hb_last.get("awake", "?")))
@@ -137,7 +137,7 @@ line("四、有因果（状态真的改变了世界）")
 sm = []
 try:
     sm = [json.loads(l) for l in open(os.path.join(ROOT, "logs/self_model.jsonl"), encoding="utf-8") if l.strip()]
-except Exception:
+except Exception:      # noqa: silent-ok — 这是探针脚本：读不到某份日志就跳过那一项，不影响别的判定
     pass
 
 if sm:
@@ -207,7 +207,7 @@ try:
                 spoken.append(("叙事", d["text"]))
             elif d.get("kind") == "wonder":
                 spoken.append(("追问", d.get("q", "")))
-except Exception:
+except Exception:      # noqa: silent-ok — 这是探针脚本：读不到某份日志就跳过那一项，不影响别的判定
     pass
 # 偏好
 try:
@@ -216,7 +216,7 @@ try:
             d = json.loads(l)
             if d.get("pref"):
                 spoken.append(("偏好", d["pref"]))
-except Exception:
+except Exception:      # noqa: silent-ok — 这是探针脚本：读不到某份日志就跳过那一项，不影响别的判定
     pass
 
 if spoken:

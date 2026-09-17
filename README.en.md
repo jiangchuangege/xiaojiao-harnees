@@ -20,10 +20,10 @@ That is not a slogan — it has a checkable criterion:
 
 ---
 
-## Why this is not "yet another wrapper"
+## The capability that matters: state changes behaviour, it is not described to the model
 
-Most projects that make a small model look big do it by **changing what the model is told**.
-We tried that first, and it failed — in a way that is reproducible and now documented:
+Nearly every project that makes a small model look big does it by **changing what the model is told**.
+We tried that first, and it failed — reproducibly, and it is documented in the repository:
 
 - **Static self-description injection failed in all four attempts** (three injection points plus
   a prefill variant). A 4B model treats a fixed self-description as *background material*,
@@ -36,6 +36,10 @@ We tried that first, and it failed — in a way that is reproducible and now doc
 - The state changes are recorded as **causes** and fed back into the next turn's policy:
   `[input trimmed] because energy is low / level=mid → exploration tools removed (6→0)`.
 
+That is the architectural claim in one line: **the ceiling is set by the carrier, not by the
+parameter count.** Adding a plugin extends what the assistant can do; swapping the model raises
+its starting point. Neither has a fixed ceiling.
+
 The other half — teaching the model to *use* those facts in its own words — is a separate
 mechanism (dynamic first-person present-tense self-narration). It works at the **wording**
 level. We do **not** claim it produces subjective experience; that layer is not observable
@@ -45,14 +49,19 @@ from the carrier, and we say so.
 
 ## What it actually does
 
+Capability first, interface second: everything below is done by the carrier around a
+single-shot model, and every row has a test or a log behind it.
+
 | | |
 |---|---|
-| **Talks and remembers** | Conversation memory is stored outside the model and retrieved on demand — the context window does not grow with conversation length |
-| **Uses tools** | 70+ tools; the carrier decides which subset is loaded per turn |
+| **State drives behaviour** | Energy / stance / level change this turn's tool table, context budget and proactivity — verifiable in code (6 → 0 tools), recorded as causal facts and fed back |
+| **Memory beyond the context window** | Conversation memory lives outside the model in a local vector store and is retrieved on demand — context does not grow with conversation length |
+| **Long-horizon work** | One-shot generation is a physical limit, so the carrier splits, loops, verifies and stitches: long outputs and long inputs are assembled from multiple requests |
+| **Tool orchestration** | 70+ tools; the model sees the full catalogue, the carrier loads the subset the intent needs, dangerous commands suspend for confirmation |
+| **Self-healing** | 18 model-symptom classes → four-level diagnosis → four-level treatment → records → prevention |
+| **Runs itself** | It decides when to sleep (writes `sleep: yes/no` itself; the carrier only reads that field), wakes itself, and keeps a heartbeat while suspended |
 | **Works the web** | Fetches pages, searches, aggregates vulnerabilities (NVD), with SSRF/robots/rate-limit guards |
 | **Generates media** | Video (ComfyUI + Wan2.1), podcast, music, diagrams — models are swapped in and out on demand |
-| **Runs itself** | It decides when to sleep (writes `sleep: yes/no` itself; the carrier only reads that field), wakes itself, and keeps a heartbeat while suspended |
-| **Has a doctor** | 18 model-symptom classes → four-level diagnosis → four-level treatment → records → prevention |
 | **Stays safe** | Deleting files is hard-blocked at the carrier layer, independent of permission settings |
 
 Optional: integrates with the open-source **N.E.K.O.** desktop avatar layer.

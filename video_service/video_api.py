@@ -353,13 +353,34 @@ def api_video_current():
 
 @bp.route("/api/video/promptkb")
 def api_video_promptkb():
-    """小脑「电影设计提示词学习库」统计+最近学到的(给用户看学了什么)。"""
+    """小脑「电影设计提示词学习库」统计+最近学到的(给用户看学了什么)。
+
+    【2026-09-18 修一处真 bug】这个接口原来按自己的 `__file__` 去读
+    `video_service/knowledge_vec.json` —— 而精炼提示词写进的是**小脑学习库**
+    `self_learn/knowledge_vec.json`（`_kb()` 走的 `self_learn/vstore`，见 `_refine_prompt` 第 2 步）。
+    结果是：**写入方和读取方从来不是同一个文件**，那个文件不存在 → 抛异常被吞掉 →
+    `count` 永远 0 → 这个接口**永远展示不出"学到了什么"**（连报错都没有）。
+    现在**走同一个库**（直接问 `vstore`），写入与读取只有一份事实来源；
+    读不到就如实返回 0，不再假装读了另一个文件。
+    """
     V = _kb(); n = 0; recent = []
     if V:
         try:
-            import os as _o, json as _j
-            data = _j.load(open(_o.path.join(_o.path.dirname(_o.path.abspath(__file__)), "knowledge_vec.json"), encoding="utf-8"))
-            for e in data.get("entries", []):
+            # 优先用 vstore 自己的读法（它就是写入方），拿不到 API 才退回直读同一个文件
+            items = None
+            for _name in ("entries", "all", "items"):
+                _f = getattr(V, _name, None)
+                if callable(_f):
+                    try:
+                        items = _f()
+                        break
+                    except Exception as e:
+                        LOG.debug("忽略异常(%s:%d): %s", __file__, 366, e)
+            if items is None:
+                import json as _j
+                _p = getattr(V, "VS", "")
+                items = (_j.load(open(_p, encoding="utf-8")) or {}).get("entries", []) if _p else []
+            for e in (items or []):
                 if e.get("tag") == "video_prompt":
                     n += 1
                     recent.append(e.get("text", ""))

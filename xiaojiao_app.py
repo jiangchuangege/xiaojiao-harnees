@@ -2008,6 +2008,8 @@ _MEMORY_INSTRUCTION = (
     "回答与用户本人有关的问题（名字/家人/住址/偏好/设备/工作…）时，**必须优先按它回答**；\n"
     "· 【小焦说过的】＝**你自己**以前说过的话（**不是用户说的**，不许说成「你提到过」）；\n"
     "· 【它自己记下的一条】＝你学到的知识或工具结论（**同样不是用户说的**）。\n"
+    "⚠️「小焦说过的」只是**你以前是怎么说的**，**不是事实**：跟这次问题有关的事实、数字、时间、"
+    "名次之类，**不许因为你以前说过就当成已知事实沿用** —— 那要么去查、要么如实说不确定。\n"
     "与本次问题无关就忽略。**只许用记忆里写着的事实，不许编造**；"
     "**也不许把「小焦说过的」「自己记下的」说成「你说过的」**。\n")
 _MEMORY_LAST = {"rid": "", "text": "", "tokens": 0}      # 供写回"模型是否使用"
@@ -8271,6 +8273,37 @@ def _selfrate_llm(prompt):
         return ""
 
 
+def _crosscheck_llm(prompt):
+    """给**答后交叉检查**用的一次大脑调用（`core/metacognition/crosscheck.py` 的 llm_fn）。
+
+    与 `_selfrate_llm` 同样的理由单独抽出来：自测要能把它换掉，不然每跑一次都要真调模型。
+    交叉检查是"同一问题按不同角度各答一次"，所以这里**只要一段回答**，不需要任何格式。
+    """
+    try:
+        return llm_chat([{"role": "user", "content": prompt}]) or ""
+    except Exception:      # noqa: silent-ok — 某个角度调不出来只是少一个样本，检查会如实判 unknown
+        return ""
+
+
+def _should_cross_check(meta_route, answer, tool_trace):
+    """这一轮值不值得做答后交叉检查（**只在"已经怀疑它"的时候做**）。
+
+    【为什么要挑时候】交叉检查要按 n 个角度各问一次模型 —— 本地 4B 上那是**成倍的等待**。
+    每一轮都做等于把对话变慢 n 倍；而它真正有用的场合只有两类：
+      · 载体自己已经没底（自评 B / C，或这一轮压根没查到来源）；
+      · 回答里出现了"不确定"措辞（它自己都在打鼓）。
+    **顺带说明它不是什么**：这不是"载体替模型再答一遍"，而是让它自己换个角度回答、比对一致性。
+    """
+    if not str(answer or "").strip():
+        return False, "这一轮没有回答可查"
+    if meta_route in ("answer_with_caveat", "use_tool"):
+        return True, "元认知自评是 %s（没把握）" % meta_route
+    if not tool_trace and any(w in str(answer) for w in
+                              ("不确定", "不清楚", "无法确认", "说不准", "可能吧", "大概是")):
+        return True, "回答里自己带了不确定措辞"
+    return False, "这一轮它自评有把握、也没带不确定措辞 → 不做"
+
+
 def _spirit_recall(query):
     """精神记忆召回：把之前**想明白的一句话认知**取回来当**素材**。
 
@@ -8490,6 +8523,55 @@ def _rag_overlap(query, text):
     return min(1.0, hit / float(len(kws)))
 
 
+# ---------------- 自我回灌：它自己说过的话，不是事实来源（2026-09-18 补） ----------------
+# 【症状（实测）】问「2026年世界杯谁是冠军」，优率最高的一条是**它自己上一轮**的错答
+#   （「还没开赛」），优率 **0.94 → 直接使用**。为什么能那么高：
+#   向量库按**用户那句话**做索引键（那是"按用户问过的去找"的正确做法），
+#   于是同一句问题再问一次时相似度就是 1.00；而「记忆库」这一源的信任度写死 1.00
+#   （它代表"用户亲口说的话"）——**两条叠起来，它自己的回答被当成了用户说过的事实**。
+# 【为什么必须修】这不是"检索不准"，是**闭环自噬**：它上次答错 → 错答进库 → 下次当事实用 →
+#   越用越像真的。跟"网上搜来的东西不当事实直接用"是**同一类自律**（联网 0.60）。
+# 【判据（确定性、不调模型）】看这段记忆里「你说过的」那几段：
+#   · 只要**有一句是用户在陈述事实** → 这条记忆的主体就是用户说的 → 仍按 1.00；
+#   · **全是提问** → 这条记忆的价值只剩"它上次怎么答的" → 按 0.60 计（与联网同级）。
+_SRC_USER_MARK = "【你说过的】"
+_SRC_SELF_MARK = "【小焦说过的】"
+_MEM_TRUST_USER = 1.00
+_MEM_TRUST_SELF = 0.60          # 只等于"它自己说过"，与联网同级
+_Q_MARKS = ("什么", "谁", "哪", "怎么", "多少", "为什么", "是否", "能不能",
+            "可不可以", "有没有", "是不是", "多久", "几点", "几时")
+
+
+def _looks_like_question(s):
+    """这句是不是**在提问**（判据要窄：只认明确问句，宁可少判也不误伤事实陈述）。"""
+    t = str(s or "").strip()
+    if not t:
+        return False
+    if t.endswith(("？", "?", "吗", "呢")):
+        return True
+    return any(w in t for w in _Q_MARKS)
+
+
+def _rag_mem_trust(text):
+    """记忆库候选的信任度 + 判据说明（详见上面那段"自我回灌"注释）。"""
+    t = str(text or "")
+    if _SRC_SELF_MARK not in t:
+        return _MEM_TRUST_USER, "记忆库：用户亲口说的"
+    parts = []
+    for seg in t.split(_SRC_USER_MARK)[1:]:
+        u = seg.split("｜")[0].split("\n")[0].strip()
+        if u:
+            parts.append(u)
+    if not parts:
+        # 有它自己的话、却找不到"你说过的"那一段 → 这条的主体就是它自己说的
+        return _MEM_TRUST_SELF, "记忆库：这条只有**它自己**说过（无用户陈述）→ 按 0.60 计"
+    if all(_looks_like_question(u) for u in parts):
+        return _MEM_TRUST_SELF, ("记忆库：用户那几句**都是提问**（%s）→ 这条等于它上次怎么答的，"
+                                 "不按事实来源计" % parts[0][:24])
+    return _MEM_TRUST_USER, "记忆库：里面有用户陈述的事实"
+
+
+
 def _rag_quality(text, query, source, sim=None):
     """载体算的**优率**（0~1）。全部是确定性判据，**不调模型**。
 
@@ -8528,9 +8610,18 @@ def _rag_quality(text, query, source, sim=None):
     sim_v = float(sim) if isinstance(sim, (int, float)) else ov
     sim_v = max(0.0, min(1.0, sim_v))
     trust = _RAG_SOURCE_TRUST.get(source, 0.50)
+    _tnote = ""
+    if source == "记忆库":
+        # 【2026-09-18】记忆库不再无条件 1.00：**只有"用户说过的事实"才值 1.00**，
+        #   全是提问的那种（价值只在"它上次怎么答的"）按 0.60 —— 防自我回灌，见上面那段注释。
+        trust, _tnote = _rag_mem_trust(t)
     info = _rag_info_score(t)
     q = 0.55 * sim_v + 0.30 * trust + 0.10 * info + 0.10 * ov
-    return q, "相似度 %.2f · 来源 %.2f · 信息 %.2f · 重合 %.2f" % (sim_v, trust, info, ov)
+    why = "相似度 %.2f · 来源 %.2f · 信息 %.2f · 重合 %.2f" % (sim_v, trust, info, ov)
+    if _tnote:
+        why += " ｜ " + _tnote
+    return q, why
+
 
 
 def _rag_vector_hits(query, top_k=5):
@@ -8726,13 +8817,20 @@ def _rag_concurrent(query, realtime=False):
         LOG.debug("疼的重排失败（忽略）：%s", _e)
     try:
         from core import thinking_loop as _TL
-        cands, _lr = _TL.adjust_candidates(cands)
+        # 【2026-09-18 补缺口】把感知层抠出来的「事」也递进去：
+        #   原来检索那句只能从**心**里取，于是"心没起的那一轮"就没有「事」可用
+        #   （`adjust_candidates` 只能退回用「我」甚至只按关键词排）。
+        #   心起了就用心的（同一轮里更近的判断），心没起才用这颗"感知给的"。
+        cands, _lr = _TL.adjust_candidates(cands, event_what=_event_what_now())
         if _lr.get("moved"):
             LOG.info("思考圈：心理[%s] → 改检索方向（偏 %s）｜把「%s」提到了第 %d 位",
                      _lr["state"], "、".join(_lr["keywords"][:3]),
                      _lr["moved"][0]["text"][:36], _lr["moved"][0]["to"])
         else:
             LOG.info("思考圈：心理[%s] → 检索方向未变（%s）", _lr["state"], _lr.get("note"))
+        if _lr.get("query_kind"):
+            LOG.info("思考圈：这一轮检索用的那句 = %s ｜ %s",
+                     _lr["query_kind"], str(_lr.get("query_used") or "")[:60])
     except Exception as _e:      # noqa: silent-ok — 圈转不动也不能影响检索
         LOG.debug("思考圈重排失败（忽略）：%s", _e)
     # 真实事件之二：**载体自己遇到了什么**（检索回来的内容 → 可能让心变）
@@ -9463,6 +9561,39 @@ def _perceive_event(text):
         return {}
 
 
+# ---------------- 「事」的暂存：让心没起的那一轮也能用它检索（2026-09-18） ----------------
+# 【为什么要暂存】「事」是**感知层**抠出来的（那句话在说什么事），心起不起它都有；
+#   可检索那句原来只从**心**里取（`psyche.colors()`）——
+#   于是"心没起"的那些轮次，检索根本拿不到「事」，只能退回用「我」或只按关键词排。
+# 【为什么要限时】后台空闲线程、别的调用方也会走检索那条路（`_rag_concurrent`）：
+#   不过期的话，会把**上一轮**的「事」拿去给它们当检索词 —— 那就是拿旧话查新事。
+_EVENT_WHAT = {"text": "", "at": 0.0}
+_EVENT_WHAT_TTL = 120.0        # 只认"这一轮"（同一次对话请求里），过期一律当没有
+
+
+def _set_event_what(text):
+    """感知完立刻存一份（只有"事"、不存"我"）。"""
+    try:
+        _EVENT_WHAT["text"] = str(text or "").strip()[:200]
+        _EVENT_WHAT["at"] = time.time()
+    except Exception:      # noqa: silent-ok — 存不下就当没有，绝不因此影响这一轮
+        pass
+    return _EVENT_WHAT["text"]
+
+
+def _event_what_now(max_age=None):
+    """取"这一轮的「事」"；过期或没有就返回空串（调用方自己退回用「我」）。"""
+    try:
+        ttl = float(_EVENT_WHAT_TTL if max_age is None else max_age)
+        if not _EVENT_WHAT.get("text"):
+            return ""
+        if (time.time() - float(_EVENT_WHAT.get("at") or 0.0)) > ttl:
+            return ""
+        return str(_EVENT_WHAT["text"])
+    except Exception:      # noqa: silent-ok — 读不出来就等于没有
+        return ""
+
+
 def _eyc_state_now():
     """给神经总线用的 EYC 状态（拿不到就返回空 dict —— 不编）。"""
     try:
@@ -9798,6 +9929,8 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         # 日志里不写它就没法复核"这一轮的检索到底用的哪句话"。抠不出来就如实写"没抠出来"。
         LOG.info("感知层：事=「%s」（检索用这句；抠不出来就退回用「我」）",
                  str(_per.get("event_what") or "（没抠出来）")[:60])
+        # 存一份给检索用（`_rag_concurrent` 那条路会在**心没起**时用它，见 `_set_event_what`）
+        _set_event_what(_per.get("event_what"))
         LOG.info("感知层：动了命=%s ｜ 向=%s ｜ 读法=%s ｜ 模型原话=%s",
                  "、".join(_per.get("touches_life") or []) or "无",
                  _per.get("direction") or "（没挑出来）", _per.get("parsed_by"),
@@ -11052,6 +11185,36 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 LOG.info("元认知标注：C 档且本轮未查证 → 已标注为参考而非结论")
         except Exception as e:      # noqa: silent-ok — 加不上标注不影响回答本体
             LOG.debug("忽略异常(%s:%d): %s", __file__, 7520, e)
+        # ---- 元认知 · **答后交叉检查**（2026-09-18 接上；原来只在自测里跑得到）----
+        # 【为什么接在这里】`core/metacognition/crosscheck.py` 早就写好、自测也全绿，
+        #   但**主流程一次都没调过它** —— 也就是说"答后交叉检查"这一项一直是**离线能力**。
+        #   接在"答后标注"这一段：此刻 answer 已经定了，判出来的结论可以直接变成对用户的标注。
+        # 【三条硬规矩】
+        #   ① **默认关**（`capabilities.cross_check`）：它要按 n 个角度各问一次模型，
+        #      本地 4B 上就是成倍的等待 —— 不能默认让每一轮都变慢。
+        #   ② **只挑"已经怀疑它"的那一轮跑**（见 `_should_cross_check`），不做无差别全量。
+        #   ③ **判不了就如实说判不了**：verdict=unknown（没有模型/样本不足）时**不加任何标注**，
+        #      绝不把"没检查"写成"检查过、没问题"。
+        # ⚠️ 如实标注：这一段**不改答案本身**，只在判出"换个角度问就对不上"时加一行说明，
+        #   让用户知道该复核 —— 载体没有能力判断哪一版是对的，它只报告"对不上"。
+        try:
+            _want_cc, _cc_why = _should_cross_check(_meta_route, answer, tool_trace)
+            if not bool(CAP.get("cross_check", False)):
+                if _want_cc:
+                    LOG.info("元认知交叉检查：这一轮该做，但开关关着（capabilities.cross_check=false）")
+            elif _want_cc and answer and "元认知" not in answer:
+                from core.metacognition import crosscheck as _cx
+                _cc_n = int(CAP.get("cross_check_n", 2) or 2)
+                _cc = _cx.cross_check(user_input_ctx, llm_fn=_crosscheck_llm, n=_cc_n)
+                LOG.info("元认知交叉检查：判定=%s 一致性=%.3f 样本=%d ｜ 为什么做：%s ｜ %s",
+                         _cc.get("verdict"), float(_cc.get("agree") or 0.0),
+                         len(_cc.get("answers") or []), _cc_why, str(_cc.get("detail"))[:80])
+                if _cc.get("verdict") == "conflict":
+                    answer = answer.rstrip() + (
+                        "\n\n（元认知 · 交叉检查：同一个问题换个角度问了一次，**两次对不上**，"
+                        "上面这段请当参考、不要当结论）")
+        except Exception as e:      # noqa: silent-ok — 检查失败绝不能影响已经答好的内容
+            LOG.debug("元认知交叉检查失败（忽略）：%s", e)
         # ---- 学习闭环 · 落库端：把这一轮**能留下来的一句话认知**存进精神记忆库 ----
         # 放在最后、且**在返回之前**：此时答案已经定了（含上面可能加的没把握标注），
         # 提炼的是"这一轮最终成立的东西"。

@@ -93,6 +93,35 @@ def main():
         os.chdir(old_cwd)
         shutil.rmtree(tmp, ignore_errors=True)
 
+    print("\n九、**老入口**（`xiaojiao_harness.py`）也走同一道闸（2026-09-18 补）")
+    # 【为什么必须钉】老入口原来是裸 append 写**同一个文件** `xiaojiao_memory.txt` ——
+    #   主链路上闸、老入口不上，等于留了个后门：走老入口跑一次，垃圾照样进同一个文件。
+    #   判据不另写一套（复用 core/mem_filter + 查重 + 复读/不成话），所以这里只钉"两道闸同判"。
+    try:
+        import xiaojiao_harness as _H
+        ok9 = callable(getattr(_H, "_memory_gate", None))
+        ck("老入口里真的有写闸函数", ok9)
+        if ok9:
+            cases = [
+                ("用户 你好 小焦 你也好呀", True),
+                ("用户 x 小焦 亻命鸵次次次次次", False),
+                ("用户 x 小焦 🌐 **URL** http://a.com 的返回", False),
+                ("用户 x 小焦 🌐 **URL** 内容", False),
+                ("", False),
+            ]
+            for text, want in cases:
+                got = _H._memory_gate(text)[0]
+                ck("老入口闸门：%s → %s" % (text[:24] or "（空）", "写" if want else "不写"),
+                   got is want, _H._memory_gate(text))
+            # 两个入口对同一句的判断必须一致（否则就是两套判据在打架）
+            from plugins import memory as _PM
+            for text in ("用户 你好 小焦 你也好呀", "用户 x 小焦 亻命鸵次次次次次"):
+                a = _H._memory_gate(text)[0]
+                b = _PM.MemoryPlugin._gate(text)[0]
+                ck("两处判据一致（同一句：%s）" % text[:18], a == b, (a, b))
+    except Exception as e:      # noqa: silent-ok
+        ck("老入口写闸自测", False, repr(e))
+
     print("\n" + "=" * 66)
     print("记忆插件写闸自测：通过 %d / 共 %d" % (len(PASS), len(PASS) + len(FAIL)))
     if FAIL:

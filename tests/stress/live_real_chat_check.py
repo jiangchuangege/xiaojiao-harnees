@@ -1,5 +1,8 @@
-# 保存为 logs\_test_real.py
-# 项目根目录跑：python logs\_test_real.py
+# 实机脚本：打真实 /api/chat 并对着 logs/xiaojiao.log 核对（**要小焦在跑**）。
+# 【2026-09-18 改名归位】原来叫 `tests/stress/1.py`，文件头写的是"保存为 logs\_test_real.py"；
+#   但 `logs/` 是运行态目录（被 .gitignore 忽略），放那儿会脱离仓库 —— 所以按同类实机脚本的
+#   命名习惯（`live_check.py` / `ui_check.py`）归到 tests/stress/ 下。
+# 项目根目录跑：python tests/stress/live_real_chat_check.py
 
 import json, urllib.request, time, re, os
 

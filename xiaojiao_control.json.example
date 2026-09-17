@@ -78,7 +78,11 @@
     "_六个无限_记忆无限": "历史对话永久存 logs/xiaojiao_memory_vec.jsonl（外部文件，不占模型 ctx），每轮按需检索 top-K 注入 system",
     "memory_top_k": 5,                               "//memory_top_k": "最多注入几条相关记忆",
     "memory_threshold": 0.6,                         "//memory_threshold": "相似度阈值（判在**原始余弦**上；时间衰减只影响排序，不会把老记忆踢出阈值）",
-    "memory_max_tokens": 2000,                       "//memory_max_tokens": "注入记忆占的 token 上限"
+    "memory_max_tokens": 2000,                       "//memory_max_tokens": "注入记忆占的 token 上限",
+
+    "_元认知_答后交叉检查": "同一问题按 n 个角度各答一次、比对一致性（core/metacognition/crosscheck.py）。2026-09-18 起已接进主流程，但**默认关**：它要成倍调用模型，本地 4B 上会明显变慢",
+    "cross_check": false,                            "//cross_check": "true=开启答后交叉检查（**只在「已经怀疑它」的轮次跑**：自评 B/C，或回答里自己带了不确定措辞）。判「换个角度就对不上」时给回答加一行「请当参考」的标注；判不出来（没模型/样本不足）时一个字都不加",
+    "cross_check_n": 2,                              "//cross_check_n": "交叉检查用几个角度（≥2 才有意义；每多一个角度就多一次模型调用）"
   },
   "generators": {
     "_说明": "生成类功能的统一入口（core/generator_connector.py）。类别 → 关键词表；用户说一句就由载体自己走完整条链路，不需要点任何 UI。加新功能：加一行即可，不用改代码。",
