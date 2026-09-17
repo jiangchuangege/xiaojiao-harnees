@@ -7,6 +7,47 @@
 
 ## [v1.0] - 2026-09-13
 
+### 画像链合并：一个写入口、一段注入；修掉「同一个事实写 15 遍」的去重 bug
+
+#### Changed
+
+- **分工定死（用户 2026-09-17 定）**：**画像系统 `core/user_profile.py` = 唯一写入口**（负责"记什么"）；
+  **血管 `xiaojiao_recall.py` = 只召回补位、一个字不写盘**；第三条链 `xiaojiao_profile.py`
+  **默认关掉**（`capabilities.profile_system_chain`，代码与它那份库都留着，一个开关恢复）。
+- `xiaojiao_recall.py`：**删掉整个写入侧**（`save_profiles` / `append_profile` / `is_duplicate` /
+  `generate_profile` / `remember_from_message` / 本地 `hit` / `_gen_id` / 只服务于写盘的 `_WRITE_LOCK`）；
+  `load_profiles()` 改成从 `core.user_profile` 读；`recall_with_hit()` 只召回 + 把命中记在 user_profile 上。
+  **10 路血管的逻辑一个字没改**（330 → 220 行）。
+  ⚠️ user_profile 记录没有 `triggers`/`scope`，映射时 `scope` 兜底成 `kind`、`triggers` 缺省空表。
+- `xiaojiao_app.py`：注入从"三条各自注入"改成**合并去重后只注一段** `build_system()`；
+  写入统一走画像系统；固化队列改从 user_profile 扫。
+
+#### Fixed
+
+- **去重 bug（用户报的）**：`user_profile.add()` 现在**按 content 完全相等去重** ——
+  已存在就不追加新行、把旧记录 `hit_count` +1、返回旧 id。`hit()` 支持单个 id，且 id 不存在时静默返回。
+- **存量重复不是 3 条，是 15 条**：「用户 25 岁」有 15 行一模一样（hit_count 全是 0），
+  另有 2 组各 4 行 → `tools/dedupe_user_profile.py` 一次清掉 **20 行**（46 → 26 条）。
+  **说法不同的那条保留**（不是完全相等，不做模糊匹配 —— 模糊匹配会把"我爱吃香菜"和"我不吃香菜"并成一条）。
+
+#### Added
+
+- `tools/migrate_profiles_to_user_profile.py`：旧库 21 条迁进 user_profile，
+  旧文件改名 `xiaojiao_profiles.json.bak`（**不删**）。
+- `tools/dedupe_user_profile.py`：清理**存量完全重复行**（先备份真库）。
+- `tools/test_user_profile.py` 增加 7 项去重/hit 保护断言（36/36，已接 CI）。
+
+#### 如实标注
+
+1. **`hit_count` 的口径重叠**（规格里没预见到）：连说三次「我 25 岁」→ 库里**只有 1 条** ✅，
+   但 `hit_count` 是 **6 不是 3** —— 「又说了三次」让 `add()` 去重 +3，
+   「这三个回合召回都命中它」让 `hit()` +3。两种收法（保持现状如实标注 / 拆成两个字段）**没擅自改**。
+2. **合并时我自己写错过一处**：把 user_profile 的原始记录（字段 `content`）直接递给
+   `build_system()`（它取 `p["text"]`）→ KeyError 被 except 吞掉 →
+   **一条都没注入、日志上还看不出来**。自测（要求"已注入 system"出现一次）当场抓到 0 次，已修。
+3. **入队 ≠ 固化进权重**：`solidify.jsonl` 里的条目一直是 `pending`，
+   `solidified_at`/`lora_path` 全是 `null` —— 没有执行者，也没有训练管线（见 docs/user-profile.md 附四）。
+
 ### 显存归属策略：聊天模型是显存主人；聊天模型不许顶聊天模型
 
 #### Fixed

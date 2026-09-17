@@ -123,10 +123,25 @@ def clean_kind(kind):
     return k
 
 
+def _rewrite(rows):
+    """整库重写（原子替换）。**只有写盘的几个地方**用，逻辑一处不能多。"""
+    tmp = _PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    os.replace(tmp, _PATH)
+
+
 def add(kind, content, why="", evidence="", source="模型自己判断"):
     """**只做存储**：模型说要记什么就记什么；载体不判断内容对不对、该不该记。
 
     返回记录 id；`content` 为空、或 `kind` 不成标签（见 `clean_kind()`）→ 返回 ""（**不写盘**）。
+
+    【去重（用户报的 bug：同一个事实写了三遍）】
+      `content` **完全相同**（strip 后逐字相等，不做模糊匹配）→ **不追加新行**，
+      把旧记录的 `hit_count` +1，返回**旧记录的 id**。
+      为什么按"完全相等"：模糊匹配会把"我爱吃香菜"和"我不吃香菜"并成一条 ——
+      那是**载体替它判断**（本项目最忌讳的事）。宁可留两条，也不许并错。
     """
     k = clean_kind(kind)
     c = str(content or "").strip()
@@ -134,38 +149,47 @@ def add(kind, content, why="", evidence="", source="模型自己判断"):
         return ""
     if len(c) > MAX_LEN:
         c = c[:MAX_LEN]
-    rec = {
-        "id": "%d-%s" % (int(time.time() * 1000), os.urandom(3).hex()),
-        "ts": time.time(),
-        "kind": k,
-        "content": c,
-        # `why` 与 `evidence` 都是**模型给的原文，载体照抄不改写** —— 改了就成了载体在替它解释
-        "why": str(why or "")[:200],
-        "evidence": str(evidence or "")[:200],
-        "source": str(source or "模型自己判断"),
-        "hit_count": 0,
-    }
     with _LOCK:
         os.makedirs(_DIR, exist_ok=True)
         rows = _all_raw()
+        for r in rows:
+            if str(r.get("content") or "").strip() == c:
+                r["hit_count"] = int(r.get("hit_count") or 0) + 1
+                _rewrite(rows)
+                return str(r.get("id") or "")
+        rec = {
+            "id": "%d-%s" % (int(time.time() * 1000), os.urandom(3).hex()),
+            "ts": time.time(),
+            "kind": k,
+            "content": c,
+            # `why` 与 `evidence` 都是**模型给的原文，载体照抄不改写** —— 改了就成了载体在替它解释
+            "why": str(why or "")[:200],
+            "evidence": str(evidence or "")[:200],
+            "source": str(source or "模型自己判断"),
+            "hit_count": 0,
+        }
         # 上限保护：超了就丢掉最老的（画像要精，不是要全）
         if len(rows) >= MAX_ROWS:
-            keep = rows[-MAX_ROWS + 1:]
-            tmp = _PATH + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                for r in keep:
-                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
-            os.replace(tmp, _PATH)
-        with open(_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            rows = rows[-MAX_ROWS + 1:]
+        rows.append(rec)
+        _rewrite(rows)
     return rec["id"]
 
 
-def hit(kind=None, keyword=None, ids=None):
+def hit(rec_id=None, kind=None, keyword=None, ids=None):
     """命中一次 → `hit_count` +1（用得越多的兴趣越稳）。
 
-    只给自测/调用方显式记账用 —— 载体**不会**自己判定"这次算不算命中"。
+    三种调用方式都收（历史上被三种写法调过）：
+      · `hit("2026…-ab12")`   —— 单个 id（血管那条链就是这么记的）
+      · `hit(ids=["a","b"])`  —— 一批 id
+      · `hit(keyword="NBA")`  —— 按内容片段（只给自测/排查用）
+
+    `id` 不存在时**静默返回**，不崩 —— 调用方（召回链）不该因为一条记录被删掉就整轮失败。
     """
+    if isinstance(rec_id, (set, list, tuple)):
+        ids = list(rec_id)
+    elif isinstance(rec_id, str) and rec_id.strip():
+        ids = [rec_id.strip()]
     ids = set(ids or [])
     n = 0
     with _LOCK:
@@ -180,11 +204,7 @@ def hit(kind=None, keyword=None, ids=None):
                 r["hit_count"] = int(r.get("hit_count") or 0) + 1
                 n += 1
         if n:
-            tmp = _PATH + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                for r in rows:
-                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
-            os.replace(tmp, _PATH)
+            _rewrite(rows)
     return n
 
 

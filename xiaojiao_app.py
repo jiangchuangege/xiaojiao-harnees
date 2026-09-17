@@ -10330,41 +10330,57 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   注入 7/7，可**命中只有 1/8**）—— 事实确实在 system 里，它就是不拿它回答。
             #   本项目自己早就写过这条规律（见下面思维流那句注释与 docs/eyc-self-narration.md）：
             #   **越靠近生成越不容易被淹没**。所以把"必须影响这一轮回答"的事实放到最后。
-            _profile_txt = ""
-            try:
-                from core import user_profile as _UPr
-                _up = _UPr.render(8)
-                if _up:
-                    _profile_txt = "\n[关于用户] " + _up + "\n"
-                    LOG.info("用户画像：作为事实注入 %d 条", _UPr.count())
-            except Exception as _e:      # noqa: silent-ok — 画像读不到不影响回答
-                LOG.debug("用户画像注入失败（忽略）：%s", _e)
-            # ---- 【接入·画像召回层】`xiaojiao_recall.py`（**只加，上面那段一个字没动**）----
-            # 机制：`recall()` 自带快慢分路 —— 触发词那一路命中就**直接返回 1 条**（不调模型，零延迟）；
-            #       没命中才跑完整 10 路血管投票（3 规则票 1.0 + 7 模型票 0.5，
-            #       门槛：有规则票要 2 票、纯模型票要 4 票；取前 2，第 2 条要够第 1 条的 0.6 倍）。
-            # 位置：紧挨上面那段画像注入（同一个"关于用户"的位置），**排在时间之后、生成之前**。
-            # 拿不到就把这一段当不存在，绝不影响回答（异常全部吞掉）。
+            # ---- 【画像注入 · 合并去重】两条链的召回结果**合成一份**再注入 ----
+            # 【用户 2026-09-17 定的分工】
+            #   · 画像系统 `core/user_profile` = **唯一写入口**，负责"记什么"
+            #   · 血管 `xiaojiao_recall` = **只召回补位**，一个字不写盘
+            #   · 注入 system 前，两条链的召回结果**按 content 完全相等合并去重**
+            # 【为什么要合并】原来是三条各自注入（[关于用户] render(8) + 血管 build_system +
+            #   画像系统 build_system），同一件事会被说三遍 —— 既浪费 token 又干扰它判断。
+            #   现在只留**一段** build_system 输出。
+            # 【去重判据】content **逐字相等**（strip 后），**不做模糊匹配** ——
+            #   模糊匹配会把"我爱吃香菜"和"我不吃香菜"并成一条，那是载体替它判断。
             _recall_txt = ""
             try:
                 from xiaojiao_recall import recall_with_hit as _rc_recall, build_system as _rc_build
-                from xiaojiao_recall import load_profiles as _rc_load
-                # ⚠️ 先过"词面交集"闸：没交集的话这一句跑 10 路投票纯属白花 8~10 秒
-                #    （"你好"实测 8.5 秒、投出来还是空的）。有交集才值得花这个时间。
-                if _worth_full_recall(user_input, _rc_load()):
-                    _rc_imps = _rc_recall(user_input)
+                # ① 血管召回（自带快慢分路：触发词命中直接返回 1 条、不调模型）
+                #    ⚠️ 先过"值不值得跑满 10 路"的闸：没词面交集又是寒暄 → 跳过（省 8~10 秒）
+                from core import user_profile as _UPr
+                if _worth_full_recall(user_input, _UPr.all_records()):
+                    hits_a = _rc_recall(user_input)
                 else:
-                    _rc_imps = []
+                    hits_a = []
                     LOG.info("画像召回：寒暄（无词面交集且很短）→ 跳过 10 路投票（省 8~10 秒）")
-                if _rc_imps:
-                    _recall_txt = "\n" + _rc_build(_rc_imps) + "\n"
-                    # 把**注入内容本身**记进日志：只写"命中 N 条"证明不了它进了 system，
-                    # 出问题时得能一眼看出"注了什么"（下面第 10426 行就是把它拼进 sys_text）。
-                    LOG.info("画像召回：命中 %d 条 → 已按 build_system 注入 system｜%s",
-                             len(_rc_imps),
-                             " ／ ".join(str(p.get("text"))[:24] for p in _rc_imps))
+                # ② 画像系统的近况（它就是血管读的那个库，所以两边的记录天然同构）
+                hits_b = _UPr.recent(5)
+                # ③ 合并去重（按 content 完全相等）
+                # ⚠️ 血管返回的是 **user_profile 的原始记录**（字段叫 `content`），
+                #    而 `build_system()` 取的是 `p["text"]` —— 直接塞进去会 KeyError，
+                #    异常又被外面的 except 吞掉，表现是"一条都没注入、日志上还看不出来"（我第一版就是这样）。
+                #    所以这里把两种字段名**都补齐**（不动 build_system）。
+                def _as_impression(rec):
+                    d = dict(rec) if isinstance(rec, dict) else {}
+                    txt = str(d.get("content") or d.get("text") or "")
+                    d["text"] = txt
+                    d["content"] = txt
+                    return d
+
+                merged = {}
+                for h in hits_a:
+                    _m = _as_impression(h)
+                    merged[_m["content"]] = _m
+                for h in hits_b:
+                    merged.setdefault(str(h.get("content") or ""), _as_impression(h))
+                merged.pop("", None)
+                impressions = list(merged.values())[:3]
+                if impressions:
+                    _recall_txt = "\n" + _rc_build(impressions) + "\n"
+                    LOG.info("画像召回：合并 %d+%d → 去重后 %d 条 → 已注入 system｜%s",
+                             len(hits_a), len(hits_b), len(impressions),
+                             " ／ ".join(str(p.get("content") or "")[:24] for p in impressions))
                 else:
-                    LOG.info("画像召回：空（按无印象版 system 正常走）")
+                    LOG.info("画像召回：空（血管 %d 条 + 画像系统 %d 条，去重后 0 条）",
+                             len(hits_a), len(hits_b))
             except Exception as _e:      # noqa: silent-ok — 召回层不在也不能影响回答
                 LOG.debug("画像召回接入失败（忽略）：%s", _e)
             # ---- 【固化队列】扫画像库，够格进队列（跟当前这轮无关，是维护动作）----
@@ -10372,13 +10388,15 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             # 完全独立：出错不影响上面任何一步。
             try:
                 from core import weight_layer as _WL
-                from xiaojiao_recall import load_profiles as _load_pf
+                from core import user_profile as _UPs
                 _now = __import__("time").time()
                 _before = _WL.stats().get("pending", 0)      # 入队前先数一次（只数，不动队列）
-                for _p in _load_pf():
+                # 扫的是**唯一的画像库**（core.user_profile）—— 血管那份 xiaojiao_profiles.json
+                # 已经迁移过来并改名成 .bak，这里不能再依赖血管模块去读它
+                for _p in _UPs.all_records():
                     _rec = {
-                        "kind": _p.get("type") or _p.get("kind"),
-                        "content": _p.get("text") or _p.get("content"),
+                        "kind": _p.get("kind"),
+                        "content": _p.get("content"),
                         "ts": _p.get("ts"),
                         "hit_count": _p.get("hit_count", 0),
                         "id": _p.get("id"),
@@ -10391,29 +10409,28 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             except Exception as _e:      # noqa: silent-ok — 固化层不在也不影响回答
                 LOG.debug("固化队列扫描失败（忽略）：%s", _e)
             # ---- 【接入·画像系统】`xiaojiao_profile.py`（与上面那条**并存**，不替换、不互斥）----
-            # 两条是**同一件事的两个机制**：`xiaojiao_recall` 是"血管"那条，
-            # `xiaojiao_profile` 是后面那套（写入链 + 10 路血管 + 自己的 JSON 库）。
-            # 两条都注入、都写盘、各用各的库（`xiaojiao_profiles.json` / `logs/psyche/profiles.json`）。
-            # 加前缀标签是为了让它一眼分得清哪条是哪条 —— 不许因为"都是画像"就混成一段。
+            # 【第三条链：`xiaojiao_profile`（我先前加的那套）——**默认关掉**】
+            # 用户 2026-09-17 定的分工是"画像系统 = 唯一写入口、血管 = 只召回"，
+            # 而这第三条**也注入、也写盘、还有自己的一份库**（logs/psyche/profiles.json）——
+            # 留着它就是第三份数据，跟刚合并掉的那两条一个毛病（两份数据早晚打架）。
+            # 所以：**代码不删、库不删**，只用一个开关默认关掉它；
+            # 要恢复：capabilities.profile_system_chain = true。
             _pfp_txt = ""
-            try:
-                from xiaojiao_profile import recall as _pfp_recall, build_system as _pfp_build
-                from xiaojiao_profile import load as _pfp_load
-                # 同一条闸：没词面交集就不烧那 10 路投票（实测这一条链"你好"要 10.2 秒）
-                if _worth_full_recall(user_input, (_pfp_load() or {}).get("profiles")):
-                    _pfp_imps = _pfp_recall(user_input)
-                else:
-                    _pfp_imps = []
-                    LOG.info("印象（画像系统）：寒暄（无词面交集且很短）→ 跳过 10 路投票（省 8~10 秒）")
-                if _pfp_imps:
-                    _pfp_txt = "\n[印象·画像系统]\n" + _pfp_build(_pfp_imps) + "\n"
-                    LOG.info("印象（画像系统）：命中 %d 条 → 已注入 system｜%s",
-                             len(_pfp_imps),
-                             " ／ ".join(str(p.get("text"))[:24] for p in _pfp_imps))
-                else:
-                    LOG.info("印象（画像系统）：空（按无印象版 system 正常走）")
-            except Exception as _e:      # noqa: silent-ok — 画像系统不在也不能影响回答
-                LOG.debug("印象（画像系统）接入失败（忽略）：%s", _e)
+            if CAP.get("profile_system_chain", False):
+                try:
+                    from xiaojiao_profile import recall as _pfp_recall, build_system as _pfp_build
+                    from xiaojiao_profile import load as _pfp_load
+                    if _worth_full_recall(user_input, (_pfp_load() or {}).get("profiles")):
+                        _pfp_imps = _pfp_recall(user_input)
+                    else:
+                        _pfp_imps = []
+                    if _pfp_imps:
+                        _pfp_txt = "\n[印象·画像系统]\n" + _pfp_build(_pfp_imps) + "\n"
+                        LOG.info("印象（画像系统·第三条链）：命中 %d 条 → 已注入 system｜%s",
+                                 len(_pfp_imps),
+                                 " ／ ".join(str(p.get("text"))[:24] for p in _pfp_imps))
+                except Exception as _e:      # noqa: silent-ok — 第三条链不在也不能影响回答
+                    LOG.debug("印象（画像系统）接入失败（忽略）：%s", _e)
             if intent != "chat":
                 # 闲聊轮不需要工具用法与技能文档（更不需要路径）—— 按需加载，
                 # system 才能压到 1000 token 以内。**但时间不在此列，它已经在上面注进去了。**
@@ -10508,13 +10525,12 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     sys_text += "\n\n" + _mb["text"]
             except Exception:      # noqa: silent-ok — 注入失败就用原提示词
                 pass
-            # ---- 闭环第五步（收口）· 见上面 `_profile_txt` 的说明：**放最后** ----
-            if _profile_txt:
-                sys_text += _profile_txt
-            # ---- 【接入·画像召回层】同样放最后：`build_system()` 出来的那段也是"关于用户"的事实 ----
+            # ---- 【画像注入 · 收口】**只注入这一段**（合并去重后的），放最后、紧挨生成 ----
+            # 原来这里有三段（[关于用户] render(8) + 血管 + 画像系统），同一件事说三遍；
+            # 现在合成一段（见上面"合并去重"那段）。
             if _recall_txt:
                 sys_text += _recall_txt
-            # ---- 【接入·画像系统】也放最后（两条并存，各带自己的标签）----
+            # 第三条链默认关着（见上面的说明），开着时才补它那一段
             if _pfp_txt:
                 sys_text += _pfp_txt
             messages = [{"role": "system", "content": sys_text}]
@@ -12809,35 +12825,27 @@ def _profile_recall_write_async(user):
         _t0 = time.time()
         while time.time() - _t0 < 120 and not _quiet():
             time.sleep(0.5)
-        # ① 血管那条
-        try:
-            if CAP.get("profile_recall_write", True):
-                from xiaojiao_recall import remember_from_message
-                p = remember_from_message(user)
-                if p:
-                    LOG.info("印象写入（血管）：**已记一条**｜type=%s｜text=%s",
-                             p.get("type"), p.get("text"))
-                else:
-                    LOG.info("印象写入（血管）：这一句没记（不记 / 判重 / 没生成）")
-        except Exception as e:      # noqa: silent-ok — 一条链失败不许拖累另一条
-            # **用 warning 而不是 debug**：写入链整条坏掉时（实测见过 NameError），
-            # 原来只在 debug 里留一行 —— 表现就是"它再也不记新东西了"而日志上看不出来。
-            LOG.warning("印象写入（血管）失败：%s", e)
-        # ② 画像系统那条 —— **跑之前再让一次路**：用户可能在我们写第 ① 条的时候又说话了
-        while not _quiet(6.0) and (time.time() - _t0) < 150:
-            time.sleep(0.5)
-        try:
-            if CAP.get("profile_system_write", True):
-                from xiaojiao_profile import remember as _pfp_remember
-                r = _pfp_remember(user)
-                if r.get("written"):
-                    LOG.info("印象写入（画像系统）：**已记一条**｜type=%s｜text=%s",
-                             (r.get("profile") or {}).get("type"), (r.get("profile") or {}).get("text"))
-                else:
-                    LOG.info("印象写入（画像系统）：这一句没记（判了不记=%s / 重复=%s / %s）",
-                             r.get("judged"), r.get("duplicate"), r.get("reason") or "未给原因")
-        except Exception as e:      # noqa: silent-ok — 后台写盘失败不影响任何东西
-            LOG.debug("印象写入（画像系统）失败（忽略）：%s", e)
+        # ① 血管那条：**不再写盘**（用户 2026-09-17 定的分工：血管只召回、画像系统才是唯一写入口）
+        #    原来是"血管自己调 remember_from_message 写 xiaojiao_profiles.json" ——
+        #    那正是"两份数据早晚打架"的来源。写入统一由 core.user_profile 承担（见 `_profile_judge`，
+        #    它在每轮回答之后问模型"要不要记"，然后 up.add()）。
+        # ② 第三条链（xiaojiao_profile）默认关着 —— 见注入那段里的说明；开关是同一只：
+        if CAP.get("profile_system_chain", False):
+            while not _quiet(6.0) and (time.time() - _t0) < 150:
+                time.sleep(0.5)
+            try:
+                if CAP.get("profile_system_write", True):
+                    from xiaojiao_profile import remember as _pfp_remember
+                    r = _pfp_remember(user)
+                    if r.get("written"):
+                        LOG.info("印象写入（第三条链）：**已记一条**｜type=%s｜text=%s",
+                                 (r.get("profile") or {}).get("type"),
+                                 (r.get("profile") or {}).get("text"))
+                    else:
+                        LOG.info("印象写入（第三条链）：这一句没记（判了不记=%s / 重复=%s / %s）",
+                                 r.get("judged"), r.get("duplicate"), r.get("reason") or "未给原因")
+            except Exception as e:      # noqa: silent-ok — 后台写盘失败不影响任何东西
+                LOG.debug("印象写入（第三条链）失败（忽略）：%s", e)
 
     try:
         import threading

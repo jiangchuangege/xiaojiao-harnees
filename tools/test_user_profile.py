@@ -115,6 +115,32 @@ def main():
         ck("没有 JSON → 不算不一致",
            UP.contradiction("我觉得这事值得记一下") == "")
 
+        print("五、去重与 hit 保护（2026-09-17 用户报的 bug：同一个事实写了三遍 —— 实测存量里写了 15 遍）")
+        # 这一段**换到独立的临时库**跑：本段会故意造重复，用同一个库会把后面几节的条数假设弄乱
+        _real_path = UP._PATH
+        UP._PATH = os.path.join(tempfile.gettempdir(), "_up_dedupe.jsonl")
+        if os.path.exists(UP._PATH):
+            os.remove(UP._PATH)
+        try:
+            _i1 = UP.add("事实", "用户 25 岁")
+            _i2 = UP.add("事实", "用户 25 岁")          # 同一句再来一次
+            _i3 = UP.add("事实", "  用户 25 岁  ")      # 前后空格也算同一条（strip 后逐字相等）
+            ck("同一内容重复 add → **不追加新行**（3 次 add 只有 1 行）", UP.count() == 1, UP.count())
+            ck("返回的是**旧记录的 id**（不是新的）", bool(_i1) and _i1 == _i2 == _i3, (_i1, _i2, _i3))
+            _row = UP.all_records()[0]
+            ck("旧记录的 hit_count 被 +1（两次重复 → +2）", int(_row.get("hit_count") or 0) == 2,
+               _row.get("hit_count"))
+            ck("**不做模糊匹配**：说法不同就各存一条",
+               UP.add("事实", "25 岁的年轻人，处于事业起步阶段。") != _i1 and UP.count() == 2, UP.count())
+            ck("hit(不存在的 id) → 静默返回 0，不崩", UP.hit("这个 id 不存在") == 0)
+            ck("hit(id) 认单个字符串 id", UP.hit(_i1) == 1)
+            ck("hit 之后 hit_count 再 +1", int(UP.all_records()[0].get("hit_count") or 0) == 3,
+               UP.all_records()[0].get("hit_count"))
+        finally:
+            if os.path.exists(UP._PATH):
+                os.remove(UP._PATH)
+            UP._PATH = _real_path
+
         print("六、落盘与渲染")
         rid = UP.add("职业/技术栈", "用户是后端开发者")
         ck("自定类别能落盘", bool(rid), rid)

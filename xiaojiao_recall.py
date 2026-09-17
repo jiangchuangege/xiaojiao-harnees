@@ -1,8 +1,24 @@
-import hashlib
 # -*- coding: utf-8 -*-
-"""小焦 · 画像召回层（独立模块，不 import xiaojiao_app 的循环）"""
-import os, json, time, hashlib, urllib.request
-PROFILES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xiaojiao_profiles.json")
+"""小焦 · 画像召回层（血管那条）——**只负责"召回补位"，一个字都不写盘**。
+
+【分工（用户 2026-09-17 定的）】
+  · **画像系统 `core/user_profile` = 唯一写入口**：负责"记什么"（落 logs/psyche/user_profile.jsonl）
+  · **本模块 = 只召回**：10 路血管投票挑出该摆到它眼前的几条，命中的把 hit_count 记在 user_profile 上
+
+原来本模块自己维护一份 `xiaojiao_profiles.json`（写入链 + 独立库），跟 user_profile 是两份数据，
+早晚打架 —— 那一套（save_profiles / append_profile / is_duplicate / generate_profile /
+remember_from_message / 本地 hit）已经**整段删掉**，`load_profiles()` 改成从 user_profile 读。
+**10 路血管的逻辑一个字没改**，只改了数据来源和写入责任。
+"""
+import os, json, time, urllib.request
+
+try:      # 与仓库其他模块同样的取日志方式（独立运行时退化为标准 logging）
+    from xiaojiao_log import get_logger
+    LOG = get_logger(__name__)
+except Exception:      # noqa: silent-ok — 没有日志模块也得能跑
+    import logging
+    LOG = logging.getLogger(__name__)
+
 STOP_TRIGGERS = {"看","吃","喝","玩","听","写","读","买","去","走","做","学","用","说","讲"}
 _model, _base = None, None
 def _local_target():
@@ -28,82 +44,47 @@ def local_chat(messages, temperature=0.0, max_tokens=64, timeout=300):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         d = json.loads(r.read().decode("utf-8"))
     return d["choices"][0]["message"]["content"].strip()
-def _gen_id(text):
-    """按内容生成稳定 id。同一条内容永远同一个 id（天然去重）。"""
-    h = hashlib.md5(str(text or "").encode("utf-8")).hexdigest()[:12]
-    return "p_" + h
 def load_profiles():
-    """读画像库。发现没 id 的画像自动补 id 并写回。"""
-    if not os.path.exists(PROFILES_PATH):
-        return []
+    """画像来源**只有一个**：`core.user_profile`（logs/psyche/user_profile.jsonl）。
+
+    【为什么不再读 xiaojiao_profiles.json】原来血管这条链自己维护一份独立的画像库，
+    于是同一件事会存在两份数据（user_profile.jsonl 与 xiaojiao_profiles.json），
+    早晚会打架（用户报的问题）。现在分工是死的：
+      · **画像系统（core.user_profile）= 唯一写入口**，负责"记什么"
+      · **血管（本模块）= 只负责召回补位**，一个字都不写盘
+    这里只把 user_profile 的记录**映射**成血管内部用的格式。
+
+    ⚠️ user_profile 的记录里**没有 triggers / scope** 两个字段（它们是血管这条链原来的字段），
+    所以映射时给 scope 兜底成 kind（否则 v3 场景优先那一路会因为拿不到 scope 整路弃权）、
+    triggers 缺省空表（等价于"这一路没命中"，不会误召）。**血管那 10 路的逻辑一个字没改。**
+    """
     try:
-        with open(PROFILES_PATH, "r", encoding="utf-8") as f:
-            doc = json.load(f)
-    except Exception:
+        from core import user_profile as up
+        out = []
+        for r in up.all_records():
+            if not isinstance(r, dict):
+                continue
+            out.append({
+                "text": str(r.get("content") or ""),
+                "type": str(r.get("kind") or ""),
+                "id": str(r.get("id") or ""),
+                "triggers": [t for t in (r.get("triggers") or []) if t],
+                "scope": str(r.get("scope") or r.get("kind") or ""),
+                "_raw": r,
+            })
+        return out
+    except Exception as e:      # noqa: silent-ok — 画像库读不到就当空库，不能让对话挂掉
+        LOG.debug("读 user_profile 失败（忽略）：%s", e)
         return []
-    profiles = doc.get("profiles", [])
-    if not isinstance(profiles, list):
-        return []
-    # 惰性补 id
-    changed = False
-    _now = time.time()
-    for p in profiles:
-        if not p.get("id"):
-            p["id"] = _gen_id(p.get("text") or p.get("content") or "")
-            changed = True
-        if not p.get("ts"):
-            p["ts"] = _now
-            changed = True
-    if changed:
-        doc["profiles"] = profiles
-        doc["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        tmp = PROFILES_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(doc, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, PROFILES_PATH)
-    return profiles
 
 
-# ⚠️ 这一行是**补回来的**：`save_profiles()` / `append_profile()` 都在用 `_WRITE_LOCK`，
-# 但 13:24 那次编辑把这个定义弄丢了 —— 结果"血管"的写入链一跑就 `NameError`，
-# 每次它判定"要记"都在这里崩掉（实测 `remember_from_message('我对芒果过敏')` → NameError），
-# 而调用方把异常吞了，表现是"永远记不住新东西、日志上还看不出来"。
-# 语义与原来完全一致（模块级一把可重入锁）。
-_WRITE_LOCK = __import__("threading").Lock()
+# 【撤掉了模块级写锁 _WRITE_LOCK】：它只服务于 save_profiles/append_profile 那套写盘，
+# 而那套（连同 generate_profile / remember_from_message）已经整段删除 ——
+# 本模块现在**只读不改**，没有需要上锁的写入。（历史：这个锁的定义曾经被编辑弄丢，
+# 导致写入链一跑就 NameError 而调用方把异常吞了，表现是"永远记不住新东西"。写入职责
+# 交给 core.user_profile 之后，这类问题不会再出现在这条链上。）
 
 
-def save_profiles(profiles):
-    """原子写：先写临时文件，再 rename，防止并发撕文件。"""
-    doc = {"version": 1, "source": "auto",
-           "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-           "profiles": profiles}
-    with _WRITE_LOCK:
-        tmp = PROFILES_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(doc, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, PROFILES_PATH)
-
-
-def append_profile(new_p):
-    with _WRITE_LOCK:
-        ps = load_profiles()
-        ps.append(new_p)
-        doc = {"version": 1, "source": "auto",
-               "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-               "profiles": ps}
-        tmp = PROFILES_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(doc, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, PROFILES_PATH)
-
-
-def is_duplicate(new_p, profiles):
-    nt = new_p["text"].strip()
-    for old in profiles:
-        ot = old["text"].strip()
-        if nt == ot: return True
-        if len(nt) > 6 and (nt in ot or ot in nt): return True
-    return False
 def _parse_idx(out, n, multi=False):
     if not out: return [] if multi else None
     out = out.replace("，",",").replace("。"," ").replace("、",",").replace("-1"," ")
@@ -190,8 +171,9 @@ def _qualified(cands):
         if hr and v>=2: out.append((i,w,v,hr))
         elif (not hr) and v>=4: out.append((i,w,v,hr))
     return out
-def recall(user_msg, topn=2):
-    profiles = load_profiles()
+def recall(user_msg, profiles=None, topn=2):
+    """10 路血管投票（**逻辑未改**），只是画像来源可以外面传进来。"""
+    profiles = load_profiles() if profiles is None else profiles
     n = len(profiles)
     if n == 0: return []
     idx = _v1_trigger(user_msg, list(range(n)), profiles)
@@ -213,85 +195,40 @@ def build_system(impressions):
     return ("你是小焦，用户的本地 AI 伙伴。\n\n"
             "关于这个人，你手上有的信息：\n" + lines + "\n\n"
             "自然地跟他聊。")
-def should_remember(user_msg):
-    prompt = (f"用户说：{user_msg}\n\n"
-        "这句话里有没有关于用户本人的、值得长期记住的信息？\n"
-        "值得记的：身份、职业、居住地、喜好、忌讳、健康、家人、长期状态。\n"
-        "不值得记的：临时情绪、一次性提问、天气、闲聊、问句。\n"
-        "只回答两个字：要记 或 不记。")
-    out = local_chat([{"role":"user","content":prompt}], temperature=0.0, max_tokens=8)
-    return "要记" in out
-def generate_profile(user_msg):
-    prompt = (f"用户说：{user_msg}\n\n"
-        "从这句话提取一条用户画像，输出 JSON，只输出 JSON，不要解释：\n"
-        '{"text": "一条简短的画像描述", "type": "状态/偏好/约束/背景", '
-        '"triggers": ["名词或特征词"], "scope": "一句话场景"}\n\n'
-        "要求：\n- text 用第三人称，一句话，不超过 30 字\n"
-        "- type 从 状态/偏好/约束/背景 里选一个\n"
-        "- triggers 放名词或特征词，不要放单字动词\n"
-        "- scope 是一句话，说明这条画像用在什么场景")
-    out = local_chat([{"role":"user","content":prompt}], temperature=0.0, max_tokens=256)
-    s = out.find("{"); e = out.rfind("}")
-    if s == -1 or e == -1: return None
-    try: p = json.loads(out[s:e+1])
-    except Exception: return None
-    if not all(k in p for k in ("text","type","triggers","scope")): return None
-    if p["type"] not in ("状态","偏好","约束","背景"): return None
-    if not isinstance(p["triggers"], list): return None
-    p["triggers"] = [t for t in p["triggers"] if t not in STOP_TRIGGERS]
-    if not p["triggers"]: return None
-    return p
-def remember_from_message(user_msg):
-    if not should_remember(user_msg): return None
-    p = generate_profile(user_msg)
-    if p is None: return None
-    profiles = load_profiles()
-    if is_duplicate(p, profiles): return None
-    append_profile(p)
-    return p
+def recall_with_hit(user_msg):
+    """血管召回（**只召回、不写盘**）：命中就把 `hit_count` 记在 user_profile 上。
 
-# ========== hit 回写 ==========
-def hit(ids):
-    """把命中的画像 hit_count +1。跟 user_profile.hit 一样的语义。
-    存回 xiaojiao_profiles.json。
+    返回的是 `user_profile` 的**原始记录**（dict：id/ts/kind/content/why/evidence/source/hit_count），
+    上层直接拿去合并、注入 —— 不再经手第二份画像库。
     """
-    if not ids:
-        return 0
-    ids = set(ids)
+    from core import user_profile as up
     try:
-        with open(PROFILES_PATH, "r", encoding="utf-8") as f:
-            doc = json.load(f)
-    except Exception:
-        return 0
-    profiles = doc.get("profiles", [])
-    n = 0
-    for p in profiles:
-        if p.get("id") in ids:
-            p["hit_count"] = int(p.get("hit_count") or 0) + 1
-            n += 1
-    if n:
-        doc["profiles"] = profiles
-        doc["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        tmp = PROFILES_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(doc, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, PROFILES_PATH)
-    return n
-def recall_with_hit(user_msg, topn=2):
-    """跟 recall 一样，但会自动把命中的画像 hit_count+1。
-    上层直接调这个就行。
-    """
-    imps = recall(user_msg, topn=topn)
-    ids = [p.get("id") for p in imps if p.get("id")]
-    if ids:
-        hit(ids)
-    return imps
+        records = up.all_records()
+    except Exception as e:      # noqa: silent-ok — 画像库读不到就返回空，绝不让对话挂掉
+        LOG.debug("读 user_profile 失败（忽略）：%s", e)
+        return []
+    profs = [{
+        "text": str(r.get("content") or ""),
+        "type": str(r.get("kind") or ""),
+        "id": str(r.get("id") or ""),
+        "triggers": [t for t in (r.get("triggers") or []) if t],
+        "scope": str(r.get("scope") or r.get("kind") or ""),
+        "_raw": r,
+    } for r in records if isinstance(r, dict)]
+    hits = recall(user_msg, profs)
+    for h in hits:
+        try:
+            # 记账走 user_profile 的 hit()（id 不存在时它自己静默返回，不崩）
+            up.hit((h.get("_raw") or {}).get("id"))
+        except Exception as e:      # noqa: silent-ok — 记不上账也不该影响召回结果
+            LOG.debug("hit 记账失败（忽略）：%s", e)
+    return [h["_raw"] for h in hits]
 
 
 if __name__ == "__main__":
-    print(f"画像库：{PROFILES_PATH}")
+    print("画像库：core.user_profile（logs/psyche/user_profile.jsonl）")
     ps = load_profiles()
-    print(f"现有画像：{len(ps)} 条")
+    print("现有画像：%d 条" % len(ps))
     for q in ["今天心情不好", "推荐首歌听听", "晚上想吃点啥"]:
         imps = recall(q)
-        print(f"  {q}  →  {[p['text'][:16] for p in imps]}")
+        print("  %s  →  %s" % (q, [p["text"][:16] for p in imps]))

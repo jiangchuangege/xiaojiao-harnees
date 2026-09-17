@@ -222,11 +222,19 @@ python tools/test_closed_loop.py 1 2  # 只跑指定编号，先试链路
 `git diff --numstat xiaojiao_app.py` 两轮接入合计是**新增 105 行 / 删除 0 行**，
 原来那段画像注入（`core/user_profile.render(8)`）**一个字没动**。
 
+> **2026-09-17 更新（合并两条画像链，去掉重复）**：下面这张表是**合并前**的样子。
+> 现在的分工是死的，见本文件末尾「附三 · 画像链合并」：
+> **画像系统 `core/user_profile` = 唯一写入口**（落 `logs/psyche/user_profile.jsonl`）；
+> **血管 `xiaojiao_recall` = 只召回、不再写盘**（它那份旧库
+> 已迁进 user_profile，旧文件改名成 `xiaojiao_profiles.json.bak` —— **没删**）；
+> 注入 system 前两条链的结果**按 content 完全相等合并去重**，
+> 只注入**一段** `build_system()` 输出。第三条链（`xiaojiao_profile`）**默认关掉**。
+
 | 链 | 模块 | 自己的库 | 注入什么 | 写在哪个时机 |
 |---|---|---|---|---|
 | 原来那套（没动） | `core/user_profile.py` | `logs/psyche/user_profile.jsonl` | `[关于用户]` | 原样 |
-| **血管** | `xiaojiao_recall.py` | `xiaojiao_profiles.json` | `build_system()` 输出 | 拼 system 时 |
-| **画像系统** | `xiaojiao_profile.py` | `logs/psyche/profiles.json` | `[印象·画像系统]` + `build_system()` 输出 | 拼 system 时 |
+| **血管** | `xiaojiao_recall.py` | 旧库已迁走 → `xiaojiao_profiles.json.bak` | `build_system()` 输出 | 拼 system 时 |
+| **画像系统** | `xiaojiao_profile.py` | `logs/psyche/profiles.json` | `[印象·画像系统]` + `build_system()` 输出 | 拼 system 时（现在默认关） |
 
 | 时机 | 做什么 | 在哪 |
 |---|---|---|
@@ -297,7 +305,55 @@ python tools/test_closed_loop.py 1 2  # 只跑指定编号，先试链路
 
 ---
 
-## 附 · 画像系统：记忆写入 + 印象召回（`xiaojiao_profile.py`）
+## 附三 · 画像链合并：一个写入口、一段注入（2026-09-17）
+
+【为什么合】两条链（血管 `xiaojiao_recall` 与画像系统 `core/user_profile`）**同时注入 system**，
+同一句话会被说两遍（甚至三遍，算上那段 `render(8)`）；而且血管自己还维护一份旧库，
+跟 `user_profile.jsonl` 是两份数据，早晚打架。
+
+【现在的分工（死的）】
+
+| | 干什么 | 库 |
+|---|---|---|
+| **画像系统 `core/user_profile.py`** | **唯一写入口**：负责"记什么"（判据在 `_profile_judge`） | `logs/psyche/user_profile.jsonl` |
+| **血管 `xiaojiao_recall.py`** | **只召回补位**，一个字都不写盘 | 读上面那一个库 |
+| 第三条链 `xiaojiao_profile.py` | **默认关掉**（`capabilities.profile_system_chain`） | 自己那份 `logs/psyche/profiles.json` 原样留着 |
+
+【改了哪些】
+· `xiaojiao_recall.py`：删掉整个写入侧（`save_profiles` / `append_profile` / `is_duplicate` /
+  `generate_profile` / `remember_from_message` / 本地 `hit` / `_gen_id` / 那把只服务于写盘的 `_WRITE_LOCK`）；
+  `load_profiles()` 改成从 `core.user_profile` 读；`recall_with_hit()` 按分工只召回 +
+  把命中记在 user_profile 上。**10 路血管的逻辑一个字没改**（只改数据来源与写入责任）。
+  ⚠️ user_profile 的记录**没有 triggers/scope** 字段，映射时 `scope` 兜底成 `kind`、
+  `triggers` 缺省空表 —— 否则"场景优先/触发词"那两路会整路弃权。
+· `core/user_profile.py`：`add()` **按 content 完全相等去重**（已存在 → 不追加、hit_count+1、
+  返回旧 id）；`hit()` 支持单个 id 且 id 不存在时静默返回。**不做模糊匹配** ——
+  模糊匹配会把"我爱吃香菜"和"我不吃香菜"并成一条，那是载体替它判断。
+· `xiaojiao_app.py`：注入改成**合并去重后只注一段** `build_system()`；写入统一走画像系统；
+  固化队列改从 user_profile 扫（不再依赖血管模块去读那份旧库）。
+· `tools/migrate_profiles_to_user_profile.py`：把旧库 21 条迁进 user_profile，旧文件改名
+  `xiaojiao_profiles.json.bak`（**不删**）。
+· `tools/dedupe_user_profile.py`：清掉**存量完全重复行**（先备份真库）。
+
+【实测（都是真跑出来的）】
+· **存量里的重复不是 3 条，是 15 条**：「用户 25 岁」有 15 行一模一样（hit_count 全是 0），
+  另有「用户想写一部3000字小说…」4 行、「用户养了一只猫」4 行 → 一次清掉 **20 行**（46 → 26 条）。
+  那条**说法不同的**「25 岁的年轻人，处于事业起步阶段。」**保留**（不是完全相等，不并）。
+· 连说三次「我 25 岁」：**仍然只有 1 条** ✅（bug 修好）。但 `hit_count` 是 **6 不是 3** ——
+  因为**两条路径各自在加**：「又说了三次」让 `add()` 去重 +3，「这三个回合召回都命中它」让
+  `hit()` +3。**这是规格里没预见到的口径重叠**（`hit_count` 同时表示"又被说了一次"和"被召回了几次"）。
+  两种收法都行：① 保持现状（6 = 3+3，如实标注）；② 拆成两个字段（`said_count` / `hit_count`）。
+  **没擅自改，等一句话。**
+· 一次对话（「今天心情不好」）：日志里 **`已注入 system` 只出现一次** ✅ ——
+  `画像召回：合并 1+5 → 去重后 3 条 → 已注入 system｜用户最近刚失恋，情绪低落 ／ 用户养了一只叫旺财的柯基 ／ 用户对海鲜过敏，吃了会起疹子`
+  （"失恋"那条在两条链里都出现，被合掉了）。
+
+【我自己在这次改动里犯的错（如实记）】
+合并后我是把 **user_profile 的原始记录**（字段叫 `content`）直接递给 `build_system()` 的，
+而它取的是 `p["text"]` → `KeyError` → 被外层 `except` 吞掉 →
+**表现是"一条都没注入、日志上还看不出来"**。自测（要求日志里出现一次"已注入 system"）
+当场抓到了：0 次。现在合并时把 `text`/`content` 两个字段名都补齐，`build_system` 一个字没动。
+
 
 上面第 2~8 节讲的是**上一个迭代**（`core/user_profile.py` / `tools/test_closed_loop.py`）：
 画像只写死的四类、判据严格、最后一步"下回用上"只有一两成。
@@ -401,3 +457,30 @@ python xiaojiao_profile.py "推荐本书看看"   # 单句试跑（打印召回�
 
 > 上一版的召回层模块（只有召回、模板与血管问法都是旧的）**已被本模块取代并删除** ——
 > 留着两套同功能实现，模板和问法会互相打脸。它仍在 git 历史里（提交 `15391e5`）。
+
+## 附四 · 固化层 `core/weight_layer.py`（"够格的画像"准备进权重的地方）
+
+画像现在住在**文件**里（`logs/psyche/user_profile.jsonl`）。固化层是它上面**第四层**的目的地：
+**住权重**。它的判据只用两个**事实**，不判类别、不替模型做判断：
+
+| 门槛 | 值 |
+|---|---|
+| 画像存在够久 | `MIN_AGE_DAYS = 7` |
+| 被命中够多 | `MIN_HIT = 3` |
+| 待固化队列上限 | `MAX_QUEUE = 50` |
+
+接口：`should_solidify(rec)` → `(够不够格, 原因)`；`enqueue(rec)`（自带去重 + 上限）；
+`pending()` / `stats()` / `mark_solidified(source_id, lora_path)` / `purge_stale(days=30)`。
+落盘 `logs/psyche/solidify.jsonl`。主流程在拼 system 那一段里**顺带扫一遍**画像库，
+够格的入队，并如实记一行 `固化队列：本轮入队 N 条（队列 pending 总数 M）`。
+自测：`tools/test_vram_policy.py` 之外，队列本身用「造一条够格的画像 → 看它真的入队」验证过
+（实测：`本轮入队 1 条（队列 pending 总数 2）`）。
+
+> **如实标注（很重要）**：**入队 ≠ 固化进权重。** 队列条目的状态一直是 `pending`，
+> `solidified_at` / `lora_path` 都是 `null` —— **没有任何东西在执行"写进权重"这一步**
+> （`mark_solidified()` 只是接口，没有调用方，也没有训练 / LoRA 管线）。
+> 也就是说这一层现在是"**纸条搬进了待办箱**"，不是"纸条变成了它的"。
+> 这正是"最后一跳"缺的那一段 —— 判据见 `tools/test_last_jump.py`：
+> **撤掉印象后 0/3**，说明知识仍然全在纸条上。
+
+## 附 · 画像系统：记忆写入 + 印象召回（xiaojiao_profile.py）

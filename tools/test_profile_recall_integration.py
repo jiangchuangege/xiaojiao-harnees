@@ -61,34 +61,21 @@ def load_store():
 
 
 def _why(q):
-    """排查模式：一句话走一遍写入链，**把卡在哪一步打印出来**。
+    """排查模式：一句话走一遍**写入链**，把卡在哪一步打印出来。
 
-    【为什么需要它】`remember_from_message()` 对"不记 / 判重 / 没生成"三种情况**都返回 None**，
-    光看返回值分不出是谁的问题。这三种的修法完全不同：
-      · 判了"不记"    → 模型侧决定（载体没错）
-      · 判重          → 闸门挡住了（正常）
-      · 没生成出来    → **载体侧**（它的 JSON 没被解析出来，要修的是解析）
-    模块本身不许改，所以排查放这里。
+    【2026-09-17 起写入链换了地方】分工改成：**画像系统 `core/user_profile` = 唯一写入口**
+    （血管 `xiaojiao_recall` 只管召回、不再写盘），所以这里探的是画像系统那条：
+      · 判了"不记"  → 模型侧决定（载体没错）
+      · 判了重复    → 去重挡住了（`add()` 现在按 content 完全相等去重）
+      · 没生成出来  → **载体侧**（它的输出没被解析成画像，要修的是解析）
     """
     sys.path.insert(0, _ROOT)
     import xiaojiao_recall as R
-    print("画像库：%s（%d 条）" % (R.PROFILES_PATH, len(R.load_profiles())))
-    # 第一道门的**原始输出**（照抄模块里那段提示词；模块改了这里也要跟着改，只为看到它到底说了什么）
-    _jp = ("用户说：%s\n\n"
-           "这句话里有没有关于用户本人的、值得长期记住的信息？\n"
-           "值得记的：身份、职业、居住地、喜好、忌讳、健康、家人、长期状态。\n"
-           "不值得记的：临时情绪、一次性提问、天气、闲聊、问句。\n"
-           "只回答两个字：要记 或 不记。" % q)
-    _raw = R.local_chat([{"role": "user", "content": _jp}], temperature=0.0, max_tokens=8)
-    print("\n① 判该不该记｜模型原始输出：%r（照抄模块的提示词问的）" % _raw)
-    print("   should_remember → %s" % R.should_remember(q))
-    p = R.generate_profile(q)
-    print("② generate_profile → %s" % p)
-    if p is None:
-        print("   ⚠️ **载体侧**：它的输出没解析成画像（这一步该修解析，不是模型不记）")
-        return 0
-    print("③ is_duplicate → %s" % R.is_duplicate(p, R.load_profiles()))
-    print("\n④ remember_from_message → %s" % R.remember_from_message(q))
+    from core import user_profile as up
+    print("画像库：%s（%d 条）" % (up.path(), up.count()))
+    hits = R.recall_with_hit(q)
+    print("\n血管召回（只召回，不写盘）→ %s" % [h.get("content") for h in hits])
+    print("画像系统现在的近况 recent(5) → %s" % [r.get("content") for r in up.recent(5)])
     return 0
 
 
