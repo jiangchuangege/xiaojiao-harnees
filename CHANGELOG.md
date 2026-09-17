@@ -7,6 +7,46 @@
 
 ## [v1.0] - 2026-09-13
 
+### 显存归属策略：聊天模型是显存主人；聊天模型不许顶聊天模型
+
+#### Fixed
+
+- **插件那两条生成路径跑完不把聊天模型还回来**（真缺陷）：
+  · `plugins/music_generation.py` 原来 `for k in BRAINS: _full_stop(k)`（**每个大脑都按"视频"处理一遍**）
+    然后生成、return —— **没有任何恢复**；
+  · `plugins/video_generation.py` 同样：`stop_brain()` 之后直接 return，**没有恢复**。
+    结果：生成一次视频/音乐，聊天模型就一直躺在磁盘上，下一句话要重新读盘
+    （本机盘 5 秒、USB 盒上 120 秒）。
+  · `start_brain()` 原来是**假的**：只调 `/api/profiles`（问"有哪些配置"），**不会加载任何模型**。
+  · `stop_brain()` 硬写 `_llama_swap_unload("xiaojiao")` —— 大脑换成 deepseek-v4 后卸错对象。
+  · `_full_stop()` 不分类型一律 `stop_comfy()` —— 拿 ComfyUI 当替罪羊。
+
+#### Added
+
+- `brain_manager.py` 策略层：`is_chat()` / `current_chat()` / `use_gen()` / `done_gen()` /
+  `keep_chat_in_vram()`；`wake(key, explicit=False)` 拒绝"聊天模型顶聊天模型"（只有用户明确选才允许）。
+- `tools/test_vram_policy.py`（25 项，离线，已接 CI）。
+
+#### Changed
+
+- 两个插件：`use_gen(...)` + **finally 里 `done_gen(...)`**（生成失败也要还回去）。
+- `model_switch.start_brain()` 改成**真·预热**（发 `max_tokens=1` 让模型进显存）；
+  `stop_brain()` 按当前配置的聊天模型卸载；`_full_stop()` 按 `type` 分派；
+  `BRAINS` 补 `music`（type=inproc：它在应用进程内加载 MusicGen）。
+- `/api/model/select` 现在**实测那个 gguf 的读速**并把结论写进 note
+  （实测同一台机器：本机 NVMe **1029 MB/s** → 4.29GB 约 4 秒；USB 盒 **37 MB/s** → 约 119 秒，差 28 倍）。
+- 界面上新增**大脑就绪状态**：`✅ 就绪 / ⏳ 正在加载 / ❌ 加载失败（带原因）`（`GET /api/models` 的 `brain_status`）。
+
+#### 如实标注（这一节）
+
+1. **对 llama 系模型，"退到内存"= 卸载**：llama.cpp 没有"权重留内存、不占显存"的睡眠模式
+   （那是 vLLM 的能力）。真要让 llama 系"内存待命"得让它以 `-ngl 0`（纯 CPU）驻留 ——
+   **需要给每个模型多配一条 CPU 入口，本轮没做**，不假装做了。
+2. **策略层第一版死锁**：策略函数持锁时又调 `wake()`（它也要拿同一把锁），
+   `_lock` 原来是普通 `Lock` → `done_gen("video")` 当场把自己锁死。改 `RLock`。
+3. **测试判据误报**：用"源码里有没有 `_full_stop(k)`"判断插件是否还在全杀，
+   而修复说明的**注释里也写了这串** → 把对的判成错的。改成只看真正的调用形状。
+
 ### 模型管理：修好"加了模型却用不了"，并量清"为什么换模型那么慢"
 
 #### Fixed
