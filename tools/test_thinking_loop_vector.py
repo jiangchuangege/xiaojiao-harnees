@@ -79,6 +79,40 @@ def main():
     finally:
         EM.embed = _real
 
+    print("\n二之二、**检索用「事」**（2026-09-18 新增）：事优先，没有事才退回「我」")
+    # ⚠️ 这里**只测机制**（检索到底用了哪个 query），不测"语义排得对不对" ——
+    #   后者由 embedder 的天花板决定：实测本机小脑（字级）对
+    #   「考试前一晚睡不着」vs「用户上周投了三份简历」在"事"上的分差只有 **0.0028**
+    #   （0.6863 / 0.6835），它分辨不出这一对。把语义正确当断言写进测试 = 注定红。
+    #   做法：**手工按 事 / 我 各算一遍排序**，再要求 adjust_candidates 的结果与之逐位相同。
+    from core import embedder as _EM
+    _cands = [{"text": "考试前一晚睡不着"}, {"text": "用户上周投了三份简历，想换工作"},
+              {"text": "看到小孩笑心里会软"}]
+
+    def _rank_by(q):
+        def _c(a, b_):
+            _d = sum(x * y for x, y in zip(a, b_))
+            _na = sum(x * x for x in a) ** 0.5
+            _nb = sum(x * x for x in b_) ** 0.5
+            return _d / (_na * _nb) if _na and _nb else 0.0
+        _qv = _EM.embed(q)
+        return [c["text"] for c in sorted(_cands, key=lambda c: -_c(_qv, _EM.embed(c["text"])))]
+
+    _rc = TL._psyche.colors
+    _WHAT, _ME = "用户说他明天要去面试", "心里有点慌，怕搞砸"
+    TL._psyche.colors = lambda: {"query": _ME, "event_what": _WHAT, "heart": _ME, "state": "紧"}
+    _o, _r = TL.adjust_candidates([dict(c) for c in _cands])
+    ck("**检索用的是「事」**（排序与直接用事的向量算出来的一致）",
+       [c["text"] for c in _o] == _rank_by(_WHAT), [c["text"] for c in _o])
+    TL._psyche.colors = lambda: {"query": _ME, "event_what": "", "heart": _ME, "state": "紧"}
+    _o2, _r2 = TL.adjust_candidates([dict(c) for c in _cands])
+    ck("抠不出事 → **退回用「我」**（排序换成按我算出来的）",
+       [c["text"] for c in _o2] == _rank_by(_ME), [c["text"] for c in _o2])
+    ck("两个 query 排出来的结果确实不同（证明「换 query」真的生效了）",
+       [c["text"] for c in _o] != [c["text"] for c in _o2],
+       ([c["text"] for c in _o], [c["text"] for c in _o2]))
+    TL._psyche.colors = _rc
+
     print("\n三、没有心（_q 空）但有关键词：仍走关键词")
     # ⚠️ 第一版这里用 `psyche.clear()` 造"没有心"，**测试写错了** —— 实测 `clear()` 只清
     #    "此刻的感受"（`_LIVE`），**不清心也不清 state**：清完 colors().query 还是原话、

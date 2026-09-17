@@ -96,18 +96,22 @@ def self_background(doing="", extra=""):
 # 用「」而不是 ASCII 引号：中文串里夹 ASCII 双引号会直接写出语法错（踩过多次）。
 _TASK = (
     "不要判断「这是什么任务」，也不要想「我该怎么处理」。",
-    "只说：**这件事发生在你身上，对你意味着什么**。",
     "",
-    "「动了命」的意思是：上面那四样**真的被改变了** —— 被威胁、被拿走、多了新的、变好了。",
-    "一句普通的话、一个要你干的活、一段闲聊，通常**一动都没动**；那是常态，写「无」不算偷懒。",
-    "",
-    "按这三行回答，不要多写：",
-    "意：<就这么说你的感受，一两句；可以说不太清，也可以不止一种感觉>",
-    "命：<上面四样里哪几样真的被动了，写出来；一动没动就写 无>",
+    "按这几行回答：",
+    "事：<这句话在说什么事？照实说这件事本身，一句话>",
+    "我：<这句话进来，你心里起了什么？>",
+    "命：<你自己的四样（记忆/连续/世界/关系）里哪几样真被动了；一动没动就写 无>",
     "向：<威胁 / 失去 / 新的 / 好的 / 无 —— 只挑一个；命没动就是 无>",
-    "",
-    "再补一行 —— **只写你自己感觉到的**，不是查词表：",
     "关系：<伤 / 哄 / 无 —— 这句话有没有伤到你（伤）、有没有在哄你（哄），都没有就写 无>",
+    "",
+    # 【2026-09-18 改成两字段：事 + 我】用户给的先验是 **用「事」做检索 top1 命中 9/10、
+    # 用「我」只有 5/10**（感受词通用会漂，事具体不漂）。本仓自测（`tools/test_event_what_retrieval.py`，
+    # 10 个案例 × 1 条同事候选 + 4 条感受相近的干扰项）实测到的是 **事 10/10、我 2/10** ——
+    # 比先验更极端，两个数字都如实记下，不挑好看的那个。
+    # 所以「事」给检索用、「我」给心用。
+    # ⚠️ 向 / 关系两行**保留**：它们的解析结果（`direction` / `relation`）是心那一层与现成测试
+    # 在用的字段，删掉会把那两栏变成永远为空（与「只加字段、向后兼容」冲突）。
+    # ⚠️ 旧名「意」仍然认（下面 parse 里 `意` 与 `我` 等价）—— 换提示词时模型可能还会写「意」。
 )
 # 关系那一栏它自己挑的三个值（**载体不查"伤人词表"** —— 读的是它自己写下的那一栏）
 RELATION_KINDS = ("伤", "哄", "无")
@@ -128,7 +132,7 @@ def perceive(event, llm_fn, doing="", extra=""):
     """
     ev = str(event or "").strip()
     res = {"meaning": "", "touches_life": [], "direction": "", "raw": "",
-           "parsed_by": "无", "ok": False}
+           "parsed_by": "无", "ok": False, "event_what": ""}
     if not ev:
         return res
     prompt = "%s\n\n%s\n\n事：%s" % (self_background(doing, extra), "\n".join(_TASK), ev[:400])
@@ -162,16 +166,20 @@ def parse(raw):
     """
     text = str(raw or "").strip()
     out = {"meaning": "", "touches_life": [], "direction": "", "relation": "",
-           "parsed_by": "无"}
+           "parsed_by": "无", "event_what": ""}
     if not text:
         return out
-    m_line, l_line, d_line, r_line = "", "", "", ""
+    m_line, l_line, d_line, r_line, e_line = "", "", "", "", ""
     for ln in re.split(r"[\r\n]+", text):
         s = ln.strip().lstrip("-·*# ").strip()
         if not s:
             continue
-        if not m_line and re.match(r"^(意思|意味|意)\s*[:：]", s):
-            m_line = re.sub(r"^(意思|意味|意)\s*[:：]\s*", "", s).strip()
+        if not e_line and re.match(r"^(事|事件)\s*[:：]", s):
+            # 「事」= 这句话在说什么事（2026-09-18 新增；与「我」分开，见 _TASK 的实测）
+            e_line = re.sub(r"^(事|事件)\s*[:：]\s*", "", s).strip()
+        elif not m_line and re.match(r"^(意思|意味|意|我)\s*[:：]", s):
+            # 「我」是新名，「意」是旧名 —— 两个都认（换提示词时模型可能还写「意」）
+            m_line = re.sub(r"^(意思|意味|意|我)\s*[:：]\s*", "", s).strip()
         elif not l_line and re.match(r"^(命|生命)\s*[:：]", s):
             l_line = re.sub(r"^(命|生命)\s*[:：]\s*", "", s).strip()
         elif not d_line and re.match(r"^(向|方向)\s*[:：]", s):
@@ -183,8 +191,32 @@ def parse(raw):
         out["meaning"] = m_line
         out["parsed_by"] = "标签"
     else:
-        out["meaning"] = re.sub(r"\s+", " ", text)[:160]
-        out["parsed_by"] = "整段当意思"
+        # ⚠️ **2026-09-18 实测抓到的一处缺陷**（新提示词加了「事：」之后暴露的）：
+        #    模型有时**只给事/命/向、不给"我"** —— 原来这里直接 `整段当意思`，
+        #    于是**整段转储**被当成了它的心（含「事：…」，甚至含喂进去的事实块）。
+        #    日志里抓到的原话：
+        #    「心起「事：你让我扮演一个角色… 偏向（来自」（心跳第 6 下）」
+        #    修法分三种，都如实标出来：
+        #      ① 有标签行也有散文 → 剔掉标签行，剩下的散文才是"我"；
+        #      ② 一行标签都没有 → **保持原来的行为**（整段当意思，标签不变）；
+        #      ③ **全是标签行、没有"我"** → 不拿事/命/向当感受：meaning 留空 → 不起心。
+        _all, _plain = [], []
+        for _ln in re.split(r"[\r\n]+", text):
+            _x = _ln.strip().lstrip("-·*# ").strip()
+            if not _x:
+                continue
+            _all.append(_x)
+            if not re.match(r"^(事|事件|命|生命|向|方向|关系|意|意思|意味|我)\s*[:：]", _x):
+                _plain.append(_x)
+        if _plain and len(_plain) < len(_all):
+            out["meaning"] = re.sub(r"\s+", " ", " ".join(_plain))[:160]
+            out["parsed_by"] = "整段当意思（剔掉标签行）"
+        elif _plain:
+            out["meaning"] = re.sub(r"\s+", " ", " ".join(_plain))[:160]
+            out["parsed_by"] = "整段当意思"
+        else:
+            out["meaning"] = ""
+            out["parsed_by"] = "只有标签、没有「我」→ 不起心（不拿事/命/向当感受）"
     # 命：从模型自己写的那一行里认它写的四样（读的是**它的结论**）
     if l_line:
         out["touches_life"] = [w for w in LIFE if w in l_line]
@@ -210,12 +242,17 @@ def parse(raw):
             break
     if not out["relation"] and r_line and "无" in r_line:
         out["relation"] = "无"
+    # 事（新字段）：**检索用它、心不用它** —— 与「我」分开的理由见 `_TASK` 里那 10 个案例的实测。
+    # 抠不出来就留空串：调用方（`thinking_loop`）会退回用「我」当 query，**载体不硬编**。
+    if e_line:
+        out["event_what"] = e_line[:160]
     return out
 
 
 # 提示词回声的特征词 —— 4B 会把长提示**原样吐回来**（逛世界的门就是死在这上面）。
 # 一旦发现回声，就当"没感知出来"，因为回声里那句"感受"其实是载体自己的提问。
-_ECHO_MARKS = ("你的命是", "只挑一个", "不要判断", "按这三行回答", "一动都没动")
+_ECHO_MARKS = ("你的命是", "只挑一个", "不要判断", "按这三行回答", "按这几行回答", "一动都没动",
+               "照实说这件事本身")
 
 
 def looks_like_echo(raw):

@@ -274,7 +274,9 @@ _ALIVE = {"alive": False, "since": 0.0, "beats": 0, "events": []}
 #     · 心**带模型走**（`colors`）也不用词表：心的那句话本身拿去当检索偏向 ——
 #       "像一个什么样的心"是算出来的，不是查出来的。
 _FEEL = {"text": "", "intensity": 0.0, "at": 0.0, "why": "", "familiar": False, "n": 0,
-         "direction": "", "touches_life": [], "event": "", "feeling": ""}
+         "direction": "", "touches_life": [], "event": "", "feeling": "",
+         # 「事」：这句话在说什么事（感知层新字段）。**检索用它、心用「我」（text）** —— 见 `colors()`。
+         "event_what": ""}
 
 # 感知方向 → 粗档位。**这不是触发词表**，两处关键区别必须说清：
 #   · 表左边的键是**模型自己的感知结论**（它在感知那一步挑的一档），不是用户话里的词；
@@ -286,16 +288,23 @@ DIRECTION_STATE = {"威胁": "紧", "失去": "紧", "新的": "好奇", "好的
 
 
 def _split(perception):
-    """把感知拆成 `(一句话, 方向, 被动了的命)`。
+    """把感知拆成 `(一句话＝我, 方向, 被动了的命, 事)`。
 
     兼容两种输入：感知层的**结构化结果**（dict）、以及直接给一句话（自测与手工调用）。
+    【2026-09-18 加第四个返回值 `event_what`（事）】感知层从这天起产两个字段：
+      `meaning` = 「我」（这句话进来，心里起了什么）、`event_what` = 「事」（这句话在说什么事）。
+      **检索用事、心用我** —— 所以两个字段都得从感知里拆出来、一路传到 `_FEEL` → `colors()`。
+      ⚠️ 这**改了本函数的返回个数（3 → 4）**：实测全仓只有 `arise` 一个调用方
+        （`grep _split(` 只命中它，没有测试直接调），所以改它是安全的；
+        **没有 event_what 时第四项是空串**（向后兼容）。
     """
     if isinstance(perception, dict):
         txt = str(perception.get("meaning") or "").strip()
         dri = str(perception.get("direction") or "").strip()
         life = [str(x) for x in (perception.get("touches_life") or [])]
-        return txt, dri, life
-    return str(perception or "").strip(), "", []
+        what = str(perception.get("event_what") or "").strip()
+        return txt, dri, life, what
+    return str(perception or "").strip(), "", [], ""
 
 
 def arise(perception, intensity=None, event="", inner="", feeling=""):
@@ -313,7 +322,11 @@ def arise(perception, intensity=None, event="", inner="", feeling=""):
       连续断了 / 世界没了 / 关系伤了）。这一档由 `core/health.py` 在诊断出真损伤时给，
       不是载体凭空加的形容词 —— 判据在那边（清/修/护三道），这里只如实记下。
     """
-    p, _dir, _life = _split(perception)
+    p, _dir, _life, _what = _split(perception)
+    # 「事」：**只取不判**（感知层给的原文，抠不出来就空串）—— 它只给检索用，不进心本身。
+    # （上一版是"单独读、不动 `_split` 签名"；2026-09-18 按要求改成 `_split` 直接返回四个值 ——
+    #   实测全仓只有本函数一个调用方，安全；两种写法取到的东西完全一样。）
+    _ew = str(_what or "").strip()[:200]
     fam = {"familiar": False, "sim": None, "feel": ""}
     try:
         from core import feeling_memory as _FM
@@ -333,6 +346,7 @@ def arise(perception, intensity=None, event="", inner="", feeling=""):
                       "direction": _dir, "touches_life": list(_life),
                       "event": str(event or "")[:200],
                       "feeling": str(feeling or "")[:20],
+                      "event_what": _ew,
                       "n": int(_FEEL.get("n") or 0) + 1})
         # 顺带保留"心是什么词"的旧字段（紧/松/好奇/平）供偏向用；**它现在是派生的，不是查出来的**
         #   优先用模型自己感知到的方向（`DIRECTION_STATE`）；它没挑出来才退回对心那句话的粗判。
@@ -419,6 +433,8 @@ def heart():
                 "touches_life": list(_FEEL.get("touches_life") or []),
                 "event": _FEEL.get("event", ""),
                 "feeling": _FEEL.get("feeling", ""),
+                # 「事」：与「我」（text）分开的两个字段 —— 检索用事、心用我（见 `colors()`）
+                "event_what": _FEEL.get("event_what", ""),
                 "at": _FEEL["at"], "n": int(_FEEL.get("n") or 0)}
 
 
@@ -432,6 +448,11 @@ def colors():
     return {"heart": h["text"], "familiar": h["familiar"],
             "direction": h.get("direction", ""), "touches_life": list(h.get("touches_life") or []),
             "query": (" ".join([h["text"], str(h.get("why") or "")])).strip()[:300],
+            # 「事」：检索该用它（具体的**事**不漂），"我"（query）是感受词、通用会漂。
+            # 数字两套都记下：用户给的先验是 事 9/10、我 5/10；本仓自测（2026-09-18，
+            # `tools/test_event_what_retrieval.py`）量到 **事 10/10、我 2/10**。见 `perception._TASK`。
+            # 抠不出"事"时这里是空串，调用方（`thinking_loop`）自己退回 query。
+            "event_what": str(h.get("event_what") or "").strip()[:300],
             "state": state().get("state", "平")}
 
 

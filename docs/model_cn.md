@@ -181,7 +181,7 @@ Web 页面右上角的设置面板同样能换大脑、改人设、调参数、�
 | 端口 | 角色 |
 | --- | --- |
 | 9292 | llama-swap，多模型热切换管理器，`start_xiaojiao.py` 会优先拉起它 |
-| 8080 | 直连 llama-server；检测到 9292 在线时会跳过，避免重复占用显存 |
+| 8080 | 直连 llama-server；检测到 9292 在线时会跳过，避免重复占用显存（跳过时还会**收掉残留的那条备用线**：`stop_stray_direct_line()` 只杀命令行里含 `llama-server` 的进程，见 `tools/test_brain_line_cleanup.py`） |
 
 ---
 

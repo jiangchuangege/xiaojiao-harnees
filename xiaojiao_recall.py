@@ -31,7 +31,7 @@ def _local_target():
         if m: _model = m
         b = _LOCAL_PROBE.get("base")
         if b: _base = b
-    except Exception:
+    except Exception:      # noqa: silent-ok — 读不到主程序的本地大脑指向就退回默认 9292，不让召回整条瘫掉
         pass
     return _base, _model
 def local_chat(messages, temperature=0.0, max_tokens=64, timeout=300):

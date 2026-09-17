@@ -77,10 +77,14 @@ def main() -> int:
     print("=" * 74)
 
     # ---------- P1 代码能编译、真 bug 级静态检查干净 ----------
+    # 【2026-09-18 修一处误报】原来用 `utf-8` 读源码，**带 UTF-8 BOM 的 .py 会被判成语法错**
+    #   （`ast.parse` 拿到带 U+FEFF 的字符串会抛 SyntaxError，而 `python 文件.py` 跑起来是好的
+    #   —— 解释器按 PEP 263 认 BOM）。实测踩到：仓库根目录三个 BOM 开头的脚本被判"语法错误"。
+    #   所以按 Python 自己的口径读：`utf-8-sig`（有 BOM 就去掉，没有就当普通 UTF-8）。
     bad = []
     for f in py_files():
         try:
-            ast.parse(io.open(f, encoding="utf-8", errors="ignore").read())
+            ast.parse(io.open(f, encoding="utf-8-sig", errors="ignore").read())
         except SyntaxError as e:
             bad.append("%s:%s" % (_rel(f), e.lineno))
     if not bad:

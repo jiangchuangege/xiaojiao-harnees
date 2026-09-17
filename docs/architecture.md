@@ -64,20 +64,20 @@
 | 视频 | `/api/video`、`/api/video/status` 等 | `video_service/video_api.py` |
 | 播客 | `/podcast`、`/api/podcast` | `podcast_service/podcast_api.py` |
 
-`xiaojiao_app.py` 自身注册 53 条唯一路径（55 处 `@app.route` 装饰器），加上上述 Blueprint 后，
-仓库内路由总数为 70 条。
+`xiaojiao_app.py` 自身注册 69 条唯一路径（73 处 `@app.route` 装饰器），加上上述 Blueprint（15 处装饰器）后，
+仓库内路由总数为 84 条（88 处装饰器）。
 
 ### 1.3 代码分布
 
 | 目录 | 内容 | 规模（实测） |
 | --- | --- | --- |
-| `xiaojiao_app.py` | 主程序：配置加载、路由、提示词分层、载体编排、内嵌前端 | 10898 行 |
-| `core/` | 载体器官：记忆、检索、健康、元认知、思维流、世界、自主性、中央黑板、人格、预设数据等 | 11 个子包、37 个模块 |
-| `plugins/` | 工具插件：`py` / `js` / `json` / `md` 四种形态 | 11 个 `.py` 插件，对外 77 个工具 |
+| `xiaojiao_app.py` | 主程序：配置加载、路由、提示词分层、载体编排、内嵌前端 | 15505 行 |
+| `core/` | 载体器官：记忆、检索、健康、元认知、思维流、世界、自主性、中央黑板、人格、预设数据等 | 11 个子包、85 个 `.py` |
+| `plugins/` | 工具插件：`py` / `js` / `json`（tools）/ `md`（皮肤）四种形态 | 11 个 `.py` 插件；对外 **77 个工具名**（内置 14 + 插件路由表 63），完整 schema 13891 token |
 | `video_service/` `podcast_service/` `music_service/` | 重依赖服务 | 各自独立子目录 |
 | `tools/` | 审计与自检脚本（文档、图、密钥、原理、静态质量） | 见 [tools.md](tools.md) |
 | `tests/stress/` | 四套件全量测试 + 实机脚本 | 249 条用例 |
-| `docs/` | 分主题文档 | 39 个顶层 `.md` |
+| `docs/` | 分主题文档 | 71 个顶层 `.md` |
 
 `core/` 各子包的职责：
 

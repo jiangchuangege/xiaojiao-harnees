@@ -73,11 +73,11 @@
 
 | 文件 | 行数 | 作用 |
 | --- | --- | --- |
-| `xiaojiao_app.py` | 10898 | **主程序**：配置加载、提示词分层、载体编排 `agent_run`、工具循环、53 条唯一 HTTP 路由、内嵌前端 |
-| `start_xiaojiao.py` | 411 | 一键启动器：大脑 + Web + 可选 N.E.K.O.；监听地址必须走 `bind_host()` |
+| `xiaojiao_app.py` | 15505 | **主程序**：配置加载、提示词分层、载体编排 `agent_run`、工具循环、69 条唯一 HTTP 路由、内嵌前端 |
+| `start_xiaojiao.py` | 513 | 一键启动器：大脑 + Web + 可选 N.E.K.O.；监听地址必须走 `bind_host()` |
 | `xiaojiao_control.json` | — | **实际配置**（不入库）：brain / role / capabilities / behavior / models / dsh |
 | `xiaojiao_control.json.example` | — | 配置模板（入库），含各字段中文注释 |
-| `core/`（11 个子包） | 37 个模块 | 载体器官：记忆、检索、健康、元认知、思维流、世界、自主性、中央黑板、人格 |
+| `core/`（11 个子包） | 85 个 `.py` | 载体器官：记忆、检索、健康、元认知、思维流、世界、自主性、中央黑板、人格 |
 | `plugins/*.py` | 11 个插件 | Python 插件；`plugins/scrapling_bridge.py` 3031 行，是抓取主力，对外 18 个工具 |
 | `plugins/netdoctor.js`、`plugins/ip.json`、`plugins/*.skill.md` | — | 同一批工具的 `js` / `json` / `md` 形态 |
 | `app_monitor.py` | — | 大脑仓库监控面板：`/monitor`、`/api/monitor` |
@@ -85,7 +85,7 @@
 | `tools/check_principles.py` | 251 | 12 条项目铁律的机器化审计（P1 至 P12） |
 | `tools/check_docs.py` | 301 | 文档与代码一致性（链接 / 路径 / 端点 / 工具名） |
 | `tools/check_secrets.py` | 201 | 明文密钥自查（`--include-logs` 连 `logs/` 备份一起扫） |
-| `tools/check_mermaid.py` | 147 | Mermaid 图语法校验（`--all` 递归扫描） |
+| `tools/check_mermaid.py` | 173 | Mermaid 图语法校验（`--all` 递归扫描） |
 | `tools/check_prompt_size.py` | — | 单次请求体检：各段 token 占比、各意图的工具装载量 |
 | `tools/dangerous_commands.txt` | — | 危险命令黑名单（一行一个正则，改词不用动代码） |
 | `tools/audit_static.py` | — | 静态质量审计（`check_principles` 会调用） |
@@ -94,9 +94,9 @@
 | `tests/stress/test_app_logic.py` | 410 | 应用逻辑用例 104 条（检索词清洗 / 漏洞意图 / 提示词铁律 / 工具注册 / 热重载） |
 | `tests/stress/test_security.py` | 167 | 安全用例 18 条（SSRF / robots / 限速 / 脱敏 / 穿越 / 命令端点 / 无明文密钥） |
 | `tests/stress/test_network.py` | 188 | 联网用例 35 条（真实抓取 / 批量 / 会话 / 对抗 / NVD 真实接口） |
-| `README.md` | 898 | 对外说明：安装、用法、功能总览、抓取章节、安全说明 |
-| `CHANGELOG.md` | 704 | 版本记录（版本号以它为准） |
-| `docs/*.md` | 顶层 39 个 | 分主题文档（架构、设计哲学、安全审计、抓取、大脑切换、测试报告…）；含子目录共 57 个 |
+| `README.md` | 1494 | 对外说明：安装、用法、功能总览、抓取章节、安全说明 |
+| `CHANGELOG.md` | 2244 | 版本记录（版本号以它为准） |
+| `docs/*.md` | 顶层 71 个 | 分主题文档（架构、设计哲学、安全审计、抓取、大脑切换、测试报告…）；含子目录共 90 个 |
 
 `tests/stress/` 下另有 **独立实机脚本**，`run_all.py` 不跑它们（需要服务在运行，或会连打 `/api/chat`）：
 `live_check.py`（33 处断言）、`ui_check.py`（Playwright 真浏览器渲染）、`ui_style_check.py`、
@@ -230,7 +230,7 @@ python -m ruff check --select E9,F63,F7,F82 .     # 真 bug 级 3 处
 | `learn_from_neko.py` 不解析命令行参数 | 脚本只执行一轮 `learn_once()` 就退出；`start_xiaojiao.py` 传入的 `--daemon --interval 300` 不产生循环效果，启动器打印的「每 5 分钟学一次」目前不成立 |
 | 实机脚本不在 `run_all.py` 里 | `live_check.py`、`ui_check.py`、`preset_check.py`、`stability_30m.py` 改动主程序后建议单独跑一次 |
 | ruff 真 bug 级规则未清零 | **2026-09-16 更正：已全过（0 处）**。原记录写"实测 3 处：`core/world/firewall.py` 的 `__all__` 含未定义名；`xiaojiao_app.py` 两处未定义变量" —— 那 3 处已经修完，现在 `ruff check --select E9,F63,F7,F82 .` 报 `All checks passed` |
-| `check_principles.py` 未全过 | **2026-09-16 更正：实测 10/12**。原记录写"9/12，未过 P1（ruff）、P6、P8" —— 已过期：**P1 与 P8 现已通过**，现在未过的是 **P6**（面向用户的英文 error 文案 1 处）与 **P9**（版本号自洽，`neko_plugin` README 引的 `v3.13.13` 被判成"查无此版"） |
+| `check_principles.py` 未全过 | **2026-09-18 实测 10/12**。未过：**P6**（`core/world/firewall.py` 一处 `"error": "internal"` 是**日志机器码**，判据按"error 字段必须含中文"扫到它 —— 口径偏严，代码没动）、**P9**（版本号自洽：`neko_plugin/xiaojiao_install/README.md` 里引了别的项目的版本号）。本轮修掉两条红：P1（BOM 开头的 .py 被误判语法错 → 改成按 `utf-8-sig` 读）、P8（`check_docs` 不再扫被 .gitignore 忽略的目录里的 .md） |
 
 ---
 

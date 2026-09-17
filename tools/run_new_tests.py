@@ -5,6 +5,15 @@
 为什么要有它：本轮新增了 12 个自测脚本，一个个手敲容易漏。
 这个脚本把"每个模块都要有单测且能实测"这句话变成一条命令 + 一张汇总表。
 退出码：0 = 全绿；1 = 有失败（CI 据此判定）。
+
+【2026-09-18 补登 8 个】那轮"事/我 + 接回 + 精排"改动新增的自测，全部**离线可跑**
+（不调大脑、不联网），已经补进下面的 TESTS：
+  test_rerank_gate（精排两处改动）、test_realtime_fact（时效性事实）、
+  test_memory_plugin_gate（写记忆闸门）、test_brain_line_cleanup（直连清理）、
+  test_thinking_loop_vector（向量路径硬化）、test_heart_back（心接回）、
+  test_mind_facts（思维流事实块）、test_inner_facts（内里只列事实）。
+**故意没登进来**的两个：`tools/test_event_what_retrieval.py` 与 `tools/test_last_jump.py`
+—— 它们**必须调本地大脑**（要 llama-swap 在 :9292 跑着），登进来会让这个脚本在大脑没起时红。
 """
 import os
 import subprocess
@@ -35,6 +44,15 @@ TESTS = [
     ("tools/test_world_firewall.py", "世界层重构 + 信息污染防火墙"),
     ("tools/check_frontend_js.py", "前端 JS 语法与结构契约"),
     ("tools/check_motto.py", "载体层总纲注释覆盖（26 个模块）"),
+    # ---- 2026-09-18 补登：事/我 + 心接回 + 精排那轮新增的 8 个（都离线可跑）----
+    ("tools/test_rerank_gate.py", "精排两处改动（RERANK_GAP 0.50 / 判官不可用改卡阈值）"),
+    ("tools/test_realtime_fact.py", "时效性事实（时间词 + 事实词才放行联网结果）"),
+    ("tools/test_memory_plugin_gate.py", "写记忆闸门（复读/乱码/重复不写，如实说没记）"),
+    ("tools/test_brain_line_cleanup.py", "直连清理只杀 llama-server（不误杀别的进程）"),
+    ("tools/test_thinking_loop_vector.py", "思维流向量路径硬化（空候选不崩、用事/我检索）"),
+    ("tools/test_heart_back.py", "心接回（心跳 n 变了才接、原文照搬、assistant 角色）"),
+    ("tools/test_mind_facts.py", "思维流事实块（只列事实、剥掉载体框）"),
+    ("tools/test_inner_facts.py", "内里只列事实（不再写孤独/低沉这些词）"),
 ]
 
 

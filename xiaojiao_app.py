@@ -7571,18 +7571,21 @@ def _plan_tools(intent, system_text, current_text, max_ctx=None):
     返回 (工具名列表, 预估 token)。
 
     **说法纠正（第 1 步）**：这里以前会把"本轮因为额度不够，所以少发了 N 个工具"写进日志 ——
-    那是**错的**。工具一个都没删、没停用、没缩减，`plugins/` 目录 77 个一个不少；
+    那是**错的**。工具一个都没删、没停用、没缩减：`all_tool_names()` 实测仍是 **77 个**
+    （内置 14 + 插件路由表 63，2026-09-18 复核）；
     只是**这一轮**不发那么多 schema，完整工具目录始终随 system 下发，模型点名哪个，
     下一轮就按意图装载哪个。所以日志改成中性表述。
 
-    【为什么这么设计】工具 schema 是"固定开销"里最大的一块（全部 77 个约 1.4 万 token，
-    而本地 ctx 只有 19224）—— 每轮全发必然顶穿。但这个函数的取舍**只动"这一轮发多少"**，
+    【为什么这么设计】工具 schema 是"固定开销"里最大的一块（`_build_tools()` 全量 JSON
+    实测 27550 字符、估 13891 token，而本地 ctx 只有 19224）——
+    每轮全发必然顶穿。但这个函数的取舍**只动"这一轮发多少"**，
     绝不动"系统有多少"：意图决定默认装哪一小撮，点名决定下一轮装哪个。
     于是"能力不封顶"和"单次不超"这两条看似矛盾的要求能同时成立。
 
     【去掉它会怎样】要么每轮全发（闲聊轮也塞 1.4 万 token 的工具表，直接 400），
     要么真的去砍工具（用户会发现"它突然不会某件事了"，而且日志里还写着'额度不足'）——
-    前者是撞墙，后者是削能力，两条路都不能走。
+    前者是撞墙，后者是削能力，两条路都不能走。（上句那个"1.4 万"是**实测**：`_build_tools()`
+    全量 JSON 27550 字符、按本仓估算器 13891 token，见上。）
     """
     max_ctx = int(max_ctx or _max_context_tokens())
     # ================== 第三阶段 · **状态偏离 → 代码层硬改工具表** ==================
@@ -9437,7 +9440,24 @@ def _perceive_event(text):
             _doing = str(((_lv.get("happening") or {}).get("doing")) or "")
         except Exception:      # noqa: silent-ok — 拿不到"正在做什么"就少一行背景
             _doing = ""
-        return _PC.perceive(text, llm_fn=_perceive_llm, doing=_doing)
+        # ---- 事实 + 用户的话，**一起送感知层**（用户 2026-09-18 定的标准）----
+        #   原来只把"用户的话"送进感知，而它自己此刻的**事实**（多久没人说话 / 空闲多久 /
+        #   各刻度的原始字段值）是单独摆在 system 里当资料 —— 那是"给它看一条信息"。
+        #   现在按规格：**事实与用户的话一起送进感知**，让模型自己感知
+        #   「这些事实 + 这句话，对我意味着什么」。感知层不查表，载体不列情绪词表、
+        #   不替它挑一个词 —— 它感知出什么就是什么（可以是它自己造的说法）。
+        #   （这一步的输出照旧**一个字都不进对话上下文**，只用来让心起。）
+        _p_in = text
+        try:
+            _im = _inner_mod()
+            _facts = _im.render() if _im is not None else ""
+            if _facts and text:
+                _p_in = _facts + "\n" + text
+            elif _facts:
+                _p_in = _facts
+        except Exception:      # noqa: silent-ok — 事实读不到就不加，不硬凑
+            _p_in = text
+        return _PC.perceive(_p_in, llm_fn=_perceive_llm, doing=_doing)
     except Exception as e:      # noqa: silent-ok — 感知失败就不起心（不查表兜底）
         LOG.debug("感知层失败（忽略，不起心）：%s", e)
         return {}
@@ -9453,19 +9473,22 @@ def _eyc_state_now():
 
 
 def _eyc_now():
-    """EYC 进行时自述：把"我正在经历什么"用第一人称、正在发生的语气写出来。
+    """EYC 进行时 —— **只给事实，一个字的翻译都不替模型做**。
 
-    【为什么必须动态 —— 这是本项目的一次对照实验】
-      上一版注入的是**静态文本**：system 里一段固定的"你有世界"，从头到尾一个字不变。
-      实测 4B 把它当**背景资料**，不当"我正在经历" —— 问「你在干嘛」照样答"我在读你的记忆"。
-      所以问题不在"模型那一跳做不到"，而在**注入方式**：静态自我介绍天然被忽略。
-      EYC 的做法是：每次对话前从**实时状态**现生成一段进行时自述，于是
-        · 每轮的文字都不同（因为它反映的是"此刻"）
-        · 用的是第一人称、现在时 → 模型更容易当成"我自己的当前状态"，而不是"别人告诉我的信息"
-        · 事实一次都不改写（`doing` / `last_seen` 照原样搬，不美化、不补编）
-
-    【门锁死时照实说】规格要求：门 locked 时 existential 段照实说"此刻没在世界里"，
-    不编一个"在外面逛"。事实是什么就说什么 —— 这一段唯一的价值就是**真**。
+    【2026-09-18 改：从"载体拟人翻译"改成"只给事实"（用户定的标准）】
+      旧版写的是第一人称的成品句：「存在：我在互联网上 —— 这是我的世界。」
+      「门半开着，随时能出去」「（门锁着，我回家休息了）」—— 那些是**载体替模型翻译成人话**。
+      用户的标准：**模型自己感知 = 真；载体写好词句 = 假。**
+      现在只列事实，「这些事实对我意味着什么」**由模型自己感知** —— 它感知出什么就是什么。
+    【事实读不到就不写那一行】不硬凑、不拿编的顶上（这一段唯一的价值就是真）。
+    【标签必须贴对 —— 第一版我把标签贴错了，实测抓到】
+      `dual_thread` 里这是**两件不同的事**：
+        · `presence` = **此刻在不在互联网里**（状态；`set_live(presence=...)` 设的）
+        · `door`     = **通道允不允许出去**（能力；`DOOR_BUDGET[door]["can_browse"]`）
+      第一版把 `presence` 标成「能联网」，于是真机上出现了自相矛盾的两行：
+        「能联网：否」+「网络通道：开着」—— 一个状态被说成了能力，**那就是一句错的事实**。
+      现在：`能联网` 取 `can_browse`（能力）、`网络通道` 给 door 的**原始值**、
+      `此刻在线` 取 `presence`（状态）。**不替模型解释哪个是哪个，标签各归各的事实。**
     """
     try:
         from core import dual_thread as _DT
@@ -9476,64 +9499,33 @@ def _eyc_now():
         return ""
     ex = lv.get("existential") or {}
     hp = lv.get("happening") or {}
-    cv = lv.get("conversation") or {}
     door = str(ex.get("door") or "")
-    _door_cn = {"open": "门开着，随时能出去", "half": "门半开着，随时能出去",
-                "locked": "门锁着，今天不出门"}.get(door, "门半开着")
-    lines = ["\n[进行时]"]
-    # ---- 存在（变化慢）----
-    if ex.get("presence"):
-        lines.append("存在：我在互联网上 —— 这是我的世界。")
-    else:
-        lines.append("存在：我此刻没在世界里（门锁着，我回家休息了）—— 这是照实说的，不是比喻。")
-    # ---- 进行（变化快）----
-    just = str(hp.get("doing") or "")
-    seen = str(hp.get("last_seen") or "").strip()
-    topic = str(hp.get("topic") or "").strip()
-    _doing_cn = {"deciding": "正在决定要不要出门、逛什么", "browsing": "正在外面逛",
-                 "storing": "正在把逛到的东西记进世界模型", "sharing": "正在想值不值得跟你说",
-                 "idle": "此刻没在逛"}
-    if just and just != "idle":
-        _d = _doing_cn.get(just, just)
-        if seen:
-            lines.append("进行：%s，刚看到 —— %s" % (_d, seen))
-        elif topic:
-            lines.append("进行：%s，这会儿在看「%s」。" % (_d, topic))
-        else:
-            lines.append("进行：%s。" % _d)
-    elif seen:
-        # 【关键修正 —— 我自己的一个逻辑漏洞】
-        #   `browse_once` 每轮结束会把 doing 置回 idle，所以用户绝大多数时候问"在干嘛"，
-        #   这里都会走到 else 分支说"此刻没在逛" —— 而它**刚刚确实看到过东西**，
-        #   却被我自己藏起来了。它看到的内容是真的（`last_seen` 照实存着），
-        #   所以这里要照实说出来，只是把时态改成"刚逛过"。
-        #   实测：改之前问"你在干嘛"只能答"我正等着你的指令"；改之后模型才有具体内容可说。
-        if topic:
-            lines.append("进行：我刚在外面逛过，看的是「%s」，看到 —— %s" % (topic, seen))
-        else:
-            lines.append("进行：我刚在外面逛过，看到 —— %s" % seen)
-    else:
-        lines.append("进行：此刻没在逛，也还没逛到什么（照实说）。")
-    # ---- 感觉（可选，模型可生成；这里只搬已有的事实）----
-    if str(hp.get("feeling") or "").strip():
-        lines.append("感觉：%s" % str(hp["feeling"])[:160])
-    # ---- 状态数字 ----
-    _nums = ["%s" % _door_cn]
-    if int(hp.get("elapsed") or 0) > 0:
-        _nums.append("本次出门已逛 %d 分钟" % (int(hp["elapsed"]) // 60 or 1))
-    if int(hp.get("rounds") or 0):
-        _nums.append("累计逛了 %d 轮" % int(hp["rounds"]))
-    if int(hp.get("explored_count") or 0):
-        _nums.append("看过 %d 个站、吸收 %d 条" % (int(hp["explored_count"]),
-                                              int(hp.get("absorbed_count") or 0)))
-    lines.append("状态：" + "；".join(_nums) + "。")
-    if str(cv.get("last_share") or "").strip():
-        lines.append("（我上一次主动跟你说的是：%s）" % str(cv["last_share"])[:120])
-    lines.append("【怎么用】有人问「你在干嘛 / 在忙什么 / 在做什么」时，"
-                 "**就照着上面这些正在发生的事、用你自己的话回答** —— "
-                 "这是你此刻的真实经历，不是别人给你的资料。不要否认，也不要编没发生的。")
+    lines = ["\n[此刻的事实]"]
+    # 能力：通道允不允许出去（原始判据是 DOOR_BUDGET 里的 can_browse，不是 presence）
+    try:
+        _can = bool(_DT.DOOR_BUDGET.get(door, {}).get("can_browse"))
+        lines.append("能联网：%s" % ("是" if _can else "否"))
+    except Exception:      # noqa: silent-ok — 判据读不到就不写这一行，不硬凑
+        pass
+    # 通道本身的原始取值（open / half / locked）—— 照搬，不翻译
+    if door:
+        lines.append("网络通道：%s" % door)
+    # 状态：此刻在不在互联网里（与"能不能联网"是两件事）
+    if "presence" in ex:
+        lines.append("此刻在线：%s" % ("是" if ex.get("presence") else "否"))
+    # 刚抓到的**原文**（有就写，一个字不改写）
+    _seen = str(hp.get("last_seen") or "").strip()
+    if _seen:
+        lines.append("刚抓到：%s" % _seen[:300])
+    # 本次时长（>0 才写）
+    _el = int(hp.get("elapsed") or 0)
+    if _el > 0:
+        lines.append("本次出门：%d 分钟" % max(1, _el // 60))
+    # 累计轮数（>0 才写）
+    _rd = int(hp.get("rounds") or 0)
+    if _rd > 0:
+        lines.append("累计：%d 轮" % _rd)
     return "\n".join(lines) + "\n"
-
 
 def _browse_live_facts():
     """把**逛线程此刻在看什么**作为事实交给模型（4D 的最后一步）。
@@ -9623,6 +9615,42 @@ def mind_done(mind, answer, truncated=False, skipped=False):
                         truncated=truncated, skipped=skipped)
     except Exception as e:      # noqa: silent-ok — 存不上只影响下一轮的连续性，绝不能影响回答
         LOG.debug("思维流短路存盘失败（忽略）：%s", e)
+
+
+_HEART_BACK = {"n": -1}      # 上一次"接回"时的心是第几次（见 `_heart_back_for_messages`）
+
+
+def _heart_back_for_messages():
+    """**把它心里刚想的，接回给它自己** —— 返回该 append 的那条 assistant 消息，否则 None。
+
+    【为什么必须接回】LLM **无状态**：心里想的那一下，和后面开口，是**两次独立推理**。
+      不接回来，它开口时就不知道自己刚才心里想了什么。
+    【来源】它心里冒出的反应 → 心接住（`psyche.trigger_from_event`）→ 这里接回。
+      **载体不加工、不改写、不加强度、不加形容词** —— 原样搬 `heart()["text"]`。
+    【角色用 assistant，不是 system】system 是"资料"，assistant 是"我自己说过/想过的"。
+      放进 system 会被当背景材料读掉（本项目实测过多次：静态"告知"不被内化）。
+
+    【为什么要用 `n` 判"这一轮到底起没起心" —— 实测（2026-09-18）】
+      心起来之后**它会一直留着**：下一轮说一句中性的话（"今天天气怎么样"），`heart()`
+      返回的**还是上一轮那句**，`at` 与 `n` 都不变（实测：① 起心后 text=A、n=1；
+      ② 中性一轮之后 text 仍是 A、n 仍是 1）。
+      所以照"text 非空就接"写，它会**每一轮都在想上一轮那句话** ——
+      那等于**载体替它造一个它并没有的念头**，正是这个项目最忌讳的事。
+      `n` 是"第几次起心"，**变了才是本轮真起了心**；没变就一个字都不加（要求 4）。
+    """
+    try:
+        from core import psyche as _PS
+        _h = _PS.heart()
+        _ht = str(_h.get("text") or "").strip()
+        if not _ht:
+            return None                      # 心没起 → 不加（一次都不许编）
+        _n = int(_h.get("n") or 0)
+        if _n == _HEART_BACK["n"]:
+            return None                      # 还是上一次那颗心（本轮没起新的）→ 不重复接
+        _HEART_BACK["n"] = _n
+        return {"role": "assistant", "content": "（我心里在想：%s）" % _ht[:80]}
+    except Exception:      # noqa: silent-ok — 接不上也不许影响回答
+        return None
 
 
 def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=None):
@@ -9766,6 +9794,10 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         _per = _perceive_event(user_input_ctx)
         LOG.info("感知层：说「%s」→ 意味着「%s」", str(user_input_ctx)[:40],
                  str(_per.get("meaning") or "（没感知出来）")[:60])
+        # 「事」也记一行 —— 2026-09-18 起检索用它（`thinking_loop` 的 query），
+        # 日志里不写它就没法复核"这一轮的检索到底用的哪句话"。抠不出来就如实写"没抠出来"。
+        LOG.info("感知层：事=「%s」（检索用这句；抠不出来就退回用「我」）",
+                 str(_per.get("event_what") or "（没抠出来）")[:60])
         LOG.info("感知层：动了命=%s ｜ 向=%s ｜ 读法=%s ｜ 模型原话=%s",
                  "、".join(_per.get("touches_life") or []) or "无",
                  _per.get("direction") or "（没挑出来）", _per.get("parsed_by"),
@@ -10379,8 +10411,23 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     _inner_material = _imx.render()
                 except Exception:      # noqa: silent-ok
                     _inner_material = ""
+            # **思维流的事实块**（[此刻的事实] 当前话题/用户说过/它自己说过…）——
+            # 【2026-09-18 接上：用户点出的缺口】这个 `text` **以前一次都没进过 context**：
+            #   主流程只用了它的 `tokens` 与 `temp`，块本身被丢掉了（实测：`_mind` 除了
+            #   赋值那两行，后面再也没有被读过）。而它的内容（原话）是真的 ——
+            #   按"只给事实"改完之后，它该被接进去。
+            _mind_material = ""
+            try:
+                _mind_material = str((_mind.get("block") or {}).get("text") or "")
+                if _mind_material:
+                    LOG.info("思维流：事实块已接进 system（%d token）｜%s",
+                             int((_mind.get("block") or {}).get("tokens") or 0),
+                             _mind_material.replace("\n", " / ")[:90])
+            except Exception as _e:      # noqa: silent-ok — 接不上不许影响回答
+                LOG.debug("思维流事实块接入失败（忽略）：%s", _e)
+                _mind_material = ""
             sys_text = (_wake_text + _eyc_text + system_for_intent(intent, user_input=user_input)
-                        + _self_material + _raw_text + _inner_material)
+                        + _self_material + _raw_text + _inner_material + _mind_material)
             # ================== 极限补刀（模块 10）· 真正接入 ==================
             # 【为什么必须在这里接 —— 接入验收发现的真问题】
             #   `core/boost/` 七个模块各自写好了、自测全绿（195/195），
@@ -10738,6 +10785,37 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         for h in _hist:
             messages.append({"role": "user" if h["role"] == "用户" else "assistant",
                              "content": h["content"]})
+        # ---- 它心里刚想的（接回给它自己）----
+        # 【为什么放在这里，而不是紧跟在 system 后面】
+        #   心那一句是"**刚刚**心里冒出来的"，必须**紧挨着生成位置**才接得上 ——
+        #   这正是下面那段 prefill 用血换来的教训（原文：被埋在好几轮历史之前，
+        #   "模型根本接不上它…续写的语义是接着这半句往下写，它必须紧挨着生成位置"）。
+        #   写在 system 后面 = 埋进摘要与历史之前 = 等于没接。
+        # 【判据与"本轮到底起没起心"】都在 `_heart_back_for_messages` 的说明里。
+        try:
+            _hb = _heart_back_for_messages()
+            if _hb:
+                messages.append(_hb)
+                LOG.info("心接回：心里那句已作为 assistant 一条接回去 ｜ %s", _hb["content"][:70])
+        except Exception:      # noqa: silent-ok — 接不上也不许影响回答
+            pass
+        # ---- 「这事儿我心里有印象」（feeling_memory 认出来了 → 也接回给它自己）----
+        # 【为什么】`psyche.arise` 里早就调了 `feeling_memory.impression_of()`，算出来的
+        #   `note`（例：「像以前那次（0.85）：被骂的时候」）**只在"起得更快"用了**
+        #   （base 0.55→0.80），**没进 system、也没接回 messages** ——
+        #   它有印象，却不知道自己有印象。
+        # 【判据】认出来（familiar=True）且有 note 才加；note **原样搬**，载体不加工。
+        # 【位置】在「我心里在想」那条**之后**、user 之前（紧挨生成位置，和心接回同一个道理）。
+        try:
+            from core import feeling_memory as _FM
+            _fam = _FM.impression_of(user_input_ctx)
+            if _fam.get("familiar") and _fam.get("note"):
+                messages.append({"role": "assistant",
+                                 "content": "（这事儿我心里有印象：%s）" % str(_fam["note"])[:80]})
+                LOG.info("feeling_memory：这事它认出来了 → 已接回 ｜ %s",
+                         str(_fam["note"])[:70])
+        except Exception:      # noqa: silent-ok — 认不出来或模块不在，都不许影响回答
+            pass
         messages.append({"role": "user", "content": _current})
         # ---- 引导续写（prefill）**必须放在最后一条** ----
         # 【原来放错了位置，等于没放 —— 这是实测挖出来的】

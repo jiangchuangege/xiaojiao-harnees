@@ -170,6 +170,24 @@ def form(pref_text, from_heart=""):
     p = str(pref_text or "").strip()
     if not p:
         return {"ok": False, "why": "它没回看出什么来 —— 那就不算有偏好"}
+    # ★ **跨轮去重（2026-09-18 加）**：跟**已存的 formed** 比，太像就不重复写。
+    # 【为什么】原来的去重只在 `xiaojiao_app.py` 那一侧、而且只跟**这一簇的素材**比
+    #   （`said not in (c.get("examples") or [])`）。同一颗心起两轮、每轮攒够 4 条就回看一次，
+    #   于是**同一句 formed 会被写很多遍** —— 实测存量 17 条里「摸到两个红球」11 条、
+    #   「数字在眼前转」5 条。
+    # 【判据】复用本模块已有的 `SIMILAR = 0.75`（向量余弦，算不出来退回字面重合）——
+    #   **不新定阈值**。相似 → **不写**（不是覆盖：它的旧记录是它当时说的话，不该被改）。
+    # 【已有存量不动】历史那 17 条不去重、不删（那是"当时它说过的话"，改它就是改写历史）。
+    try:
+        for old in preferences():
+            if _sim(p, str(old.get("pref") or "")) >= SIMILAR:
+                return {"ok": False,
+                        "why": "回看出的这句话跟已有偏好太像（≥%.2f），不重复写：%s"
+                               % (SIMILAR, str(old.get("pref"))[:40])}
+    except Exception:      # noqa: silent-ok — 去重读不出来也不许把"记偏好"整条弄没
+        # 本模块**没有引入 logging**（保持能独立 import、不依赖主程序）—— 所以这里不写日志，
+        # 只如实降级：去重失败就照旧写入，绝不因此把"记偏好"整条弄没。
+        pass
     rec = {"ts": time.time(), "kind": "formed", "pref": p[:200],
            "from_heart": str(from_heart or "")[:200]}
     _append(rec)

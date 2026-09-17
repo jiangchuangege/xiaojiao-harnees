@@ -25,6 +25,8 @@
     闲聊需要**多样**（0.8）——温度低会每次都回同一个腔调（正是用户抱怨的"两次回答一样"）；
     其余取 0.5。这不是"调参玄学"：两端的失败模式都很明确（见上）。
 """
+import re
+
 from .state import TONE_CN, TONES
 
 # 注入预算：需求要求 ≤500 token。中文按 1.5 token/字估（与 app 里同一把尺子），
@@ -73,24 +75,31 @@ def temperature_for(intent="chat", text="", tone="neutral"):
 
 
 def build_block(st, text="", intent="chat"):
-    """把状态编成一段**轻量**提示词。返回 `{"text","tokens","used","temp"}`。
+    """把状态编成一段**只给事实**的轻量提示词。返回 `{"text","tokens","used","temp"}`。
 
-    内容顺序（重要：越靠前模型越当回事）：
-      ① 行为指令（"接着刚才那条线"）—— 这是这个模块存在的意义
-      ② 当前话题
-      ③ 对用户的理解（当下判断）
-      ④ 刚才在想什么（最近 2~3 条）
-      ⑤ 没说出口的话（有才写）
-      ⑥ 悬而未决的问题（有才写）
-    超过预算时**从后往前砍**：先丢"悬而未决"，再丢"没说出口"，
-    最后才动"话题/理解"—— 因为①②③是"接着聊"的根，不能先没。
+    【2026-09-18 改（用户定的标准：模型自己感知 = 真；载体写好词句 = 假）】
+      改之前这里是**载体命名的框架 + 一条行为指令**：
+        「【你刚才在想什么（接着这条线往下说，不要重新开始）】」
+        「· 当前在聊：… · 你对用户的了解：… · 你刚才在想：… · 你上次有没说完的话：…
+         · 用户还悬着的问题：… · 当前语气：…」
+        「（这是你自己的思路，不是要复述的内容；自然接着往下走就行，别把这些当答案念出来。）」
+      —— 标题是载体起的、语气是载体命名的、连"该怎么用"都是载体交代的。
+      现在只给事实：
+        · **值里的载体句式一律剥掉**：`update.py` 存的是
+          `聊到「X」时我回应了：Y` / `没说完：Y` —— 前半个是载体写的框，后半个才是它自己的话，
+          这里只留后半（原样，不改写）。
+        · **标题框 / 语气命名 / 行为指令全删**（"接着往下说"这类是载体教它怎么说话）。
+    【保留的】预算裁剪、`temp` 的算法（那是数值，不是词句）、字段本身。
+    【仍然只给事实与归属】每条事实都标明**是谁说的**（用户说过 / 它自己说过）——
+      这个项目上一课就是"把工具给的、说成用户说的"，归属必须写清。
     """
     st = st or {}
     topic = str(st.get("current_topic") or "").strip()
-    und = [str(x)[:40] for x in (st.get("user_understanding") or [])][-4:]
-    thoughts = [str(x)[:70] for x in (st.get("recent_thoughts") or [])][-3:]
-    unsaid = [str(x)[:50] for x in (st.get("unsaid") or [])][-2:]
-    opens = [str(x)[:40] for x in (st.get("open_questions") or [])][-3:]
+    _frame = re.compile(r"^(?:聊到「[^」]*」时我回应了：|没说完：)")
+    und = [_frame.sub("", str(x))[:40] for x in (st.get("user_understanding") or [])][-4:]
+    thoughts = [_frame.sub("", str(x))[:70] for x in (st.get("recent_thoughts") or [])][-3:]
+    unsaid = [_frame.sub("", str(x))[:50] for x in (st.get("unsaid") or [])][-2:]
+    opens = [_frame.sub("", str(x))[:40] for x in (st.get("open_questions") or [])][-3:]
     tone = st.get("tone_state") if st.get("tone_state") in TONES else "neutral"
     temp = temperature_for(intent, text, tone)
 
@@ -99,22 +108,17 @@ def build_block(st, text="", intent="chat"):
         return {"text": "", "tokens": 0, "used": False, "temp": temp}
 
     def compose(t, u, th, un, op):
-        lines = ["【你刚才在想什么（接着这条线往下说，不要重新开始）】"]
+        lines = ["[此刻的事实]"]
         if t:
-            lines.append("· 当前在聊：%s" % t)
+            lines.append("当前话题：%s" % t)
         if u:
-            lines.append("· 你对用户的了解：%s" % "；".join(u))
+            lines.append("用户说过：%s" % "；".join(u))
         if th:
-            lines.append("· 你刚才在想：")
-            lines += ["  - " + x for x in th]
+            lines.append("它自己说过：%s" % "；".join(th))
         if un:
-            lines.append("· 你上次有没说完的话：%s" % "；".join(un))
+            lines.append("没说完的：%s" % "；".join(un))
         if op:
-            lines.append("· 用户还悬着的问题：%s" % "；".join(op))
-        if tone != "neutral":
-            lines.append("· 当前语气：%s" % TONE_CN.get(tone, tone))
-        lines.append("（这是你自己的思路，不是要复述的内容；"
-                     "自然接着往下走就行，别把这些当答案念出来。）")
+            lines.append("用户的问题：%s" % "；".join(op))
         return "\n".join(lines)
 
     text_out = compose(topic, und, thoughts, unsaid, opens)
@@ -130,3 +134,4 @@ def build_block(st, text="", intent="chat"):
         text_out = text_out[:MAX_CHARS]
     return {"text": text_out, "tokens": estimate_tokens(text_out),
             "used": bool(text_out), "temp": temp}
+

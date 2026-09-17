@@ -34,8 +34,8 @@ flowchart TB
         R3{"原始余弦 ≥ threshold 0.6？"}
         DROP["丢弃这一条"]
         R4["时间衰减只参与排序<br/>7 天内 ×1.0 · 30 天内 ×0.7 · 更早 ×0.4<br/>按 score × decay 排序取前 5"]
-        R5{"top1 领先 top2 小于 0.10？<br/>候选 ≥ 2 条"}
-        R6["rerank 载体二次判断<br/>让大脑挑出真相关的<br/>判官不可用或判为全不相关时全部保留"]
+        R5{"top1 领先 top2 小于 0.50？<br/>候选 ≥ 2 条"}
+        R6["rerank 载体二次判断<br/>让大脑挑出真相关的<br/>判官不可用 → 按 threshold 0.6 卡一道<br/>判为全不相关时保守保留"]
         R7["按 token 预算装进注入文本<br/>上限 2000 token，命中就至少给 1 条<br/>每条正文压到 240 字以内"]
         R8["说话人框定<br/>每行加前缀 用户曾说过："]
         R9["注入 system<br/>_MEMORY_INSTRUCTION + 相关记忆"]
@@ -104,14 +104,14 @@ flowchart TB
 | 追加落盘 | `core/memory_vec.py` → `_VS_PATH`（第 33 行）、`_pack`（第 42 行，base64 + float32 小端）、`reload`（第 87 行） |
 | 硬隔离 | `core/memory_vec.py` → `_assert_not_forbidden`（第 55 行），目标为 `self_learn/knowledge_vec.json` |
 | 向量后端 | `core/embedder.py` → `DIM = 512`（第 92 行）、`_resolve_backend`（第 269 行）、`_embed_minigpt`（第 212 行）、`_embed_hash`（第 253 行）、`_MAX_CHARS = 1024`（第 94 行）、`_CALIB_ALPHA = 0.15`（第 97 行） |
-| 读取入口 | `xiaojiao_app.py` → `_retrieve_memory`（第 1946 行）；参数由 `_memory_cfg`（第 1938 行）从 `CAP` 读取 |
-| 检索与阈值 | `core/retriever.py` → `retrieve`（第 110 行）、`TOP_K = 5` / `THRESHOLD = 0.6` / `MAX_TOKENS = 2000`（第 37–39 行） |
-| 时间衰减 | `core/retriever.py` → `decay`（第 80 行）、`DECAY_7D / DECAY_30D / DECAY_OLD`（第 40–42 行） |
+| 读取入口 | `xiaojiao_app.py` → `_retrieve_memory`（第 2065 行）；参数由 `_memory_cfg`（第 2016 行）从 `CAP` 读取 |
+| 检索与阈值 | `core/retriever.py` → `retrieve`（第 205 行）、`TOP_K = 5` / `THRESHOLD = 0.6` / `MAX_TOKENS = 2000`（第 37–39 行） |
+| 时间衰减 | `core/retriever.py` → `decay`（第 104 行）、`DECAY_7D / DECAY_30D / DECAY_OLD`（第 40–42 行） |
 | 余弦扫描 | `core/memory_vec.py` → `search_memory`（第 225 行） |
-| 载体二次判断 | `core/retriever.py` → `rerank`（第 242 行）、`RERANK_GAP = 0.10`（第 67 行）、`RERANK_MIN_HITS = 2`（第 57 行）、`RERANK_MAX = 5`（第 58 行）、`_ask_brain`（第 214 行） |
-| 注入文本装配 | `core/retriever.py` → `retrieve` 的装片循环（第 184–200 行）；`xiaojiao_app.py` → `_MEMORY_INSTRUCTION`（第 1931 行）、`sys_text` 拼接（第 7131–7133 行） |
-| 检索日志 | `core/retriever.py` → `log_retrieval`（第 284 行）、`_LOG_PATH`（第 33 行，`logs/memory_retrieval.log`） |
-| 使用回填 | `xiaojiao_app.py` → `_memory_used`（第 1990 行）、`_MEMORY_LAST`（第 1935 行）；`core/retriever.py` → `record_usage`（第 303 行）、`usage_rate`（第 316 行） |
+| 载体二次判断 | `core/retriever.py` → `rerank`（第 624 行）、`RERANK_GAP = 0.50`（第 72 行）、`RERANK_MIN_HITS = 2`（第 62 行）、`RERANK_MAX = 5`（第 63 行）、`_ask_brain`（第 310 行） |
+| 注入文本装配 | `core/retriever.py` → `retrieve` 的装片循环；`xiaojiao_app.py` → `_MEMORY_INSTRUCTION`（第 2005 行）、`sys_text` 拼接 |
+| 检索日志 | `core/retriever.py` → `log_retrieval`（第 747 行）、`_LOG_PATH`（第 33 行，`logs/memory_retrieval.log`） |
+| 使用回填 | `xiaojiao_app.py` → `_memory_used`（第 2124 行）、`_MEMORY_LAST`（第 2013 行）；`core/retriever.py` → `record_usage`（第 766 行）、`usage_rate`（第 779 行） |
 
 ## 3. 关键设计取舍：阈值判原始余弦，衰减只参与排序
 
@@ -125,10 +125,15 @@ flowchart TB
 
 - `search_memory` 传给 `retrieve` 的候选数是 `max(top_k × 3, top_k)`，即先取 15 条候选，
   再由 `retrieve` 排序截到 5 条；
-- 载体二次判断（`rerank`）只在"候选 ≥ 2 条且 top1 与 top2 的分差 < 0.10"时才触发。
+- 载体二次判断（`rerank`）只在"候选 ≥ 2 条且 top1 与 top2 的分差 < 0.50"时才触发。
   这个闸门按"精排能不能改变结果"开门：分差小正是反义/无关混进来的典型形状
-  （实测"我喜欢蓝色"0.90 与"我讨厌蓝色"0.88 只差 0.02）。判官不可用、解析不出来、
-  或判为"全部不相关"时，一律放行全部候选——保守保留，不因为判官挂了就丢记忆。
+  （实测"我喜欢蓝色"0.90 与"我讨厌蓝色"0.88 只差 0.02）。
+  **0.10 → 0.50 是 2026-09-18 改的**：0.10 太容易过（实测「3 条候选 → top1 领先 0.236，
+  排名不含糊 → 跳过精排」），精排实际上很少跑，噪音直接进 system。
+  代价是精排调用变多（每次约 400ms）。
+- 判官挂掉时分两种：**判官不可用**（返回空）→ 按 `THRESHOLD = 0.6` 卡一道、至少留 top1；
+  **判官说"全不相关"或给出解析不出的编号** → 保守保留全部候选（不因为判官偶尔矫枉过正就清空记忆）；
+  **`rerank` 自身抛异常** → 最外层兜底全部放行。三条都写进返回的说明里，可核对。
 
 ## 4. 三个真实踩坑
 
@@ -180,7 +185,7 @@ embedding 后端对比（同样 20 条记忆）的既有记录：
 | 库的硬隔离 | 对话记忆只能写 `logs/xiaojiao_memory_vec.jsonl`；指向 `self_learn/knowledge_vec.json` 会直接抛 `RuntimeError` |
 | 寒暄不检索 | `_retrieve_memory` 对纯寒暄直接返回空串（省预填充），有实义的问题照常检索 |
 | 字级表示的边界 | 主后端是字符级小脑模型，反义对（喜欢/讨厌 0.904）的余弦比近义对还高，0.6 的阈值挡不住这类情况，这是载体二次判断存在的原因 |
-| 二次判断是"加分项" | 它要调一次大脑（实测给检索加了数百毫秒），失败一律放行全部候选；`RERANK_GAP` 让它只在排名含糊时才触发 |
+| 二次判断是"加分项" | 它要调一次大脑（实测给检索加了数百毫秒）；判官不可用时按 `THRESHOLD` 卡一道（至少留 top1），判官可用而判「全不相关」时保守保留，`rerank` 自身异常时全部放行 —— 三种失败各有各的处置，都写进返回说明；`RERANK_GAP = 0.50` 让它只在排名含糊时才触发 |
 | 降级不中断 | 小脑不可用时自动退化到字符哈希向量（同 512 维）；检索、写库、回填任何一步失败都不影响这一轮对话 |
 | 冷启动 | 首次加载索引或小脑模型时单次检索会出现百毫秒到秒级的冷启动（旧记录里出现过 416.7ms / 538.0ms，本次复测里出现过单次 10.6s 的精排），之后同一进程内的检索是毫秒级；把"冷启动单次"与"稳态延迟"混在一起看会误判 |
 
@@ -195,3 +200,4 @@ embedding 后端对比（同样 20 条记忆）的既有记录：
 | 日期 | 版本 | 变更 |
 | --- | --- | --- |
 | 2026-09-14 | v1.0 | 重写：对齐代码 + 统一文风 |
+| 2026-09-18 | v1.0 | 随代码同步：`RERANK_GAP` 0.10 → 0.50；判官不可用时改为按 `THRESHOLD` 卡一道（至少留 top1）；行号引用全部重新核对 |

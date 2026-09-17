@@ -125,6 +125,13 @@ def md_files() -> list:
         rel = os.path.relpath(dirpath, ROOT).replace("\\", "/")
         if rel.startswith("plugins/xiaojiao-plugins-main"):     # 内置的第三方插件仓库，不是本项目文档
             continue
+        # 【2026-09-18 补】被 .gitignore 忽略的目录里的 .md **不是本项目文档**，不扫。
+        #   实测踩到：`llama-swap/`（vendor 目录，gitignored）里那份**第三方** README
+        #   指向它自带的 `docs/configuration.md` —— 那个目录没被一起拷进来，
+        #   于是本工具报"链接指向不存在的文件"，让 P8/check_docs 一直挂一条**不是本项目**的错。
+        #   这跟本文件既有的口径一致：引用**被 .gitignore 忽略的路径**时只降级成警告（见下面 `_is_gitignored` 那段）。
+        if rel and _is_gitignored(rel.rstrip("/") + "/"):
+            continue
         for fn in filenames:
             if fn.endswith(".md"):
                 out.append(os.path.join(dirpath, fn))

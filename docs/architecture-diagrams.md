@@ -803,38 +803,42 @@ flowchart TB
 
 ---
 
-## 图 22 · 印象两条链（血管 + 画像系统）**并存**在主流程里
+## 图 22 · 印象两条链：**合并后**（一个写入口、一段注入）
+
+> ⚠️ 2026-09-17 起这两条链**已经合并**（原来各写各的库、各注一段）。
+> 下图是**合并后**的样子；合并前的旧图与本图的历史关系记在
+> [`user-profile.md`](user-profile.md) 附二、附三。
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "14px"}, "flowchart": {"htmlLabels": true, "wrappingWidth": 330, "nodeSpacing": 44, "rankSpacing": 60, "useMaxWidth": true}}}%%
 flowchart TB
-    U["用户这一轮说的话"] --> R1["印象·血管<br/>xiaojiao_recall.recall()"]
+    U["用户这一轮说的话"] --> R1["印象·血管<br/>xiaojiao_recall.recall()<br/>只召回，不再写盘"]
     R1 -->|"触发词命中 → 快路<br/>不调模型，实测 0.00s"| S1["build_system()"]
     R1 -->|"没命中 → 慢路<br/>10 路血管投票，实测 3.4~5.8s"| S1
-    U --> R2["印象·画像系统<br/>xiaojiao_profile.recall()"]
-    R2 --> S2["build_system()"]
-    U --> R3["原来的画像注入<br/>core/user_profile.render(8)"]
-    S1 --> SYS["sys_text：三段并存，各带标签"]
-    S2 --> SYS
-    R3 --> SYS
+    U --> R2["印象·画像系统<br/>core/user_profile：唯一写入口<br/>recall() + render(8)"]
+    S1 --> MG["按 content 完全相等合并去重"]
+    R2 --> MG
+    R3["第三条链 xiaojiao_profile<br/>默认关掉（保留，没删）"] -.-> MG
+    MG --> SYS["sys_text：只注入一段<br/>logs/psyche/user_profile.jsonl 那一份"]
     SYS --> M["本地大脑 → 回复用户"]
     M --> W["回复已返回之后<br/>daemon 线程，不阻塞用户"]
-    W --> W1["血管写入链<br/>remember_from_message()"]
-    W --> W2["画像系统写入链<br/>remember()"]
-    W1 --> P1[("xiaojiao_profiles.json")]
-    W2 --> P2[("logs/psyche/profiles.json")]
+    W --> W1["血管写入链<br/>默认不再写盘（旧库已迁走）"]
+    W --> W2["画像系统写入链<br/>remember() —— 唯一写入口"]
+    W1 -.-> P1[("xiaojiao_profiles.json.bak<br/>旧库改名，没删")]
+    W2 --> P2[("logs/psyche/user_profile.jsonl")]
     style R1 fill:#4A90E2,color:#fff
     style R2 fill:#7ED321,color:#fff
     style R3 fill:#8C8C8C,color:#fff
+    style MG fill:#F5A623,color:#fff
     style W fill:#F5A623,color:#fff
 ```
 
-**这张图要说的一句话**：**只加不删** —— 原来那段画像注入留着，后面两条（血管 / 画像系统）
-各自召回、各自拼 system、各自写自己的库，**互不替换**。
-根子上的账很清楚：同一句话，两条链可以给出**不同**的印象（实测：血管注 1 条、画像系统注 2 条），
-所以不能拿一条当另一条的补丁。
+**这张图要说的一句话**：**先"只加不删"地并存，再按"分工是死的"合并** ——
+两条链都保留（函数、旧库文件一个都没删），但**写盘只剩一个入口**（画像系统），
+**注入只剩一段**（按 content 完全相等去重后的那一份）。
+合并是 2026-09-17 按用户指示做的，拆分口径见 [`user-profile.md`](user-profile.md) 附三。
 
-**实测（都是走 `/api/chat` 真对话）**：
+**实测（合并前那一轮，都是走 `/api/chat` 真对话 —— 如实标明是"合并前"）**：
 
 | 量的是什​么 | 结果 |
 |---|---|
@@ -842,6 +846,9 @@ flowchart TB
 | 印象**在回复里用没用上**（"那道门"） | **4/5 用上了**；负对照干净（问 1+1，回复是 2，没硬塞任何印象） |
 | 两条链的写入（异步、回复之后） | 每轮都跑，日志逐轮可查 |
 | system 体积代价 | 2348~2680 token（上限 19224）—— 两段印象约占其中一小部分 |
+
+> 合并之后再没有单独量过这张表（**如实标注：合并后的同口径数字本项目里没有**）；
+> 合并后的事实注入命中情况另有一轮实测，见 [`user-profile.md`](user-profile.md) 第 7 节（8 条里命中 1/7 → 挪位置后 2/7）。
 
 **如实标注两条**：
 

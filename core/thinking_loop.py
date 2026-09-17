@@ -70,17 +70,25 @@ def adjust_candidates(cands, state=None):
     kws = b.get("keywords") or ()
     if not items:
         return items, {"state": b["state"], "keywords": [], "moved": [], "note": "无候选，未重排"}
-    # ★ 心带模型走 v2：优先用心的原话算向量（心不查表，向量抓语义）
+    # ★ 心带模型走 v3（2026-09-18）：**检索用「事」，心用「我」** —— 两者分开。
+    # 【为什么】实测 10 个案例：拿「事」（这句话在说什么事）去检索 top1 命中 9/10，
+    #   拿「我」（心里起了什么）只有 5/10 —— **感受词通用会漂，事具体不漂**。
+    #   心的那句（我）照旧给心用；检索这一路要的是"这件事跟哪条记忆是同一件事"。
+    # 【抠不出「事」时】**退回用「我」**（`_rq = _ew or _q`）—— 不让检索因为少一栏就瘫掉。
     _q = ""
+    _ew = ""
     try:
-        _q = str(_psyche.colors().get("query") or "").strip()
-    except Exception:
+        _c = _psyche.colors() or {}
+        _ew = str(_c.get("event_what") or "").strip()
+        _q = str(_c.get("query") or "").strip()
+    except Exception:      # noqa: silent-ok — 读不到心的偏向就退回关键词检索，不让检索整条瘫掉
         pass
-    if not _q and not kws:
+    _rq = _ew or _q
+    if not _rq and not kws:
         return items, {"state": b["state"], "keywords": [], "moved": [], "note": "方向中性，未重排"}
     before = [id(c) for c in items]
-    # ★ 优先向量；没有心的话或向量失败 → 退回关键词
-    if _q:
+    # ★ 优先向量；没有「事/我」或向量失败 → 退回关键词
+    if _rq:
         try:
             from core import embedder as _EM
             import math as _math
@@ -89,10 +97,10 @@ def adjust_candidates(cands, state=None):
                 _na = _math.sqrt(sum(x*x for x in a))
                 _nb = _math.sqrt(sum(x*x for x in b_))
                 return _d/(_na*_nb) if _na and _nb else 0.0
-            _qv = _EM.embed(_q)
+            _qv = _EM.embed(_rq)
             if not _qv:
-                # 心的原话都拿不到向量 → 这个后端现在不能用，如实退回关键词（要求 3）
-                raise ValueError("心的原话拿不到向量")
+                # 「事/我」都拿不到向量 → 这个后端现在不能用，如实退回关键词（要求 3）
+                raise ValueError("检索那句话拿不到向量")
             _n = len(_qv)
 
             def _vec(c):
@@ -104,6 +112,16 @@ def adjust_candidates(cands, state=None):
                 return _e if _e else [0.0] * _n
 
             items = sorted(items, key=lambda c: -_cos(_qv, _vec(c)))
+            # **可复核**：这一轮检索到底用的哪句话（事 还是 我）—— 只加一行日志，不改任何判据。
+            # 为什么值得记：这次修的就是"事有没有真的接到检索上"这条线；不写它，
+            # 生产日志里就看不出来（`colors.event_what` 曾经永远是空，而日志上毫无痕迹）。
+            try:
+                import logging as _lg
+                _lg.getLogger("xiaojiao.thinking_loop").info(
+                    "心带模型走：检索用「%s」= %s",
+                    "事" if _ew else "我", _rq[:60])
+            except Exception:      # noqa: silent-ok — 日志写不出去不影响重排
+                pass
         except Exception:
             items = sorted(items, key=lambda c: -_score(c.get("text") if isinstance(c, dict) else c, kws))
     else:

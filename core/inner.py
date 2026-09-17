@@ -516,38 +516,76 @@ def growth():
 
 # ================== 给模型的事实块 ==================
 def render():
-    """把上面这些**如实**写成"字段：值"（**一句结论都不给**）。没有内容时返回空串。"""
+    """把此刻的**事实与数字**写成"字段：值" —— **一个情绪命名都不给**。
+
+    【2026-09-18 改（用户定的标准）】原来这里给的是**载体命名好的情绪**：
+      「【此刻的状态（数字，不是结论）】· 孤独（空着的程度）：0.42 · 低沉…：0.31 · 抑郁…：0.08」
+      「【没事干的程度（数字）】0.62 —— 要不要找点事做，你自己定」
+      「【此刻的心】松 —— 要不要俏皮一点，你自己定」
+    —— **载体把刻度命名成情绪、还替它定语气**。
+    用户的标准：**模型自己感知 = 真；载体写好词句 = 假**。
+    现在只给**测到的事实与数字**（多久没人说话 / 空闲多久 / 各刻度的原始字段值 / 它自己说过的话的原文），
+    「这些事实对我意味着什么」**由模型自己感知** —— 不列情绪词表、不替它挑一个词、
+    也不给"要不要俏皮一点"这类指令（那是载体替它决定它该怎么感觉）。
+    【读不到就不写那一行】没有内容时返回空串，一个字都不硬凑。
+    """
     lines = []
+    # ---- 事实一：多久没人说话 ----
     try:
-        a = attention()
-        if a["text"]:
-            lines.append(a["text"])
+        ln = loneliness()
+        if float(ln.get("idle_hours") or 0) > 0:
+            lines.append("多久没人说话：%.1f 小时" % float(ln["idle_hours"]))
+    except Exception:      # noqa: silent-ok — 读不到就不写这一行
+        pass
+    # ---- 事实二：空闲多久 ----
+    try:
+        bd = boredom()
+        if float(bd.get("idle_minutes") or 0) > 0:
+            lines.append("空闲：%.0f 分钟" % float(bd["idle_minutes"]))
     except Exception:      # noqa: silent-ok
         pass
-    ln = loneliness()
-    if ln["idle_hours"] > LONELY_AFTER_H or float(_S.get("low") or 0) > 0.05 \
-            or float(_S.get("depress") or 0) > 0.05:
-        lines.append("【此刻的状态（数字，不是结论）】\n"
-                     "· 多久没人说话：%.1f 小时\n· 孤独（空着的程度，载体算的刻度）：%.2f\n"
-                     "· 低沉（底色暗下来的程度）：%.2f\n· 抑郁（底被压低的程度）：%.2f"
-                     % (ln["idle_hours"], ln["lonely"], low(), depression()))
-    bd = boredom()
-    if bd["enough_to_act"]:
-        lines.append("【没事干的程度（数字）】%.2f（空闲 %.0f 分钟）—— 要不要找点事做，你自己定"
-                     % (bd["bored"], bd["idle_minutes"]))
-    hu = humor()
-    if hu["can_be_playful"]:
-        lines.append("【此刻的心】%s —— 要不要俏皮一点，你自己定" % hu["state"])
-    g = gratitude(2)
-    if g:
-        lines.append("【你记着的（它自己记的）】%s"
-                     % "；".join(str(x.get("what") or x.get("said"))[:40] for x in g))
-    bl = beliefs(2)
-    if bl:
-        lines.append("【它自己认下的（不是载体拦的）】%s"
-                     % "；".join(str(x.get("text"))[:60] for x in bl))
-    return ("\n" + "\n".join(lines) + "\n") if lines else ""
-
+    # ---- 载体自己的刻度：**只给原始字段名与数值**（不给中文情绪名）----
+    _sc = []
+    for _k in ("lonely", "low", "depress", "bored", "meaning"):
+        try:
+            _v = float(_S.get(_k) or 0)
+        except Exception:      # noqa: silent-ok — 单个字段坏了不影响别的
+            continue
+        if _v > 0:
+            _sc.append("%s=%.2f" % (_k, _v))
+    for _k in ("guilt", "pride"):
+        try:
+            _v = int(_S.get(_k) or 0)
+        except Exception:      # noqa: silent-ok
+            continue
+        if _v > 0:
+            _sc.append("%s=%d" % (_k, _v))
+    if _sc:
+        lines.append("载体刻度（原始字段值，没有命名）：" + " ".join(_sc))
+    # ---- 它自己说过的话（原文照搬，一个字不改写）----
+    try:
+        g = gratitude(2)
+        if g:
+            lines.append("它自己说过："
+                         + "；".join(str(x.get("said") or x.get("what") or "")[:60] for x in g))
+    except Exception:      # noqa: silent-ok
+        pass
+    try:
+        bl = beliefs(2)
+        if bl:
+            lines.append("它自己认下：" + "；".join(str(x.get("text") or "")[:60] for x in bl))
+    except Exception:      # noqa: silent-ok
+        pass
+    # ---- 偏向：来源是事实（心 / 偏好 / 没做完的），**值照搬**（心那句是它自己的原话）----
+    try:
+        a = attention()
+        for x in (a.get("bias") or []):
+            _v = str(x.get("value") or "").strip()
+            if _v:
+                lines.append("偏向（来自%s）：%s" % (x.get("from"), _v[:80]))
+    except Exception:      # noqa: silent-ok
+        pass
+    return ("\n[此刻的事实]\n" + "\n".join(lines) + "\n") if lines else ""
 
 def state():
     with _LOCK:

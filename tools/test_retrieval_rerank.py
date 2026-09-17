@@ -62,15 +62,33 @@ def main():
     keep, note = R.rerank("问我喜欢什么", H3, judge=lambda p: "答案：1。因为…")
     ck("判官夹带解释也能解析出编号", [h["id"] for h in keep] == ["1"], [h["id"] for h in keep])
 
-    print("\n[二] 失败路径：一律放行（**这类比上面重要**）")
+    print("\n[二] 失败路径：判官挂了时怎么处置（**这类比上面重要**）")
+    # 【2026-09-18 改口径】这一节原来写的是"一律放行"。现在**分两种**：
+    #   · 判官不可用（返回空）→ **不再全部放行**，按 THRESHOLD 卡一道，至少留 top1；
+    #   · 判官可用但判「全不相关」/ 给出越界编号 → 仍保守保留（这条没改）。
+    #   · 本函数自己抛异常 → 最外层 except 全部放行（这条也没改）。
+    # H3 三条分数都 ≥ 0.6，所以下面两条仍然全留 —— 但**留的原因变了**（是"够阈值"，不是"全放行"），
+    # 所以再补一条低分候选的用例，把"真的在卡"钉住。
     keep, note = R.rerank("q", H3, judge=lambda p: None)
-    ck("判官不可用 → 全部放行", len(keep) == 3, "%d 条 · %s" % (len(keep), note))
+    ck("判官不可用 + 三条都够阈值 → 三条都留（原因：分数够，不是「全放行」）",
+       len(keep) == 3, "%d 条 · %s" % (len(keep), note))
+    ck("并且如实写明是按阈值卡的", "按阈值" in note, note)
+
+    H_MIX = hits(("相关的", 0.90), ("也相关", 0.66), ("不相关", 0.31))
+    keep_m, note_m = R.rerank("q", H_MIX, judge=lambda p: None)
+    ck("判官不可用 + 有低分噪音 → **0.31 那条真的被卡掉**（改动核心）",
+       [h["id"] for h in keep_m] == ["1", "2"], "%d 条 · %s" % (len(keep_m), note_m))
+
+    H_LOW = hits(("甲", 0.40), ("乙", 0.30))
+    keep_l, note_l = R.rerank("q", H_LOW, judge=lambda p: None)
+    ck("判官不可用 + 全低于阈值 → **至少留 top1**（不空手而归）",
+       [h["id"] for h in keep_l] == ["1"], "%d 条 · %s" % (len(keep_l), note_l))
 
     def boom(p):
         raise RuntimeError("judge down")
 
     keep, note = R.rerank("q", H3, judge=boom)
-    ck("判官抛异常 → 全部放行", len(keep) == 3, "%d 条 · %s" % (len(keep), note))
+    ck("判官抛异常 → 最外层兜底，全部放行（这条没改）", len(keep) == 3, "%d 条 · %s" % (len(keep), note))
 
     keep, note = R.rerank("q", H3, judge=lambda p: "无")
     ck("判官判「全不相关」→ **保守保留**（不轻易清空记忆）",
