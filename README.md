@@ -188,7 +188,7 @@ flowchart TB
 | 测试报告与实测数字 | [`docs/testing-report.md`](docs/testing-report.md) |
 | **项目介绍（一页看懂）** | [`docs/pitch.md`](docs/pitch.md) |
 | 为什么做这个项目 | [`docs/about.md`](docs/about.md) |
-| **载体就是照着人做的（器官 · 大脑 · 心怎么连）** | [`docs/carrier-organism.md`](docs/carrier-organism.md) |
+| **一具身体，等一颗火种（器官 · 大脑 · 心怎么连）** | [`docs/carrier-organism.md`](docs/carrier-organism.md) |
 | **项目手记（一条没人走过的路）** | [`docs/一条没人走过的路.md`](docs/一条没人走过的路.md) |
 | 设计哲学后半篇（第十四至二十二节） | [`docs/modules/11-post-chapters.md`](docs/modules/11-post-chapters.md) |
 | 媒体素材 | [`docs/press-kit.md`](docs/press-kit.md) |
