@@ -1,5 +1,8 @@
 # llama-swap 配置 —— 小焦多大脑热切换
 # llama-swap 监听 8080，按 model 名把请求路由到对应 upstream(动态端口 ${PORT})，按需加载/卸载 → 秒级切换、省显存。
+# 全局：llama-swap 等 upstream 变健康的上限（秒）。默认 120 ——
+# 实测 deepseek-v4 首次加载要 120.6 秒，正好被默认值卡死在门外（报 health check timed out）。
+healthCheckTimeout: 300
 models:
   xiaojiao:
     cmd: C:/llama/llama-server.exe --port ${PORT} --model C:/llama/xiaojiao1.0-4B.gguf -c 20000 --reasoning off
@@ -13,3 +16,7 @@ models:
   # deepseek:
   #   cmd: ... --port ${PORT} --model <deepseek.gguf>
   #   ttl: 0
+  deepseek-v4:
+    cmd: "C:/llama/llama-server.exe --port ${PORT} --model G:/moxing__xiaojiao/推理模型/DeepSeek-V4-Pro-Qwen3.5-4B-MTP-Q8_0.gguf -c 20000 --reasoning off"
+    ttl: 0
+    useModelName: deepseek-v4

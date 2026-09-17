@@ -182,6 +182,14 @@ def start_neko():
 def start_llama_swap():
     """自动启动 llama-swap(多大脑热切换管理器)。独立端口9292, 不冲突直接大脑8080。
     路径自动探测(不写死, 兼容移动位置): 环境变量 → 项目目录 → 全盘扫描。"""
+    # ⚠️ 测试克隆 / CI **不许**起 llama-swap（真实事故）：克隆目录里也有一份
+    #    llama-swap.yaml，一旦它把 9292 占了，真正的小焦之后每次启动都会因为
+    #    "9292 已被占用"而跳过自己的配置 —— 大脑就停在那份**克隆的旧配置**上，
+    #    用户新加的模型在里面根本不存在（选了就 404/500，看着就是"用不了"）。
+    #    `tools/test_fresh_clone.py` 会带上这个环境变量。
+    if os.environ.get("XIAOJIAO_NO_SWAP") == "1":
+        print("  [llama-swap] 按 XIAOJIAO_NO_SWAP=1 跳过（测试克隆不抢 9292）")
+        return None
     env_exe = os.environ.get("XIAOJIAO_LLAMA_SWAP", "")
     cands = [env_exe] if env_exe else []
     _here = os.path.dirname(os.path.abspath(__file__))

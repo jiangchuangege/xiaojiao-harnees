@@ -2775,9 +2775,25 @@ def _local_brain_model(force=False):
         try:
             r = requests.get(base + "/models", timeout=5)
             if r.status_code == 200:
-                ids = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
-                # llama-swap 里 coder 是写代码用的，聊天优先用它之外的模型
-                pick = next((i for i in ids if "coder" not in str(i).lower()), (ids[0] if ids else ""))
+                data = r.json().get("data") or []
+                ids = [m.get("id") for m in data if m.get("id")]
+                # ---- 挑哪个模型：**必须跟"这一轮真正在用的大脑"一致** ----
+                # 【为什么这条顺序是硬要求，不是优化】llama-swap 是"一次只在显存里放一个"的，
+                # 8GB 卡上装的是 4GB 级的模型 —— **换一次模型要 2~4 分钟**（现场读盘）。
+                # 原来这里是"挑第一个非 coder"，在 deepseek-v4 出现在 /v1/models 之后，
+                # 它挑中的就是 deepseek-v4；而 app 自己的大脑还是 xiaojiao ——
+                # 于是**印象那两条链每轮请求 deepseek-v4、app 自己请求 xiaojiao，
+                # 双方互相把对方换出显存，来回换载**，一句话要等好几分钟（真实事故）。
+                # 现在的顺序：① 配置里的那个大脑（最一致）→ ② 已经加载着的那个（最省事）
+                # → ③ 非 coder 的第一个 → ④ 列表第一个。
+                _want = str(globals().get("LLM_MODEL") or "")
+                _loaded = [m.get("id") for m in data
+                           if m.get("id")
+                           and str(((m.get("status") or {}).get("value")) or "").lower() == "loaded"]
+                pick = (_want if _want in ids else
+                        next((i for i in _loaded if "coder" not in str(i).lower()), "") or
+                        next((i for i in ids if "coder" not in str(i).lower()), "") or
+                        (ids[0] if ids else ""))
                 if pick:
                     _LOCAL_PROBE = {"at": time.time(), "model": pick, "base": base}
                     return pick
@@ -2850,6 +2866,20 @@ def _fallback_worthy(status):
 # 补偿第 3 项：云端"快切"阈值 —— 等 15 秒还不回就不再干等，直接交本地大脑。
 # （实测 Agnes 慢起来单次 60~100 秒；用户体感上"卡住"比"降级到本地"更糟。）
 CLOUD_TIMEOUT_S = 15
+
+# 本地大脑的单次请求超时。**为什么不是 90/120 秒**：本地大脑是 llama-swap 按需加载的，
+# 换到一个没在显存里的模型时，**第一次请求要等它把几 GB 的 gguf 读进来** ——
+# 实测 DeepSeek-V4-Pro-Q4B（4.29GB）首载 **120.6 秒**，走 llama-swap 那条路实测 **237 秒**。
+# 原来的 90/120 秒正好卡在门外，用户看到的是"选中了新模型 → 一句也答不出来"（真实事故）。
+# 可被 capabilities.local_timeout_s 覆盖（调小的代价：本地真卡住时要多等）。
+LOCAL_TIMEOUT_S = 300
+
+
+def _local_timeout_s():
+    try:
+        return max(30, int(CAP.get("local_timeout_s", LOCAL_TIMEOUT_S) or LOCAL_TIMEOUT_S))
+    except Exception:      # noqa: silent-ok — 配置写坏了就用默认值，不许因此挡住调用
+        return LOCAL_TIMEOUT_S
 
 
 def _heartbeat_mod():
@@ -3992,7 +4022,7 @@ def llm_chat(messages, temperature=None):
                "max_tokens": MAX_TOKENS}
     for _t in _llm_targets():
         _p = dict(payload, model=_t["model"])
-        resp, code, body = _llm_post(_t, _p, timeout=(90 if _t.get('local') else CLOUD_TIMEOUT_S))
+        resp, code, body = _llm_post(_t, _p, timeout=(_local_timeout_s() if _t.get('local') else CLOUD_TIMEOUT_S))
         if code == 200 and resp is not None:
             if _t["local"] and not _is_local_base(LLM_BASE):
                 _USED_LOCAL_FALLBACK.update({"on": True, "model": _t["model"], "reason": _LAST_LLM_ERROR})
@@ -4772,7 +4802,7 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
                    "max_tokens": (200 if lean else MAX_TOKENS),
                    "tools": ([] if lean else _build_tools(only=tools_subset))}
         try:
-            r, _code, _body = _llm_post(_t, payload, timeout=(120 if _t.get('local') else CLOUD_TIMEOUT_S))
+            r, _code, _body = _llm_post(_t, payload, timeout=(_local_timeout_s() if _t.get('local') else CLOUD_TIMEOUT_S))
             if _code != 200 or r is None:
                 _note_llm_error("chat+tools", _code, _body)      # 真实原因必须留痕
                 if (_code is None or _fallback_worthy(_code)) and _ti + 1 < len(_targets):
@@ -10314,7 +10344,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             # 拿不到就把这一段当不存在，绝不影响回答（异常全部吞掉）。
             _recall_txt = ""
             try:
-                from xiaojiao_recall import recall as _rc_recall, build_system as _rc_build
+                from xiaojiao_recall import recall_with_hit as _rc_recall, build_system as _rc_build
                 _rc_imps = _rc_recall(user_input)
                 if _rc_imps:
                     _recall_txt = "\n" + _rc_build(_rc_imps) + "\n"
@@ -10327,6 +10357,29 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("画像召回：空（按无印象版 system 正常走）")
             except Exception as _e:      # noqa: silent-ok — 召回层不在也不能影响回答
                 LOG.debug("画像召回接入失败（忽略）：%s", _e)
+            # ---- 【固化队列】扫画像库，够格进队列（跟当前这轮无关，是维护动作）----
+            # 判据在 weight_layer 里：只看"时间+命中"两个事实，不判类别，不替模型做判断。
+            # 完全独立：出错不影响上面任何一步。
+            try:
+                from core import weight_layer as _WL
+                from xiaojiao_recall import load_profiles as _load_pf
+                _now = __import__("time").time()
+                _before = _WL.stats().get("pending", 0)      # 入队前先数一次（只数，不动队列）
+                for _p in _load_pf():
+                    _rec = {
+                        "kind": _p.get("type") or _p.get("kind"),
+                        "content": _p.get("text") or _p.get("content"),
+                        "ts": _p.get("ts"),
+                        "hit_count": _p.get("hit_count", 0),
+                        "id": _p.get("id"),
+                    }
+                    _ok, _why = _WL.should_solidify(_rec, now=_now)
+                    if _ok:
+                        _WL.enqueue(_rec)
+                _after = _WL.stats().get("pending", 0)
+                LOG.info("固化队列：本轮入队 %d 条（队列 pending 总数 %d）", _after - _before, _after)
+            except Exception as _e:      # noqa: silent-ok — 固化层不在也不影响回答
+                LOG.debug("固化队列扫描失败（忽略）：%s", _e)
             # ---- 【接入·画像系统】`xiaojiao_profile.py`（与上面那条**并存**，不替换、不互斥）----
             # 两条是**同一件事的两个机制**：`xiaojiao_recall` 是"血管"那条，
             # `xiaojiao_profile` 是后面那套（写入链 + 10 路血管 + 自己的 JSON 库）。
@@ -12938,8 +12991,77 @@ def _save_control(brain=None, models=None):
     reload_control()
 
 
+def _dead_local_models():
+    """从 llama-swap.yaml 里认出**模型文件已经不在了**的那些 id —— 它们不该出现在下拉里。
+
+    为什么必须挡（真实事故）：`llama-swap.yaml` 里留着一条 `coder`，而它的
+    `--model G:/模型文件/工具调用模型/Qwen3-8B-Q4_K_M.gguf` **那个文件早就不在了**。
+    llama-swap 照样把它列进 /v1/models（状态 unloaded），于是：
+      · 自动检测会把它补进下拉 → 用户点了它 → 请求返回 500 upstream command exited prematurely；
+      · 更糟的是"本地模型没就绪时随手挑一个"的老逻辑正好挑中它（ids[0]）→ 整个对话全废。
+    这里只读 yaml 的 cmd 行、只看**文件在不在**（一个事实），不猜别的；读不到 yaml 就返回空集，
+    退化成"照单全收"（不因为解析失败而少给用户模型）。
+    """
+    dead = set()
+    try:
+        yp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "llama-swap.yaml")
+        cur = None
+        for ln in open(yp, encoding="utf-8", errors="replace"):
+            m = re.match(r"^  ([A-Za-z0-9_.\-]+):\s*$", ln)      # 二级键 = 模型 id
+            if m:
+                cur = m.group(1)
+                continue
+            if cur and "--model" in ln:
+                mm = re.search(r"--model\s+([^\s\"]+)", ln)
+                if mm and not os.path.exists(mm.group(1).strip()):
+                    dead.add(cur)
+                cur = None
+    except Exception as e:      # noqa: silent-ok — 解析不了就当没有死模型，绝不因此少给模型
+        LOG.debug("读 llama-swap.yaml 失败（忽略）：%s", e)
+    return dead
+
+
+def _sync_local_models():
+    """把**本地大脑真正提供的模型**同步进下拉列表（自动检测，缺什么补什么）。
+
+    为什么必须有它：llama-swap 一旦重启/换配置，它新认识的模型只在它自己的 /v1/models 里，
+    界面下拉里没有 —— 用户就得到处问"我加的模型去哪了"（真实投诉）。
+    这里每次列模型时对一次账：**只补、不改、不删**（用户自己填的条目一个字不动）。
+    """
+    base = (CONTROL.get("brain", {}).get("api", {}).get("base_url", "")
+            or "http://127.0.0.1:9292/v1")
+    if not _is_local_base(base):
+        return []
+    try:
+        r = requests.get(base.rstrip("/") + "/models", timeout=3)
+        if r.status_code != 200:
+            return []
+        ids = [str(m.get("id")) for m in (r.json().get("data") or []) if m.get("id")]
+    except Exception as e:      # noqa: silent-ok — 本地没起就不补，绝不能因此挡住列模型
+        LOG.debug("本地模型自动检测失败（忽略）：%s", e)
+        return []
+    dead = _dead_local_models()
+    if dead:
+        LOG.info("本地模型自动检测：跳过模型文件已不在的 %s", "、".join(sorted(dead)))
+    models = list(_get_models())
+    known = {str(m.get("model") or "") for m in models} | {str(m.get("name") or "") for m in models}
+    added = [mid for mid in ids if mid not in known and mid not in dead]
+    for mid in added:
+        models.append({"name": mid, "engine": "llama",
+                       "base_url": base, "api_key": "", "model": mid})
+    if added:
+        _save_control(models=models)
+        LOG.info("本地模型自动检测：从 %s 补进下拉 %d 个 → %s",
+                 base, len(added), "、".join(added))
+    return added
+
+
 @app.route("/api/models", methods=["GET"])
 def api_models():
+    try:                          # 自动检测放这里：界面每次拉下拉列表都会对一次账
+        _sync_local_models()
+    except Exception as e:        # noqa: silent-ok — 补列表失败不许影响"列出模型"本身
+        LOG.debug("本地模型自动检测异常（忽略）：%s", e)
     cur = None
     eng = BRAIN_ENGINE
     base = (CONTROL.get("brain", {}).get("api", {}).get("base_url", "") or "")
@@ -12967,7 +13089,13 @@ def _local_served_model(base_url, want):
         if r.status_code == 200:
             ids = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
             if ids and want not in ids:
-                return ids[0], ids
+                # ⚠️ **不许随手挑 ids[0]**：实测 llama-swap 返回的顺序是 coder 在前，
+                # 而那个 coder 的 gguf 早就不在了（请求它 = HTTP 500 upstream exited prematurely）。
+                # 后果是：用户"加了一个新模型"→ 被静默换成一个**坏模型** → 对话全废，
+                # 界面上还显示着他选的那个名字，完全看不出为什么（真实事故）。
+                # 跟 `_local_brain_model()` 用**同一条 policy**：聊天优先用非 coder 的。
+                pick = next((i for i in ids if "coder" not in str(i).lower()), ids[0])
+                return pick, ids
             if ids:
                 return want, ids
     except Exception as e:  # noqa: silent-ok — 探测失败就按原样用，绝不因对账而挡住切换
@@ -13044,6 +13172,12 @@ def api_model_select():
                 brain["api"] = {"base_url": base, "api_key": "", "model": model}
                 note = _cloud_key_problem(base, _resolve_llm_key(brain), model)   # 云端 Key 不通就当场说
             _save_control(brain=brain)
+            # ---- 切到本地模型时，**后台预热**：别让用户的第一句替我们等加载 ----
+            # 实测 DeepSeek-V4-Pro-Q4B 首载 120~237 秒（llama-swap 现场读 4.29GB gguf）。
+            # 不在切换时预热的话，用户"选中 → 立刻说话"必然吃一次超时，看着就是"用不了"。
+            if brain["engine"] == "llama":
+                _warmup_local_async(base or "http://127.0.0.1:9292/v1",
+                                    brain["api"].get("model") or "")
             return jsonify({"ok": True, "engine": brain["engine"], "name": name,
                             "model": brain["api"]["model"], "note": note})
     return jsonify({"ok": False, "error": "模型不存在"}), 404
@@ -13097,6 +13231,30 @@ def api_model_addlocal():
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 2529, e)
     return jsonify({"ok": True, "model_id": mid, "name": name, "note": "llama-swap 正在重启, 约10秒后可用"})
+
+
+def _warmup_local_async(base_url, model):
+    """后台预热一个本地模型：发一个 max_tokens=1 的空转请求，把"加载"这一步提前吃掉。
+
+    为什么必须后台 + 必须存在：llama-swap 按需加载，冷启动实测 **120~237 秒**（读 4.29GB gguf），
+    而用户在界面上"选中模型→立刻说话"之间只有几秒 —— 不预热的话第一句必超时，
+    表现就是"我加了模型但一句都用不了"。预热只花一次调用、不影响任何回答；
+    它失败也**只记日志**（比如模型文件本身是坏的，那是另一个问题，不该在这里拦）。
+    """
+    def _run():
+        try:
+            requests.post(base_url.rstrip("/") + "/chat/completions",
+                          json={"model": model, "messages": [{"role": "user", "content": "hi"}],
+                                "max_tokens": 1, "temperature": 0},
+                          timeout=_local_timeout_s())
+            LOG.info("本地模型预热完成：%s @ %s（加载已提前吃掉）", model, base_url)
+        except Exception as e:      # noqa: silent-ok — 预热失败不影响任何回答
+            LOG.info("本地模型预热未完成（%s @ %s）：%s —— 首次对话可能要等加载", model, base_url, e)
+    try:
+        import threading
+        threading.Thread(target=_run, name="xj-warmup", daemon=True).start()
+    except Exception as e:          # noqa: silent-ok — 连线程都起不来也不能影响切换
+        LOG.debug("预热线程启动失败（忽略）：%s", e)
 
 
 @app.route("/api/model/add", methods=["POST"])

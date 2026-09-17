@@ -191,6 +191,13 @@ def main():
     env["PYTHONUTF8"] = "1"
     env["XIAOJIAO_NEKO_AUTO"] = "0"
     env["PORT"] = str(port)
+    # ⚠️ **绝不许在克隆里起 llama-swap**（真实事故，上一轮踩的）：
+    #    克隆目录里也有一份 llama-swap.yaml，而 `start_llama_swap()` 看到 9292 空着就会
+    #    **用克隆那份配置**把它启起来，并一直占着 9292 —— 之后真正的小焦每次启动都
+    #    因为"9292 已占用"而跳过启动自己的配置，于是**大脑停在克隆的旧配置上**：
+    #    用户新加的模型在 llama-swap 里根本不存在，选它必然 404/500，表现就是"用不了"。
+    #    所以测试克隆一律只准起 web 服务，不准碰共享的大脑端口。
+    env["XIAOJIAO_NO_SWAP"] = "1"
     proc = None
     try:
         # ⚠️ 端口必须走 `--port` 参数，**不能只设 PORT 环境变量**：
