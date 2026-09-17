@@ -15,19 +15,32 @@ _MUSIC_DIR = os.path.join(_ROOT, "media", "music")
 
 
 def _free_vram():
-    """让出显存给音乐模型(卸载 llama 大脑)。"""
-    try:
-        import video_service.model_switch as ms
-        ms._llama_swap_unload("coder")
-        ms._llama_swap_unload("xiaojiao")
-    except Exception as e:
-        LOG.debug("忽略异常(%s:%d): %s", __file__, 16, e)
+    """让出显存给音乐模型：走**显存归属策略**（聊天模型让位，跑完必须还回去）。
+
+    【原来是错的，两个问题】
+      ① `for k in BRAINS: bm._full_stop(k)` —— **把每个大脑都按"视频"处理一遍**，
+         连 ComfyUI 一起停（`_full_stop` 当时不分类型）；
+      ② 而且**没有任何恢复**：生成完音乐，聊天模型永远躺在卸载状态，
+         用户下一句话要重新读盘（本机盘 5 秒，USB 盒上 120 秒）。
+    现在只做一件事：`use_gen("music")`（它内部会记下"该还给谁"），
+    跑完由 finally 里的 `done_gen("music")` 把聊天模型顶回显存。
+    """
     try:
         import brain_manager as bm
-        for k in list(bm.BRAINS.keys()):
-            bm._full_stop(k)
+        return bm.use_gen("music")
     except Exception as e:
-        LOG.debug("忽略异常(%s:%d): %s", __file__, 22, e)
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 16, e)
+        return None
+
+
+def _give_vram_back():
+    """音乐生成结束（**成功失败都要**）：功能模型退到内存待命，聊天模型回显存。"""
+    try:
+        import brain_manager as bm
+        return bm.done_gen("music")
+    except Exception as e:
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 16, e)
+        return None
 
 
 class MusicGeneration:
@@ -70,6 +83,9 @@ class MusicGeneration:
             return "✅ 音乐生成完成：\n[music]" + rel + "[/music]\n🎵 " + prompt + "（" + str(dur) + "秒）"
         except Exception as e:
             return "⚠️ 音乐生成失败：" + str(e)[:200]
+        finally:
+            # **成功、失败都必须把聊天模型还回显存**（原来这里什么都没有）
+            _give_vram_back()
 
 
 def get_plugin():

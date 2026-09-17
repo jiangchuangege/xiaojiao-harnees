@@ -13276,6 +13276,14 @@ def api_model_select():
             if brain["engine"] == "llama":
                 _warmup_local_async(base or "http://127.0.0.1:9292/v1",
                                     brain["api"].get("model") or "")
+                # 顺带把"这个模型在慢盘上、首载要多久"如实告诉用户（本地模型才量，云端不涉及）
+                try:
+                    _g = _model_path_in_swap_yaml(brain["api"].get("model") or "")
+                    _dn = _slow_disk_note(_g)
+                    if _dn:
+                        note = (note + "\n" if note else "") + _dn
+                except Exception as _e:      # noqa: silent-ok — 量不出来就不提示
+                    LOG.debug("慢盘提示失败（忽略）：%s", _e)
             return jsonify({"ok": True, "engine": brain["engine"], "name": name,
                             "model": brain["api"]["model"], "note": note})
     return jsonify({"ok": False, "error": "模型不存在"}), 404
@@ -13458,6 +13466,55 @@ def _lexical_hook(q, rows):
 
 # 前台优先：有用户请求在跑/刚跑完时，后台写入链要**让路**（见 _profile_recall_write_async）
 _REQ_INFLIGHT = {"n": 0, "last": 0.0}
+
+
+def _slow_disk_note(gguf_path):
+    """量一下这个模型文件所在的盘读多快，把"首载要多久"如实算给用户听。
+
+    【为什么值得做】实测同一台机器：`C:`（NVMe）**1029 MB/s** → 4.29GB 读进来约 4 秒；
+    `G:`（USB 硬盘盒，只跑到 USB2 速度）**37 MB/s** → 约 118 秒（实测加载 137 秒）。
+    差 28 倍，而用户从界面上**完全看不出来** —— 只会觉得"加了个模型之后小焦就废了"。
+    这里读 24MB 量一下速度（约 0.02~0.7 秒），把预计首载时间写进切换结果里。
+    """
+    try:
+        if not (gguf_path and os.path.exists(gguf_path)):
+            return ""
+        t0 = time.time()
+        with open(gguf_path, "rb") as f:
+            got = len(f.read(24 * 1024 * 1024))
+        dt = max(0.01, time.time() - t0)
+        mbps = got / dt / 1024 / 1024
+        size_gb = os.path.getsize(gguf_path) / (1024 ** 3)
+        est = size_gb * 1024 / max(mbps, 1)
+        if mbps >= 300:
+            return ""       # 够快，不用啰嗦
+        return ("⚠️ 这个模型文件读速只有 **%.0f MB/s**（%.1fGB → 首次加载约 %.0f 秒）。"
+                "把它放到本机盘（实测本机 NVMe 是 1000+ MB/s）能快 20 倍以上。"
+                % (mbps, size_gb, est))
+    except Exception as e:      # noqa: silent-ok — 量不出来就不提示，绝不影响切换
+        LOG.debug("读速探测失败（忽略）：%s", e)
+        return ""
+
+
+def _model_path_in_swap_yaml(model_id):
+    """从 llama-swap.yaml 里找出某个模型对应的 gguf 路径（找不到返回空串）。"""
+    try:
+        yp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "llama-swap.yaml")
+        cur = None
+        for ln in open(yp, encoding="utf-8", errors="replace"):
+            m = re.match(r"^  ([A-Za-z0-9_.\-]+):\s*$", ln)
+            if m:
+                cur = m.group(1)
+                continue
+            if cur and "--model" in ln:
+                mm = re.search(r"--model\s+([^\s\"]+)", ln)
+                if mm:
+                    if cur == model_id:
+                        return mm.group(1).strip()
+                    cur = None
+    except Exception as e:      # noqa: silent-ok — 解析不了就不提示
+        LOG.debug("读 llama-swap.yaml 失败（忽略）：%s", e)
+    return ""
 
 
 def _warmup_local_async(base_url, model):

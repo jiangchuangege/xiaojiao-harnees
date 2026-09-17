@@ -35,12 +35,25 @@ BRAINS = {
         "name": "云端视频大脑 (Agnes 免费)", "port": 0,
         "type": "cloud", "vram_gb": 0.0, "state": "OFF",
     },
+    "deepseek-v4": {  # 新增: Deepseek-V4
+        "name": "Deepseek-V4", "port": 9292,
+        "type": "llama", "vram_gb": 5.0, "state": "OFF",
+    },
+    # 音乐：不是独立进程，生成时在应用进程内加载 MusicGen（所以 type=inproc）。
+    # 登记它只是为了**显存归属**算得清：它跑的时候聊天模型让位，跑完聊天模型回来。
+    "music": {
+        "name": "音乐大脑 (MusicGen)", "port": 0,
+        "type": "inproc", "vram_gb": 2.0, "state": "OFF",
+    },
     # 未来扩展(示例, 加进 BRAINS 即可被调度):
     # "image": {"name":"图像大脑(SD3)","port":8189,"type":"comfy","vram_gb":4.0,"state":"OFF"},
     # "reason": {"name":"推理大脑(DeepSeek)","port":8081,"type":"llama","vram_gb":6.0,"state":"OFF"},
 }
 
-_lock = threading.Lock()
+# RLock（可重入）：策略函数（use_gen / done_gen / keep_chat_in_vram）在持锁期间会调用
+# wake()/sleep()，而它们内部也要拿这把锁 —— 用普通 Lock 会**自己把自己锁死**
+# （第一版就是 Lock，`done_gen("video")` 当场死锁，测试卡住不动）。
+_lock = threading.RLock()
 
 _CONTROL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xiaojiao_control.json")
 
@@ -177,8 +190,38 @@ def _start_comfy(b):
         return False
 
 
-def wake(brain_key, wait=10):
-    """唤醒大脑到显存(RUN)，并确保其它大脑让出显存。复用 video_service.model_switch 的真实控制。"""
+def wake(brain_key, wait=10, explicit=False):
+    """唤醒大脑到显存(RUN)，并确保其它大脑让出显存。复用 video_service.model_switch 的真实控制。
+
+    ⚠️ **聊天模型不许顶聊天模型**（用户给定的规则）：如果要把一个聊天模型放上显存，
+    而显存里已经坐着**另一个**聊天模型，则只有 `explicit=True`（用户在界面上明确选了它）
+    才允许 —— 否则**直接拒绝**。理由：两个聊天模型互顶，就是每一次对话都换一次模型，
+    每次换都要重新读盘（USB 盘上 2 分钟），表现就是"越用越慢、像坏了一样"。
+    功能模型不受这条限制（聊天模型顶功能模型是正常的，见 done_gen）。
+    """
+    b = BRAINS.get(brain_key)
+    if b is None:
+        return False
+    with _lock:
+        if is_chat(brain_key) and not explicit:
+            for k, v in BRAINS.items():
+                if k != brain_key and is_chat(k) and v.get("state") == "RUN":
+                    LOG.info("拒绝把聊天模型 %s 顶上来：显存里已经坐着聊天模型 %s（聊天模型不许顶聊天模型）",
+                             brain_key, k)
+                    return False
+        if is_chat(brain_key) and explicit:
+            # **用户在界面上明确换了聊天模型** → 被换下的那个退到内存（llama 系=卸载），
+            # 而且**不许它自己再顶回来**（它只会被下一次明确选择唤醒）。
+            for k, v in BRAINS.items():
+                if k != brain_key and is_chat(k) and v.get("state") in ("RUN", "WARM"):
+                    LOG.info("用户明确切到聊天模型 %s → %s 退到内存待命", brain_key, k)
+                    sleep(k)
+                    _full_stop(k)
+    return _wake_raw(brain_key, wait=wait)
+
+
+def _wake_raw(brain_key, wait=10):
+    """真正把大脑放上显存（内部用；对外走 `wake()` 以便过策略闸）。"""
     import sys, os as _os
     root = _os.path.dirname(_os.path.abspath(__file__))
     if _os.path.join(root, "video_service") not in sys.path:
@@ -193,7 +236,7 @@ def wake(brain_key, wait=10):
         # 聊天大脑上显卡; 其它温存大脑留在内存(切回快)
         ms.start_brain()     # 聊天大脑 -> 显卡
     else:
-        _start_llama(b) if b["type"] == "llama" else _start_comfy(b)
+        _start_any(b)
     b["state"] = "RUN"
     return is_running(brain_key)
 
@@ -207,20 +250,38 @@ def sleep(brain_key):
     return True
 
 
+def _start_any(b):
+    """按类型启动：llama→llama-server；comfy→ComfyUI；inproc（如 MusicGen）→ 不用启动（在进程内）。"""
+    t = (b or {}).get("type")
+    if t == "llama":
+        return _start_llama(b)
+    if t == "comfy":
+        return _start_comfy(b)
+    return None      # inproc：模型由生成代码自己加载，这里没有进程可起
+
+
 def _full_stop(brain_key):
-    """彻底卸载(OFF, 腾显存+内存): 新温存顶掉旧温存时调用——内存只允许一个。"""
+    """彻底卸载(OFF, 腾显存+内存): 新温存顶掉旧温存时调用——内存只允许一个。
+
+    ⚠️ **必须按类型分派**：原来不管什么类型都调 `stop_comfy()` ——
+    那会把 ComfyUI/视频大脑当替罪羊停掉（音乐那条链就是全 BRAINS 轮着 _full_stop，
+    等于把每个大脑都按"视频"处理一遍）。
+    """
     b = BRAINS.get(brain_key)
-    if b:
-        try:
-            import model_switch as _ms
-            if b.get("type") == "llama":
-                _mid = "coder" if brain_key == "coder" else "xiaojiao"
-                _ms._llama_swap_unload(_mid)
-            else:
-                _ms.stop_comfy()
-        except Exception as e:
-            LOG.debug("忽略异常(%s:%d): %s", __file__, 155, e)
-        b["state"] = "OFF"
+    if not b:
+        return True
+    t = b.get("type")
+    try:
+        import model_switch as _ms
+        if t == "llama":
+            _mid = b.get("useModelName") or ("xiaojiao" if brain_key == "chat" else brain_key)
+            _ms._llama_swap_unload(_mid)
+        elif t == "comfy":
+            _ms.stop_comfy()
+        # inproc（MusicGen 之类）：没有独立进程可停，权重由生成代码自己释放 —— 不碰 ComfyUI
+    except Exception as e:
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 155, e)
+    b["state"] = "OFF"
     return True
 
 
@@ -249,6 +310,118 @@ def switch_to(target):
         # 3) 目标 -> 活动(显存)
         ok = wake(target)
         return {"switched": target, "from": [k for k, v in BRAINS.items() if v["state"] == "RUN" and k != target], "ok": ok}
+
+
+# ================== 显存归属策略（谁可以顶谁） ==================
+# 【用户给定的逻辑，实现就照这个来】
+#   · **聊天模型是显存的主人**：功能模型（视频/图像/音乐/播客…）跑完，聊天模型要回到显存，
+#     功能模型退到内存待命（下次直接用内存里的，不用再读盘）。
+#   · **聊天模型之间不许互顶**：切到另一个聊天模型时，被挤下的那个退到内存后
+#     **不许自己再顶回来** —— 聊天模型只能顶功能性模型，不能顶聊天模型。
+#
+# 【一个必须如实说的技术事实】
+#   对 llama 系的模型，"退到内存"= **卸载**：llama.cpp 没有"权重留在内存、不占显存"的睡眠模式
+#   （那是 vLLM 的能力，见 docs/brain-switch.md 第 7 节）。所以聊天模型让位之后，
+#   下次要重新读盘（本机盘约 5 秒，USB 盒上 120 秒）。ComfyUI 那类引擎才会把权重留在内存。
+#   真正能让 llama 系"内存待命"的办法是让它以 `-ngl 0`（纯 CPU）驻留 —— 那要给每个模型
+#   多配一条 CPU 入口，属于后续可做的优化，本轮没做。
+_CHAT_KEYS = ("chat", "coder", "deepseek-v4", "cloud")
+
+
+def is_chat(key):
+    """这个大脑算不算"聊天模型"（用户能把它选成主大脑的那些）。"""
+    if key in _CHAT_KEYS:
+        return True
+    b = BRAINS.get(key) or {}
+    return b.get("type") in ("llama", "cloud")
+
+
+def current_chat():
+    """当前"在用"的聊天模型 key：优先控制文件里配置的那个（用户选的）。"""
+    try:
+        m = ((_control_cfg() or {}).get("brain", {}).get("api", {}) or {}).get("model") or ""
+        for k, v in BRAINS.items():
+            if is_chat(k) and (k == m or v.get("useModelName") == m or v.get("model") == m):
+                return k
+    except Exception as e:      # noqa: silent-ok — 读不到配置就用默认的 chat
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 0, e)
+    # 兜底：谁在 RUN/WARM 里是聊天模型，就是谁；都没有就用 chat
+    for k, v in BRAINS.items():
+        if is_chat(k) and v.get("state") in ("RUN", "WARM"):
+            return k
+    return "chat"
+
+
+_DISPLACED = {"key": ""}      # 被功能模型挤下去的聊天模型（跑完要还给它）
+
+
+def use_gen(key):
+    """要跑一个**功能性模型**了：① 记住当前聊天模型；② 让它让出显存；③ 清掉别的温存功能模型（内存只留一个）；④ 这个功能模型上显存。
+
+    与 `switch_to` 的区别：这一步**记下了"该还给谁"**，跑完由 `done_gen()` 还回去 ——
+    这正是原来缺的那一环（插件的 stop_brain() 之后没人恢复）。
+    """
+    with _lock:
+        chat = current_chat()
+        _DISPLACED["key"] = chat
+        # ② 聊天模型让出显存（llama 系=卸载；ComfyUI 那类由各自实现处理）
+        try:
+            sleep(chat)
+            _full_stop(chat)
+        except Exception as e:      # noqa: silent-ok — 让位失败也要继续，不能把生成卡住
+            LOG.debug("忽略异常(%s:%d): %s", __file__, 0, e)
+        # ③ 内存只留一个功能模型：别的温存功能模型彻底清掉
+        for k, v in BRAINS.items():
+            if k != key and not is_chat(k) and v.get("state") in ("WARM", "RUN"):
+                _full_stop(k)
+        # ④ 功能模型上显存
+        try:
+            b = BRAINS.get(key)
+            if b:
+                _start_any(b)
+                b["state"] = "RUN"
+        except Exception as e:      # noqa: silent-ok — 上显存失败由调用方如实报错
+            LOG.debug("忽略异常(%s:%d): %s", __file__, 0, e)
+        return {"gen": key, "chat": chat}
+
+
+def done_gen(key):
+    """功能性模型跑完：① 它退到内存待命（WARM）；② **聊天模型回到显存**。
+
+    这一条就是用户要的"聊天模型把用完的功能模型顶回来"。**只在生成路径里调用**，
+    而且必须放在 finally 里 —— 生成报错也要把聊天模型还回来（视频 API 那条做到了，
+    两个插件原来都没做）。
+    """
+    with _lock:
+        b = BRAINS.get(key)
+        if b:
+            sleep(key)                     # 功能模型：留内存待命（ComfyUI 类留在内存，llama 类等同卸载）
+        chat = _DISPLACED.get("key") or current_chat()
+        _DISPLACED["key"] = ""
+        try:
+            wake(chat)                     # 聊天模型回显存
+        except Exception as e:      # noqa: silent-ok — 还回去失败也要如实返回，不能吞
+            LOG.debug("忽略异常(%s:%d): %s", __file__, 0, e)
+        return {"gen": key, "chat_back": chat}
+
+
+def keep_chat_in_vram(explicit=None):
+    """聊天模型回到显存，并把占着显存的功能模型退到内存。**绝不顶另一个聊天模型**。
+
+    `explicit` = 用户在界面上明确选的聊天模型（那种情况下才允许换聊天模型）。
+    """
+    with _lock:
+        want = explicit or current_chat()
+        # 功能模型让位（退内存待命）
+        for k, v in BRAINS.items():
+            if not is_chat(k) and v.get("state") == "RUN":
+                sleep(k)
+        # 聊天模型之间：只有"明确指定"才允许换
+        if explicit:
+            for k, v in BRAINS.items():
+                if is_chat(k) and k != want and v.get("state") in ("RUN", "WARM"):
+                    _full_stop(k)      # 被明确换下的聊天模型：退到内存（llama 系=卸载），且不再自动回来
+        return {"chat": want, "ok": wake(want)}
 
 
 if __name__ == "__main__":

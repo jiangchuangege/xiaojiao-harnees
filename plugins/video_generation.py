@@ -56,9 +56,14 @@ class VideoGeneration:
         try:
             cc = _import_video()
             import config, model_switch as ms
-            # 秒级：ComfyUI 已加载(Wan常驻)则直接用；否则启动
+            # 秒级：ComfyUI 已加载(Wan常驻)则直接用；否则**按显存归属策略**让聊天模型让位
+            # （use_gen 会记下"该还给谁"，finally 里的 done_gen 负责还回去）
             if not _model_warm():
-                ms.stop_brain()      # 让聊天大脑让出显存
+                try:
+                    import brain_manager as _bm0
+                    _bm0.use_gen("video")
+                except Exception:      # noqa: silent-ok — 策略层不在就退回老办法，不能把生成卡住
+                    ms.stop_brain()      # 让聊天大脑让出显存
                 ms.start_comfy()     # 起视频大脑
             # 精炼提示词(小焦大脑, 快速)
             sys_p = ("你是专业电影导演，把用户的视频描述简洁改写成一段英文电影提示词(主体/光线/镜头/风格)，不超80字。只输出提示词。")
@@ -89,6 +94,15 @@ class VideoGeneration:
             return "✅ 视频生成完成：/videos/" + os.path.basename(out) + "\n📝 提示词：" + refined
         except Exception as e:
             return "⚠️ 视频生成失败：" + str(e)[:200]
+        finally:
+            # **聊天模型回显存**（原来这条路径只 stop_brain()、从不恢复：生成一次视频之后，
+            # 聊天模型就一直躺在磁盘上，用户下一句话要重新读盘 —— USB 盘上就是等 2 分钟）。
+            # 视频大脑按用户的设计**留在内存待命**（ComfyUI 不关，下次秒级）。
+            try:
+                import brain_manager as _bm
+                _bm.done_gen("video")
+            except Exception as e:
+                LOG.debug("忽略异常(%s:%d): %s", __file__, 88, e)
 
 
 def get_plugin():

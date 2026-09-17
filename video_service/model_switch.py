@@ -104,11 +104,32 @@ def _kill_pid(pid):
         LOG.debug("忽略异常(%s:%d): %s", __file__, 96, e)
 
 
-def stop_brain():
-    """卸载大脑(腾显存)。优先走 llama-swap unload(秒级,进程常驻)；否则兜底杀进程。"""
+def _chat_model_id():
+    """当前聊天模型在 llama-swap 里的 id（从操控文件读，**不写死 xiaojiao**）。
+
+    真实缺陷：原来 `stop_brain()` 硬写 `_llama_swap_unload("xiaojiao")` ——
+    用户把大脑换成 deepseek-v4 之后，这一句卸的是**另一个模型**，
+    真正在用的那个还占着显存（"卸了等于没卸"）。
+    """
+    try:
+        import json, os as _os
+        root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        with open(_os.path.join(root, "xiaojiao_control.json"), encoding="utf-8") as f:
+            return ((json.load(f).get("brain", {}) or {}).get("api", {}) or {}).get("model") or "xiaojiao"
+    except Exception as e:      # noqa: silent-ok — 读不到就退回默认名
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 0, e)
+        return "xiaojiao"
+
+
+def stop_brain(model_id=None):
+    """卸载大脑(腾显存)。优先走 llama-swap unload(秒级,进程常驻)；否则兜底杀进程。
+
+    `model_id` 不给就按**当前配置的聊天模型**卸（原来写死 "xiaojiao"，换过模型就卸错对象）。
+    """
     _set("stop_brain", "正在卸载大脑，腾出显存…")
+    _mid = model_id or _chat_model_id()
     # ① 用 llama-swap 卸载(常驻进程,秒级)
-    if _llama_swap_unload("xiaojiao"):
+    if _llama_swap_unload(_mid):
         # 等上游端口释放
         for _ in range(8):
             time.sleep(0.5)
@@ -124,17 +145,32 @@ def stop_brain():
         time.sleep(0.5)
 
 
-def start_brain():
-    """恢复聊天大脑。走 llama-swap(常驻,自动加载)；llama-swap 不在则直接起 llama-server 兜底。"""
+def start_brain(model_id=None, preload=True):
+    """恢复聊天大脑：**真的把它加载回显存**，而不是"打个招呼说恢复了"。
+
+    真实缺陷：原来这里只调了一次 `/api/profiles`（那是问"有哪些配置"，**不会加载任何模型**），
+    然后就报"大脑已恢复" —— 实际上模型还在磁盘上躺着，用户下一句话照样要等它读盘
+    （本机盘 5 秒，USB 盒上 120 秒）。现在改成发一个 `max_tokens=1` 的空转请求，
+    让 llama-swap 真的把模型装进显存（这就是"顶回来"该有的样子）。
+    """
     _set("start_brain", "正在恢复大脑…")
     import requests as _r
     swap = _llama_swap_url()
+    _mid = model_id or _chat_model_id()
+    if not preload:
+        return
     try:
         if _r.get(swap + "/health", timeout=5).status_code == 200:
-            # llama-swap 在 -> 触发一次请求让 xiaojiao 模型自动加载(首个请求会加载)
-            server, gguf, port, ctx = config.brain_llama()
-            _r.get(swap + "/api/profiles", timeout=10)
-            _set("idle", "大脑已恢复(llama-swap)")
+            # 真·预热：让 llama-swap 现在就把模型装进显存（首个请求会触发加载）
+            try:
+                _r.post(swap.rstrip("/") + "/chat/completions",
+                        json={"model": _mid, "messages": [{"role": "user", "content": "hi"}],
+                              "max_tokens": 1, "temperature": 0},
+                        timeout=float(os.environ.get("XIAOJIAO_PRELOAD_TIMEOUT", "300")))
+                _set("idle", "大脑已恢复(llama-swap，模型已在显存)")
+            except Exception as e:      # noqa: silent-ok — 预热失败也算"服务在"，用户照样能聊（慢一点）
+                LOG.debug("忽略异常(%s:%d): %s", __file__, 0, e)
+                _set("idle", "大脑服务已就绪(llama-swap)；模型将按需加载：%s" % str(e)[:60])
             return
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 132, e)

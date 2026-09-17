@@ -132,6 +132,10 @@ jobs:
         shell: pwsh
         run: python tools/test_profile_system.py
 
+      - name: 显存归属策略自测（聊天模型是显存主人 / 聊天模型不许顶聊天模型，离线可跑）
+        shell: pwsh
+        run: python tools/test_vram_policy.py
+
       - name: 全新克隆自检（干净目录能不能起、能不能跑绿）
         shell: pwsh
         run: python tools/test_fresh_clone.py
