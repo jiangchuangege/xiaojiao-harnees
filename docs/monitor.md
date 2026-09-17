@@ -144,6 +144,13 @@ flowchart LR
 | 视频大脑 | ComfyUI 的 `GET /queue`，按 `queue_running` 条数判断运行中或温存 |
 | 大脑清单与配置 | `brain_manager.BRAINS` 与各大脑的 `conf` |
 
+> **诚实标注**：`GET /api/models`（llama-swap 自己的那个）在当前版本返回 **404**（实测），
+> 所以面板上"聊天大脑"那一行是**按端口在监听**判定为"运行中/已挂内存"的 —— 它**不区分**
+> "模型已装进显存"和"只是进程在跑"。要看**具体哪个模型装进了显存、能不能用**，用
+> **设置 → 模型管理** 里的就绪状态（`✅ 就绪 / ⏳ 加载中 / ❌ 失败`），它读的是
+> `GET /v1/models` 的 `status`（`loaded/unloaded`）加上预热结果，数据源在
+> `xiaojiao_app._brain_status()`，也随 `GET /api/models` 的 `brain_status` 字段返回。
+
 ## 5. 与 llama-swap / ComfyUI 的对接
 
 | 大脑 | 读状态 | 变更状态 |

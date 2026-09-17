@@ -95,6 +95,21 @@ chat 一次都没通时，按顺序排查：
 
 官方排查清单（base_url、Bearer 格式、401/429 含义）见 [Agnes TROUBLESHOOTING](https://github.com/AgnesAI-Labs/AgnesAI-Models/blob/main/docs/TROUBLESHOOTING.md)。
 
+## 7.1 加了本地模型，为什么一句都用不了 / 为什么那么慢
+
+按顺序看这三件事（都实测过，见 [brain-switch.md](brain-switch.md) 第 7 节）：
+
+| 症状 | 真实原因 | 怎么办 |
+|---|---|---|
+| 界面说"已添加"，选它也答不出来 | **llama-swap 不会自己重载配置** —— 不重启进程，新模型等于没加 | 用"一键加本地 GGUF"（它现在会自动重启**并核实**认到没有）；手动加的话改完 yaml 要重启 llama-swap |
+| 换一次模型要等好几分钟 | 换模型 = 把几 GB 的 gguf **从磁盘读进显存**。实测：本机 NVMe **1029 MB/s → 约 5 秒**；USB 硬盘盒 **37 MB/s → 120 秒** | 把模型放本机盘；USB 盒子换到 USB3 口/换线（37MB/s 说明没跑到 USB3） |
+| 报 `health check timed out` | llama-swap 默认只等 upstream **120 秒**，而那个模型首载 120.6 秒 | `llama-swap.yaml` 里设 `healthCheckTimeout: 300`（仓库里的配置已设） |
+| 换载那 2~4 分钟里，别的探测也失败 | 加载期间 llama-swap 的 HTTP 会卡住/重置连接，属正常"忙" | 等它加载完；载体已把它当"正在忙"而不是"模型不存在" |
+
+**选完模型想确认"到底能不能用"**：设置 → 模型管理 那一行会显示
+`✅ 就绪 / ⏳ 正在加载 / ❌ 加载失败（带原因）/ ⚠️ llama-swap 不提供这个模型`，
+不用发消息去试。同一个状态也在 `GET /api/models` 的 `brain_status` 里。
+
 ## 8. 怎么让它更聪明
 
 换更强的底座模型，或加大 `brain.llama.ctx`。人设、工具、记忆这套壳不需要改。

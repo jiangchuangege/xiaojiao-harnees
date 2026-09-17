@@ -2867,6 +2867,9 @@ def _fallback_worthy(status):
 # （实测 Agnes 慢起来单次 60~100 秒；用户体感上"卡住"比"降级到本地"更糟。）
 CLOUD_TIMEOUT_S = 15
 
+# 本地大脑的"就绪状态"（预热结果），给 /api/models 的 brain_status 用（见 _warmup_local_async）
+_LOCAL_READY = {"model": "", "status": "", "secs": 0.0, "at": 0.0, "err": ""}
+
 # 本地大脑的单次请求超时。**为什么不是 90/120 秒**：本地大脑是 llama-swap 按需加载的，
 # 换到一个没在显存里的模型时，**第一次请求要等它把几 GB 的 gguf 读进来** ——
 # 实测 DeepSeek-V4-Pro-Q4B（4.29GB）首载 **120.6 秒**，走 llama-swap 那条路实测 **237 秒**。
@@ -12762,7 +12765,9 @@ def _profile_recall_write_async(user):
                 else:
                     LOG.info("印象写入（血管）：这一句没记（不记 / 判重 / 没生成）")
         except Exception as e:      # noqa: silent-ok — 一条链失败不许拖累另一条
-            LOG.debug("印象写入（血管）失败（忽略）：%s", e)
+            # **用 warning 而不是 debug**：写入链整条坏掉时（实测见过 NameError），
+            # 原来只在 debug 里留一行 —— 表现就是"它再也不记新东西了"而日志上看不出来。
+            LOG.warning("印象写入（血管）失败：%s", e)
         # ② 画像系统那条
         try:
             if CAP.get("profile_system_write", True):
@@ -13098,7 +13103,13 @@ def api_models():
     for m in _get_models():
         if m.get("engine") == eng and (m.get("base_url", "") == base or not base):
             cur = m.get("name"); break
-    return jsonify({"active": BRAIN_ENGINE, "current": cur, "models": _get_models()})
+    try:                          # 顺带回报"大脑现在能不能用"（界面一眼可见，不用发消息去试）
+        _bs = _brain_status()
+    except Exception as e:        # noqa: silent-ok — 状态查不到也不许影响列模型
+        LOG.debug("brain_status 失败（忽略）：%s", e)
+        _bs = {}
+    return jsonify({"active": BRAIN_ENGINE, "current": cur, "models": _get_models(),
+                    "brain_status": _bs})
 
 
 def _is_local_base(url):
@@ -13344,21 +13355,72 @@ def _warmup_local_async(base_url, model):
     而用户在界面上"选中模型→立刻说话"之间只有几秒 —— 不预热的话第一句必超时，
     表现就是"我加了模型但一句都用不了"。预热只花一次调用、不影响任何回答；
     它失败也**只记日志**（比如模型文件本身是坏的，那是另一个问题，不该在这里拦）。
+
+    【顺带把结果留下来】`_LOCAL_READY` 会记成 loading → ready/failed（带秒数和原因），
+    由 `/api/models` 的 `brain_status` 暴露给界面 —— 用户要能**一眼看到"这个模型到底能不能用"**，
+    而不是从"回复很慢"里去猜。
     """
+    _LOCAL_READY.update({"model": model, "status": "loading", "secs": 0.0,
+                         "at": time.time(), "err": ""})
+
     def _run():
+        t0 = time.time()
         try:
             requests.post(base_url.rstrip("/") + "/chat/completions",
                           json={"model": model, "messages": [{"role": "user", "content": "hi"}],
                                 "max_tokens": 1, "temperature": 0},
                           timeout=_local_timeout_s())
-            LOG.info("本地模型预热完成：%s @ %s（加载已提前吃掉）", model, base_url)
+            _LOCAL_READY.update({"model": model, "status": "ready",
+                                 "secs": round(time.time() - t0, 1), "at": time.time(), "err": ""})
+            LOG.info("本地模型预热完成：%s @ %s（加载已提前吃掉，用时 %.1f 秒）",
+                     model, base_url, time.time() - t0)
         except Exception as e:      # noqa: silent-ok — 预热失败不影响任何回答
+            _LOCAL_READY.update({"model": model, "status": "failed",
+                                 "secs": round(time.time() - t0, 1), "at": time.time(),
+                                 "err": str(e)[:160]})
             LOG.info("本地模型预热未完成（%s @ %s）：%s —— 首次对话可能要等加载", model, base_url, e)
     try:
         import threading
         threading.Thread(target=_run, name="xj-warmup", daemon=True).start()
     except Exception as e:          # noqa: silent-ok — 连线程都起不来也不能影响切换
         LOG.debug("预热线程启动失败（忽略）：%s", e)
+
+
+def _brain_status():
+    """给界面看的"大脑就绪状态"：本地大脑现在装的是哪个、能不能用、上次预热花了多久。
+
+    意义：以前"模型到底能不能用"只能靠"发一句试试" —— 慢了就以为坏了。
+    现在选完模型就能看到 ✅ 就绪 / ⏳ 加载中 / ❌ 失败（带原因）。
+    """
+    base = (CONTROL.get("brain", {}).get("api", {}).get("base_url", "") or "")
+    out = {"engine": BRAIN_ENGINE, "model": LLM_MODEL, "local": _is_local_base(base),
+           "status": "n/a", "secs": 0, "err": "", "loaded": [], "served": []}
+    if not out["local"]:
+        return out
+    try:
+        r = requests.get(base.rstrip("/") + "/models", timeout=3)
+        if r.status_code == 200:
+            data = r.json().get("data") or []
+            out["served"] = [m.get("id") for m in data if m.get("id")]
+            out["loaded"] = [m.get("id") for m in data
+                             if str(((m.get("status") or {}).get("value")) or "").lower() == "loaded"]
+    except Exception as e:      # noqa: silent-ok — 本地没起就如实说"连不上"，不编状态
+        out["status"] = "unreachable"
+        out["err"] = str(e)[:120]
+        return out
+    if out["model"] and out["model"] not in out["served"]:
+        out["status"] = "not_served"          # 配了但 llama-swap 提供不了它（就是"用不了"那种）
+    elif out["model"] in out["loaded"]:
+        out["status"] = "ready"
+    elif _LOCAL_READY.get("model") == out["model"] and _LOCAL_READY.get("status") == "loading":
+        out["status"] = "loading"
+    elif _LOCAL_READY.get("model") == out["model"] and _LOCAL_READY.get("status") == "failed":
+        out["status"] = "failed"
+    else:
+        out["status"] = "cold"                # 提供得了、但还没装进显存（发第一句会等加载）
+    out["secs"] = _LOCAL_READY.get("secs") or 0
+    out["err"] = _LOCAL_READY.get("err") or ""
+    return out
 
 
 @app.route("/api/model/add", methods=["POST"])
@@ -14124,6 +14186,7 @@ HTML = r"""<!DOCTYPE html>
             <div class="field" style="display:flex;align-items:flex-end;gap:10px"><button class="btn-sec" onclick="addModel()">＋ 添加模型(API/外接)</button><button class="btn-sec" style="margin-left:8px" onclick="addLocalModel()">🗄️ 一键加本地GGUF</button></div>
           </div>
           <div class="think" id="s_model_msg"></div>
+          <div class="think" id="s_brain_status" style="margin-top:8px"></div>
         </div>
       </div>
       <div class="sec" id="sec-plugins">
@@ -14810,6 +14873,13 @@ async function openSettings(){try{loadPresetCards();}catch(e){}
   S.classList.add('show');
 }
 async function loadModelList(){const r=await fetch('/api/models');const d=await r.json();const el=document.getElementById('s_model_list');
+  // 大脑就绪状态：选完模型不用发消息去试，一眼看出 ✅就绪 / ⏳加载中 / ❌失败（带原因）
+  try{const b=d.brain_status||{};const S={ready:['✅','就绪，随时能用'],loading:['⏳','正在加载进显存…'],
+    cold:['🕒','还没装进显存（发第一句会等它加载）'],failed:['❌','加载失败'],not_served:['⚠️','llama-swap 不提供这个模型（选了也用不了）'],
+    unreachable:['⚠️','连不上本地大脑服务'],'n/a':['ℹ️','外部 API 大脑']}[b.status]||['ℹ️','状态未知'];
+    const extra=b.local?('　｜　显存里：'+(b.loaded||[]).join('、')||'（空）'):'';
+    document.getElementById('s_brain_status').textContent=S[0]+' 大脑：'+(b.model||'?')+' —— '+S[1]
+      +(b.secs?('（上次加载 '+b.secs+' 秒）'):'')+extra+(b.err?('　原因：'+b.err):'');}catch(e){}
   el.innerHTML=(d.models||[]).map(m=>`<div class="switch"><div><div class="n">${esc(m.name)} <small style="color:#7a8290">${esc(m.engine)}</small></div><div class="d">${esc(m.base_url||'')}</div></div><button class="btn-sec" onclick="delModel('${esc(m.name)}')">删除</button></div>`).join('')||'<div class="think">还没有模型</div>';
 }
 async function addLocalModel(){document.getElementById('addLocalBg').style.display='flex';}
