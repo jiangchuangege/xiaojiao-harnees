@@ -11780,6 +11780,31 @@ def _discover_probe():
     _DISCOVER_CACHE.update(d)
 
 
+def _find_running_swap():
+    """**已经在跑的那个 llama-swap 就是它** —— 直接从进程里取路径。
+
+    【为什么必须有这个】llama-swap 的位置可能在任何盘、任何深层目录（实测在
+    `G:\\moxing__xiaojiao\\大脑秒计切换\\llama-swap_251_windows_amd64\\`）。
+    原来的"一键加模型"靠全盘扫描找 exe，而扫描是**丢后台线程**做的 —— 加模型那一刻
+    还没扫完，于是它只能说一句"没找到 llama-swap.exe，请手动重启"，**配置写进去了却没人重启**，
+    而 llama-swap **不会自己重载 yaml**（实测：yaml 里加了 qwen3.8-4b，它认不到）——
+    用户看到的是"✅ 已添加"，实际一句都用不了。从进程取路径是毫秒级且一定准的。
+    """
+    try:
+        import psutil
+        for p in psutil.process_iter(["name", "exe"]):
+            try:
+                if "llama-swap" in str(p.info.get("name") or "").lower():
+                    exe = p.info.get("exe") or ""
+                    if exe and os.path.exists(exe):
+                        return exe
+            except Exception:      # noqa: silent-ok — 单个进程读不到就跳过
+                continue
+    except Exception as e:      # noqa: silent-ok — 没有 psutil 就退回原来的扫描
+        LOG.debug("从进程找 llama-swap 失败（忽略）：%s", e)
+    return ""
+
+
 def _discover_paths(kick=True):
     """体检/引导用：拿 ComfyUI / 视频模型根 / llama-swap 的真实位置。
 
@@ -11802,6 +11827,11 @@ def _discover_paths(kick=True):
     b = c.get("brain", {}) or {}
     comfy = (b.get("comfy_dir") or os.environ.get("XIAOJIAO_COMFY_DIR") or "").strip()
     swap = (os.environ.get("XIAOJIAO_LLAMA_SWAP") or "").strip()
+    if not swap or not os.path.exists(swap):
+        # 环境变量没给 / 给了个不存在的路径 → 问**正在跑的那个进程**（毫秒级，一定准）
+        _run = _find_running_swap()
+        if _run:
+            swap = _run
     vroot = ""
     # 视频模型可能就在 ComfyUI 目录里，或在便携包外层任意一层（零成本检查，不用扫盘）
     _d = comfy.rstrip("\\/")
@@ -13183,6 +13213,51 @@ def api_model_select():
     return jsonify({"ok": False, "error": "模型不存在"}), 404
 
 
+def _stop_swap():
+    """停掉正在跑的 llama-swap（有 psutil 用 psutil，没有就 taskkill）。返回杀掉几个。"""
+    n = 0
+    try:
+        import psutil
+        for p in psutil.process_iter(["name"]):
+            try:
+                if "llama-swap" in str(p.info.get("name") or "").lower():
+                    p.kill()
+                    n += 1
+            except Exception:      # noqa: silent-ok — 单个进程杀不掉就跳过（可能刚好自己退了）
+                continue
+    except Exception:      # noqa: silent-ok — 没有 psutil 就退回系统命令
+        try:
+            import subprocess as _sp
+            _sp.run(["taskkill", "/F", "/IM", "llama-swap.exe"],
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, timeout=15)
+            n = 1
+        except Exception as e:      # noqa: silent-ok — 杀不掉也要继续尝试启动
+            LOG.debug("停 llama-swap 失败（忽略）：%s", e)
+    return n
+
+
+def _start_swap(exe, cfg):
+    """**脱离本进程**启动 llama-swap。返回 Popen 或 None。
+
+    【为什么不用 PowerShell 的 Start-Process（原来就是这么写的，坏的）】
+    原来那行是 `Start-Process 'exe' -ArgumentList '-config \\\"cfg\\\" -listen ...'` ——
+    转义里多出来的反斜杠让 exe 收到的是 `-config \\"C:\\...yaml\\"`，
+    **它解析不了配置路径就直接退出**。表现是：加模型 → 进程被杀掉 → 没起来 →
+    整个大脑消失（实测 llama-swap 进程为空、端口拒绝）。用户看到的是"✅ 已添加"然后一句都用不了。
+    直接用 subprocess 传参数数组，没有引号转换，也不经过任何 shell。
+    """
+    import subprocess as _sp
+    DETACHED = 0x00000008 | 0x00000200        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    try:
+        return _sp.Popen([exe, "--config", cfg, "--listen", "127.0.0.1:9292"],
+                         cwd=os.path.dirname(exe) or None,
+                         creationflags=DETACHED,
+                         stdin=_sp.DEVNULL, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+    except Exception as e:      # noqa: silent-ok — 起不来也要如实回报，不能假装成功
+        LOG.warning("启动 llama-swap 失败：%s", e)
+        return None
+
+
 @app.route("/api/model/addlocal", methods=["POST"])
 def api_model_addlocal():
     """一键添加本地模型(GGUF)：自动写 llama-swap.yaml + brain_manager + 下拉, 重启llama-swap。
@@ -13219,18 +13294,47 @@ def api_model_addlocal():
                                   "base_url": "http://127.0.0.1:9292/v1", "api_key": "", "model": mid})
         json.dump(CONTROL, open(os.path.join(root, "xiaojiao_control.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     # ④ 重启 llama-swap（路径自动探测，不写死）
+    _sw = _discover_paths().get("swap") or _find_running_swap()
+    if not (_sw and os.path.exists(_sw)):
+        # **不许说"已添加"就完事**：llama-swap 不会自己重载 yaml（实测），不重启 = 没生效。
+        return jsonify({"ok": False, "model_id": mid, "name": name, "restarted": False,
+                        "error": "配置已写入，但**没找到 llama-swap.exe，没能重启它** —— "
+                                 "而 llama-swap 不会自己重载配置，所以这个模型现在**还没生效**。\n"
+                                 "手动重启一次即可：先关掉 llama-swap，再运行\n"
+                                 "  llama-swap.exe --config \"%s\" --listen 127.0.0.1:9292\n"
+                                 "（或设环境变量 XIAOJIAO_LLAMA_SWAP 指向那个 exe，下次就自动了）" % yp}), 500
     try:
-        _sw = _discover_paths().get("swap") or ""
-        if _sw and os.path.exists(_sw):
-            _sp.Popen(["powershell", "-NoProfile", "-Command",
-                       "Get-Process llama-swap -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 1; "
-                       "Start-Process '%s' -ArgumentList '-config \\\"%s\\\" -listen 127.0.0.1:9292' -WindowStyle Hidden" % (_sw.replace("'", "''"), yp)])
-        else:
-            return jsonify({"ok": True, "model_id": mid, "name": name,
-                            "note": "已写入配置；但没找到 llama-swap.exe，请手动重启它（或设 XIAOJIAO_LLAMA_SWAP）"})
+        _stop_swap()
+        time.sleep(1)
+        if _start_swap(_sw, yp) is None:
+            return jsonify({"ok": False, "model_id": mid, "name": name, "restarted": False,
+                            "error": "配置已写入，但**启动 llama-swap 失败**（它现在没在跑）。"
+                                     "手动起一次：\n  \"%s\" --config \"%s\" --listen 127.0.0.1:9292"
+                                     % (_sw, yp)}), 500
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 2529, e)
-    return jsonify({"ok": True, "model_id": mid, "name": name, "note": "llama-swap 正在重启, 约10秒后可用"})
+        return jsonify({"ok": False, "model_id": mid, "name": name, "restarted": False,
+                        "error": "重启 llama-swap 失败：%s —— 配置已写入，但它还没生效" % e}), 500
+    # ⑤ **核实它到底生效没有**（别让用户对着"✅ 已添加"干等）
+    #    llama-swap 重启 + 认到新模型需要几秒，这里最多等 20 秒，然后如实回报。
+    ok_live = False
+    for _ in range(20):
+        time.sleep(1)
+        try:
+            _r = requests.get("http://127.0.0.1:9292/v1/models", timeout=3)
+            if _r.status_code == 200 and any(m.get("id") == mid
+                                             for m in (_r.json().get("data") or [])):
+                ok_live = True
+                break
+        except Exception:      # noqa: silent-ok — 重启期间连不上是正常的，继续等
+            continue
+    if ok_live:
+        return jsonify({"ok": True, "model_id": mid, "name": name, "restarted": True,
+                        "note": "llama-swap 已重启并认到这个模型，下拉与监控里都能选了"})
+    return jsonify({"ok": False, "model_id": mid, "name": name, "restarted": True,
+                    "error": "llama-swap 重启了，但 20 秒内**没认到** %s —— "
+                             "配置写进去了却没生效，多半是 llama-swap.yaml 里那条写错了"
+                             "（或模型文件它读不到）。看它的日志/窗口排一下。" % mid}), 500
 
 
 def _warmup_local_async(base_url, model):
@@ -14717,7 +14821,7 @@ function saveAddLocal(){
   if(!name||!gguf){alert('请填模型名和 GGUF 路径');return;}
   document.getElementById('lm_msg').textContent='⏳ 正在配置并重启 llama-swap…';
   fetch('/api/model/addlocal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,gguf:gguf,ctx:parseInt(ctx)||20000})}).then(r=>r.json()).then(d=>{
-    document.getElementById('lm_msg').textContent=d.ok?('✅ 已添加：'+d.name+'，llama-swap 重启中，约10秒后可用'):('❌ '+d.error);
+    document.getElementById('lm_msg').textContent=d.ok?('✅ 已添加：'+d.name+'（'+(d.note||'llama-swap 已重启并认到它')+'）'):('❌ '+(d.error||'没生效'));
     if(d.ok)setTimeout(()=>location.reload(),12000);
   });
 }
