@@ -122,7 +122,11 @@ def main():
         hit = None
         if recall_lines:
             if want is None:
-                hit = "空" in recall_lines[0]
+                # "没有印象"现在有两种正常写法：投出来是空的（空），
+                # 或者这句话跟印象库没有词面交集、被闸门直接跳过（跳过）——
+                # 后者是 2026-09-17 加的时间优化（一轮 10 路投票要 8~10 秒，
+                # "你好"这种话不该为它花这个时间）。
+                hit = ("空" in recall_lines[0]) or ("跳过" in recall_lines[0])
             else:
                 hit = ("命中" in recall_lines[0]) and want in recall_lines[0]
         # system 里到底有没有那段（拿服务器自己的日志对不上，就看回复有没有用上——

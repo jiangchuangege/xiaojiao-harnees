@@ -10348,7 +10348,14 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             _recall_txt = ""
             try:
                 from xiaojiao_recall import recall_with_hit as _rc_recall, build_system as _rc_build
-                _rc_imps = _rc_recall(user_input)
+                from xiaojiao_recall import load_profiles as _rc_load
+                # ⚠️ 先过"词面交集"闸：没交集的话这一句跑 10 路投票纯属白花 8~10 秒
+                #    （"你好"实测 8.5 秒、投出来还是空的）。有交集才值得花这个时间。
+                if _worth_full_recall(user_input, _rc_load()):
+                    _rc_imps = _rc_recall(user_input)
+                else:
+                    _rc_imps = []
+                    LOG.info("画像召回：寒暄（无词面交集且很短）→ 跳过 10 路投票（省 8~10 秒）")
                 if _rc_imps:
                     _recall_txt = "\n" + _rc_build(_rc_imps) + "\n"
                     # 把**注入内容本身**记进日志：只写"命中 N 条"证明不了它进了 system，
@@ -10391,7 +10398,13 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             _pfp_txt = ""
             try:
                 from xiaojiao_profile import recall as _pfp_recall, build_system as _pfp_build
-                _pfp_imps = _pfp_recall(user_input)
+                from xiaojiao_profile import load as _pfp_load
+                # 同一条闸：没词面交集就不烧那 10 路投票（实测这一条链"你好"要 10.2 秒）
+                if _worth_full_recall(user_input, (_pfp_load() or {}).get("profiles")):
+                    _pfp_imps = _pfp_recall(user_input)
+                else:
+                    _pfp_imps = []
+                    LOG.info("印象（画像系统）：寒暄（无词面交集且很短）→ 跳过 10 路投票（省 8~10 秒）")
                 if _pfp_imps:
                     _pfp_txt = "\n[印象·画像系统]\n" + _pfp_build(_pfp_imps) + "\n"
                     LOG.info("印象（画像系统）：命中 %d 条 → 已注入 system｜%s",
@@ -11012,6 +11025,34 @@ def _client_is_local():
 def _req_token():
     """从 Header 或 query 取令牌（两种都支持，方便 curl / 浏览器）。"""
     return (request.headers.get("X-Auth-Token") or request.args.get("token") or "").strip()
+
+
+@app.before_request
+def _mark_inflight():
+    """记下"有用户请求正在跑"——给后台写入链让路用（见 `_profile_recall_write_async`）。
+
+    本地只有一个 llama-server：上一轮的后台写入（4~6 次模型调用）没跑完时，
+    用户这一句就得排队等它 —— 实测把「闲聊秒回 < 20 秒」顶到 34.8 秒。
+    写入链晚几秒没有任何损失，用户的时间才有价值，所以让它看这个计数自己让路。
+    """
+    try:
+        if (request.path or "").startswith(("/api/chat", "/api/message", "/v1/chat")):
+            _REQ_INFLIGHT["n"] += 1
+    except Exception as e:      # noqa: silent-ok — 计数出错绝不能影响请求
+        LOG.debug("inflight 计数失败（忽略）：%s", e)
+    return None
+
+
+@app.teardown_request
+def _clear_inflight(exc=None):
+    """请求结束：计数减一并记下时间（写入链会等这之后 3 秒再动手）。"""
+    try:
+        if (request.path or "").startswith(("/api/chat", "/api/message", "/v1/chat")):
+            _REQ_INFLIGHT["n"] = max(0, _REQ_INFLIGHT["n"] - 1)
+            _REQ_INFLIGHT["last"] = time.time()
+    except Exception as e:      # noqa: silent-ok — 同上，绝不影响响应
+        LOG.debug("inflight 清理失败（忽略）：%s", e)
+    return None
 
 
 @app.before_request
@@ -12754,6 +12795,20 @@ def _profile_recall_write_async(user):
     各写各的库。**一条失败不许拖累另一条** —— 所以各自单独 try。
     """
     def _run():
+        # ---- **让路**：有用户请求在跑、或刚跑完 3 秒内，就先等着 ----
+        # 为什么必须让路：写入链要 4~6 次本地模型调用，而本地只有一个 llama-server。
+        # 上一轮的后台写入没跑完时，用户这一句就得排在它后面 —— 实测"闲聊秒回 < 20 秒"
+        # 这条硬指标（tools/test_6_capabilities.py）就是这么被顶爆的（34.8 秒）。
+        # 写入链不是急事（晚几秒写进库没有任何损失），用户的时间才是。
+        # 最多让 120 秒；之后照写（用户一直在聊也不许永远不记）。
+        # 静默窗口用 8 秒：实测 3 秒太短 —— 写入链会在"上一轮刚结束、下一轮已经开始"的
+        # 缝隙里启动，用户那句话正好排到它后面（"你好"实测 12.1s → 24.6s）。
+        def _quiet(need=8.0):
+            return _REQ_INFLIGHT["n"] <= 0 and (time.time() - _REQ_INFLIGHT["last"]) > need
+
+        _t0 = time.time()
+        while time.time() - _t0 < 120 and not _quiet():
+            time.sleep(0.5)
         # ① 血管那条
         try:
             if CAP.get("profile_recall_write", True):
@@ -12768,7 +12823,9 @@ def _profile_recall_write_async(user):
             # **用 warning 而不是 debug**：写入链整条坏掉时（实测见过 NameError），
             # 原来只在 debug 里留一行 —— 表现就是"它再也不记新东西了"而日志上看不出来。
             LOG.warning("印象写入（血管）失败：%s", e)
-        # ② 画像系统那条
+        # ② 画像系统那条 —— **跑之前再让一次路**：用户可能在我们写第 ① 条的时候又说话了
+        while not _quiet(6.0) and (time.time() - _t0) < 150:
+            time.sleep(0.5)
         try:
             if CAP.get("profile_system_write", True):
                 from xiaojiao_profile import remember as _pfp_remember
@@ -13346,6 +13403,61 @@ def api_model_addlocal():
                     "error": "llama-swap 重启了，但 20 秒内**没认到** %s —— "
                              "配置写进去了却没生效，多半是 llama-swap.yaml 里那条写错了"
                              "（或模型文件它读不到）。看它的日志/窗口排一下。" % mid}), 500
+
+
+def _worth_full_recall(q, rows):
+    """要不要为这句话跑**完整 10 路血管投票**（实测一轮 8.5~10.2 秒）。
+
+    【为什么需要这道闸】"你好"这种话不可能命中任何印象，投票也是空的，却要花 19 秒
+    （两条链合计），把用户那条硬指标「闲聊秒回 < 20 秒」顶爆（实测 34.8 秒）。
+
+    【为什么第一版闸是错的】第一版只要"词面没交集"就跳过 —— 结果误伤了真本事：
+    「晚上想吃点啥」没命中任何触发词，**是 10 路投票靠语义把「不会做饭」捞出来的**，
+    被我跳过后那条就没了（集成验收当场从 5/5 掉到 4/5）。
+
+    【现在两层，只砍寒暄】
+      ① 词面有交集（画像自带的触发词 / 正文去掉"用户"后的二字滑窗）→ 跑完整投票
+      ② 没交集时：**短到像寒暄（去掉空白不到 4 个字）** → 不跑（"你好/在吗/哈哈/晚安"）
+         其余（"今天天气真好""晚上想吃点啥"这种）→ 照跑 ——
+         语义相关但词面对不上的印象只能靠投票捞出来，这条本事不能丢
+    """
+    q = str(q or "")
+    if _lexical_hook(q, rows):
+        return True
+    return len("".join(q.split())) >= 4
+
+
+def _lexical_hook(q, rows):
+    """这句话跟印象库有没有**词面交集** —— 决定"值不值得为它跑一次 10 路血管投票"。
+
+    【为什么必须要有这道闸】实测（2026-09-17）：一轮 10 路投票要 **8.5~10.2 秒**
+    （印象两条链合计 **~19 秒**），而"你好"这种话**本来就不可能命中任何画像**
+    （投出来也是空的，实测过）。把它们照跑，直接把用户那条硬指标
+    「闲聊秒回 < 20 秒」顶爆 —— 实测 **34.8 秒**，`tools/test_6_capabilities.py` 当场判红。
+
+    判据**只用画像库自己带的词**（触发词 + 正文去掉"用户"后的二字滑窗），
+    不引入任何新词表、不替模型判断"该不该记"：
+      · 有交集 → 照旧跑完整投票（该召的一个不漏，包括安全类约束，如"海鲜我能吃吗"）
+      · 没交集 → 跳过投票，省下的时间还给用户
+    """
+    q = str(q or "")
+    if len(q.strip()) < 2:
+        return False
+    grams = {q[i:i + 2] for i in range(len(q) - 1)}
+    for r in (rows or []):
+        if not isinstance(r, dict):
+            continue
+        for t in (r.get("triggers") or []):
+            if t and t in q:
+                return True
+        body = str(r.get("text") or r.get("content") or "").replace("用户", "")
+        if body and any(g in body for g in grams):
+            return True
+    return False
+
+
+# 前台优先：有用户请求在跑/刚跑完时，后台写入链要**让路**（见 _profile_recall_write_async）
+_REQ_INFLIGHT = {"n": 0, "last": 0.0}
 
 
 def _warmup_local_async(base_url, model):
