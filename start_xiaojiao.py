@@ -56,12 +56,74 @@ def resolve_llama_paths():
             if gguf: break
     return server, gguf
 
+def stop_stray_direct_line(port=None, expect="llama-server"):
+    """**收回备用直连线**：llama-swap 已经接管时，把之前那条直连端口上的 llama-server 停掉。
+
+    【为什么必须有这一步（2026-09-18 实测）】
+      llama-swap 不在时，应用会退到**直连 8080** 那条备用线（下面的 `start_llama_brain`）。
+      等 llama-swap 回来、应用也回到 9292 之后 —— **没有人去关掉那条备用线**：
+      "跳过启动"被当成了"已经收好"。实测后果是一个 8080 的 `llama-server` 从 21:57 一直活到
+      01:20（我手工杀掉），**两份 4B 权重同时抢 16GB 内存与 8GB 显存**（可用内存只剩 0.15GB），
+      一个 token 要 100 秒、"你好"要 205 秒。
+      用户对这件事的原话是：**「互相打架是因为没触发切换」** —— 对，缺的就是这个"切回来时收旧线"。
+
+    【安全】**只停"名字/命令行里带 `expect` 的进程"**。8080 上如果蹲着的是别的服务，
+      一个字都不许动 —— 宁可留着多余进程，也不许误杀别人。
+      取不到 psutil 时用 `netstat + taskkill` 兜底（和 `_stop_swap` 同一套路）。
+
+    返回 `(pid, 说明)`；没找到要停的返回 `(None, 原因)`。
+    """
+    port = int(port or BRAIN.get("llama", {}).get("port", 8080) or 8080)
+    try:
+        import psutil
+    except Exception as e:      # noqa: silent-ok — 没有 psutil 就用 netstat 兜底
+        try:
+            out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, timeout=15).stdout
+            pid = None
+            for line in out.splitlines():
+                if (":%d" % port) in line and "LISTENING" in line:
+                    pid = int(line.split()[-1])
+                    break
+            if not pid:
+                return None, "直连端口 %d 上没有进程（不用收）" % port
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=15)
+            return pid, "已按端口 %d 停掉（没有 psutil，按 netstat 取到的 PID）" % port
+        except Exception as e2:      # noqa: silent-ok
+            return None, "收线失败：%s / %s" % (e, e2)
+    try:
+        for c in psutil.net_connections(kind="tcp"):
+            if not (c.laddr and c.laddr.port == port and c.status == "LISTEN" and c.pid):
+                continue
+            try:
+                p = psutil.Process(c.pid)
+                cmd = " ".join(p.cmdline())
+                if expect.lower() not in cmd.lower():
+                    # ⚠️ 名字对不上 → **绝不动手**，并把这件事说出来
+                    return None, ("%d 上那个进程不是 %s（是 %s），**没动它**"
+                                  % (port, expect, cmd[:60] or p.name()))
+                p.terminate()
+                p.wait(timeout=15)
+                return c.pid, "已收回备用直连线（%d）" % port
+            except Exception as e:      # noqa: silent-ok — 单个进程处理失败就跳过
+                return None, "收线时出错：%s" % e
+        return None, "直连端口 %d 上没有进程（不用收）" % port
+    except Exception as e:      # noqa: silent-ok
+        return None, "收线失败：%s" % e
+
+
 def start_llama_brain():
     """启动本地大模型。小焦脑优先走 llama-swap(9292)；若已在线则跳过冗余8080直连，避免冲突/占显存/卡住。"""
     try:
         api = BRAIN.get("api", {}); burl = (api.get("base_url") or "").lower()
         if "9292" in burl and requests.get("http://127.0.0.1:9292/v1/models", timeout=3).status_code == 200:
             print("✅ 大脑已由 llama-swap(9292) 管理，跳过冗余直连(8080)。")
+            # ⚠️ **"跳过启动"不等于"已经收好"** —— 上一轮退到备用线时起的那个进程可能还活着。
+            #    不收它就等于两份模型同时活着（实测：一个 token 100 秒）。见上面那个函数的说明。
+            _pid, _why = stop_stray_direct_line()
+            if _pid:
+                print("🧹 已收回备用直连线 8080（pid=%d）：%s" % (_pid, _why))
+            elif _why and "没有进程" not in _why:
+                print("ℹ️ 备用直连线没有收回：%s" % _why)
             return None
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 55, e)

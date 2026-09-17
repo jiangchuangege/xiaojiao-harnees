@@ -161,7 +161,7 @@ flowchart TB
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
 | 会话管理 | 已落地 | 侧栏多会话、新建、切换、历史：`/api/sessions`、`/api/session/new` |
-| 长期记忆 | 已落地 | 向量库 + `xiaojiao_memory.txt` + 知识库 JSON |
+| 长期记忆 | 已落地 | 向量库 + 早期遗留存盘（2026-09-17 已移入 `logs/quarantine/`）+ 知识库 JSON |
 | 记忆深度 | 已落地 | 事实 / 表达 / 印象三层，实现 `core/memory_deep.py` |
 | 记忆写入闸门与来源标记 | 已落地 | 工具原文与坏回复进不了对话记忆（`core/mem_filter.py`）；注入时标明来源（谁说的就是谁说的）；时间性问题走时间线。见 [memory-pollution.md](memory-pollution.md) |
 | 用户画像库（第四个库） | 已落地 | `core/user_profile.py`，落 `logs/psyche/user_profile.jsonl`；**记不记、记什么由模型自己判断**，载体只执行存储 |

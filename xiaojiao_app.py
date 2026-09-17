@@ -2180,6 +2180,26 @@ _PROFILE_ASK = (
     "用户说：%s\n它回答：%s")
 
 
+def _loop_meter(kind, **kw):
+    """闭环流量表：记一笔并（节流后）打一行汇总日志。**只记账，绝不抛异常。**
+
+    为什么要它：`core/profile_loop_meter.py` 头部的注释写了 —— 那条"兴趣积累闭环"
+    机制通不通以前没有地方看得见，2026-09-17 是翻了一整天日志才数出来它在空转
+    （判断 88 次、要记 0 条新内容、注入一直是同样 3 条）。这一句让空转**当天就能看见**。
+    它**不参与任何判断**，纯粹是账。
+    """
+    try:
+        from core import profile_loop_meter as _PLM
+        if kind == "judge":
+            _line = _PLM.note_judge(kw.get("remember"), kw.get("text", ""), kw.get("why", ""))
+        else:
+            _line = _PLM.note_inject(kw.get("n", 0), kw.get("texts"))
+        if _line:
+            LOG.info("%s", _line)
+    except Exception as _e:      # noqa: silent-ok — 流量表坏了不能让对话坏掉
+        LOG.debug("闭环流量表记账失败（忽略）：%s", _e)
+
+
 def _profile_judge(user_input, answer):
     """闭环第三、四步：问模型"要不要记"；它说要 → 载体写进用户画像库。返回记录 id。"""
     try:
@@ -2206,6 +2226,7 @@ def _profile_judge(user_input, answer):
             # 于是"它不记"和"载体没接住"分不出来，只能靠事后重新问一遍才知道是谁的问题。
             LOG.info("用户画像：**它自己判断不记**（原因：%s）｜原始输出 %r",
                      str(_v.get("why"))[:70], str(_out)[:130])
+            _loop_meter("judge", remember=False, why=str(_v.get("why") or ""))
             return ""
         _rid = _UP.add(_v.get("kind"), _v.get("content"),
                        why=_v.get("why"),
@@ -2213,6 +2234,8 @@ def _profile_judge(user_input, answer):
         if _rid:
             LOG.info("用户画像：**它自己判断要记** → 已写入｜kind=%s｜content=%s｜why=%s",
                      _v.get("kind"), str(_v.get("content"))[:40], str(_v.get("why"))[:40])
+            _loop_meter("judge", remember=True, text=str(_v.get("content") or ""),
+                        why=str(_v.get("why") or ""))
         else:
             # 说要记、却写不进去 → 一定是**载体侧**的问题（判据/落盘），必须喊出来
             LOG.warning("用户画像：它说要记，但载体没写进去（kind=%r content=%r）",
@@ -8584,8 +8607,58 @@ def _rag_three_sources(query, timeout=15.0):
     return cands, lat, round(time.time() - t0, 3)
 
 
-def _rag_grade(cands, query):
-    """给候选打分、排序、分级。返回结构化结果（不注入，注入由调用方决定）。"""
+# ================== 时效性事实：「他应该知道」的那一类问题 ==================
+# 【为什么需要它（2026-09-17 实测）】用户问「2026年世界杯谁是冠军」，它答「还没结束呢，冠军不清楚」
+#   —— 而那天已经是 9 月，世界杯早结束了。查下来这条路**四道闸同时关着**：
+#     ① 意图被判成 chat → `闲聊轮不联网检索` 直接不搜；
+#     ② 档位重 → `这一轮不检索记忆` + 探索类工具被拿掉；
+#     ③ 模型自己摸的工具是 `read_memory`（那份遗留存盘），不是 web_search；
+#     ④ 就算联网那一路跑了，优率里"来源可信度"给联网 0.60 的权重 → 联网满分也只到 ≈0.80
+#        → **一律进复核档**，永远进不了 system（那是**故意**的结构性自律，见 `_rag_quality`）。
+#   ①②③ 是判据写窄了（时效性事实被当成闲聊）；④ 是**用户定的原则**，所以这里只对它做
+#   **一处收口**：只有"时效性事实"这一类问题，才允许联网结果直接进 system，且**强制带来源**。
+#   ⚠️ 刻意**不含天气**：「今天天气怎么样」有它自己的 weather 工具路径，而且被多处自测当样本用，
+#      混进来会同时改掉那几条的行为 —— 那是另一件事，不在这一轮里做。
+_RT_TIME_HINTS = ("最新", "现在", "目前", "当前", "今天", "今年", "刚刚", "实时", "这届",
+                  "最近", "已经", "结束了", "谁是")
+_RT_FACT_WORDS = ("世界杯", "欧洲杯", "亚洲杯", "奥运会", "奥运", "冬奥", "大选", "选举",
+                  "冠军", "夺冠", "决赛", "半决赛", "小组赛", "比分", "排名", "榜单",
+                  "结果", "谁赢", "总统", "首相", "票房", "股价", "汇率", "诺贝尔",
+                  "赛程", "出线", "获奖", "得主", "上任", "卸任",
+                  # ⚠️ 下面这几个是自测**抓漏补上来**的：「现在谁是世界首富」当时判成了 False ——
+                  #    它明显是随时间变的世界事实，只是我第一版词表里没有这一类。
+                  "首富", "富豪", "现任", "排行", "排行榜", "纪录", "记录", "最新版本",
+                  "版本号", "发布会", "价格", "多少钱", "市值", "销量")
+_RT_YEAR = re.compile(r"(19|20)\d{2}\s*年")
+
+
+def _is_realtime_fact(q):
+    """这句话问的是**时效性事实**吗（答案随时间变、而且模型先验里没有）。
+
+    【为什么是词面判据、不调模型】
+      · 这条路必须在**检索之前**就判出来（判晚了，检索早就被跳过了）；
+      · 判据要可复现、可单测；多一次模型调用既慢又不确定。
+      【为什么要求"时间词 + 事实词"同时命中】
+      单个条件都会误伤：「谁是鲁迅」只有事实词、没有时间词（历史事实，先验里有，不该强搜）；
+      「现在几点」只有时间词、没有事实词（那有时间注入那条路）。**两条都命中才算**。
+    """
+    s = str(q or "").strip()
+    if not s:
+        return False
+    if _RT_YEAR.search(s) and any(w in s for w in _RT_FACT_WORDS):
+        return True
+    return any(h in s for h in _RT_TIME_HINTS) and any(w in s for w in _RT_FACT_WORDS)
+
+
+def _rag_grade(cands, query, realtime=False):
+    """给候选打分、排序、分级。返回结构化结果（不注入，注入由调用方决定）。
+
+    `realtime=True` 只对**时效性事实**开：这类问题的答案**只有联网能给**
+    （用户没说过、模型先验里没有、记忆库里必然没有），所以"联网一律只进复核档"
+    这条自律在它们身上等于"永远不知道"。此时允许联网结果**直接使用**，
+    但仍然**强制带来源**（注入文本里本来就写 `来源「联网」`），不伪装成自己的记忆。
+    ⚠️ 默认 `False`：别的调用方（含自测里直接调本函数的那些）行为**一个字不变**。
+    """
     scored = []
     for c in cands:
         q, why = _rag_quality(c.get("text"), query, c.get("source", "?"), sim=c.get("sim"))
@@ -8594,17 +8667,22 @@ def _rag_grade(cands, query):
                        "meta": c.get("meta") or ""})
     scored.sort(key=lambda x: -x["q"])
     best = scored[0] if scored else None
-    if not best or best["q"] >= RAG_USE_DIRECTLY:
+    _rt_used = False
+    if realtime and best and best["source"] == "联网" and best["q"] >= RAG_REVIEW_FLOOR:
+        grade = "直接使用"
+        _rt_used = True
+    elif not best or best["q"] >= RAG_USE_DIRECTLY:
         grade = "直接使用"
     elif best["q"] >= RAG_REVIEW_FLOOR:
         grade = "交元认知与健康医生"
     else:
         grade = "不注入"
     return {"best": best, "candidates": scored, "grade": grade,
-            "q": best["q"] if best else 0.0}
+            "q": best["q"] if best else 0.0, "realtime": bool(realtime),
+            "realtime_used": _rt_used}
 
 
-def _rag_concurrent(query):
+def _rag_concurrent(query, realtime=False):
     """三源同时查 → 算优率 → 按档处理。返回可直接拼进 system 的文本（空串 = 不注入）。
 
     **三档处理**（用户规格）：
@@ -8612,6 +8690,8 @@ def _rag_concurrent(query):
       · 0.60~0.90 交元认知 + 健康医生 —— 记一条自评样本（B 档，需复核）并写一条健康日志；
         回答由元认知那一侧加上"没把握/需复核"的标注，而不是让载体假装很有把握
       · < 0.60 不注入        —— 宁可不说，也不拿低质片段污染这一轮
+
+    `realtime=True`（时效性事实，见 `_is_realtime_fact`）：允许合格的**联网**结果直接进 system。
     """
     try:
         cands, lat, total = _rag_three_sources(query)
@@ -8661,11 +8741,12 @@ def _rag_concurrent(query):
             LOG.info("心：载体事件（检索到内容）触发 → 状态=%s", _ev2.get("state"))
     except Exception as _e:      # noqa: silent-ok
         LOG.debug("心：载体事件触发失败（忽略）：%s", _e)
-    g = _rag_grade(cands, query)
+    g = _rag_grade(cands, query, realtime=realtime)
     best = g["best"]
     LOG.info("RAG 三源同时查：候选 %d 条 · 各源耗时 %s · 并发总耗时 %.2fs（串行会是 %.2fs）",
              len(cands), lat, total, sum(lat.values()))
-    LOG.info("RAG 优率：%.2f【%s】来源=%s ｜ %s", best["q"], g["grade"], best["source"], best["why"])
+    LOG.info("RAG 优率：%.2f【%s】来源=%s%s ｜ %s", best["q"], g["grade"], best["source"],
+             "（时效性事实：联网可直接用）" if g.get("realtime_used") else "", best["why"])
     if g["grade"] == "不注入":
         return ""
     if g["grade"] == "交元认知与健康医生":
@@ -10156,10 +10237,18 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #    "我要全部的"孤立看是 chat → 会走"闲聊不联网"分支；
             #    融合成"我要全部的工具"之后才判得出真实意图（见 `merge_context` 的说明）。
             _pre_intent = _detect_intent(user_input_ctx)
-            if _pre_intent == "chat":
+            # ⚠️ **时效性事实是例外**（2026-09-17 实测补的）：这类问题被判成 chat 就会走到
+            #    "闲聊不联网"这条分支上 —— 而它恰恰是**唯一只有联网能答**的一类。
+            #    实测原句：「2026年世界杯谁是冠军」→ `闲聊轮不联网检索` → 载体一个源都没查，
+            #    它只能凭训练数据里的旧时间观作答（答成"还没结束"）。
+            #    判据是**词面**的，见 `_is_realtime_fact`：时间词 + 事实词同时命中才算。
+            _rt_fact_q = _is_realtime_fact(user_input_ctx)
+            if _pre_intent == "chat" and not _rt_fact_q:
                 LOG.info("闲聊轮不联网检索（省时间；需要联网时会自动走 query 意图）")
                 _q, _qhint = "", ""
             else:
+                if _rt_fact_q and _pre_intent == "chat":
+                    LOG.info("时效性事实：虽是 chat 意图，**这一路必须联网**（不然只能凭先验瞎猜）")
                 _q, _qhint = resolve_search_query(user_input_ctx)
             if _q:
                 info = web_search(_q, num=5)
@@ -10378,9 +10467,12 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("画像召回：合并 %d+%d → 去重后 %d 条 → 已注入 system｜%s",
                              len(hits_a), len(hits_b), len(impressions),
                              " ／ ".join(str(p.get("content") or "")[:24] for p in impressions))
+                    _loop_meter("inject", n=len(impressions),
+                                texts=[str(p.get("content") or "") for p in impressions])
                 else:
                     LOG.info("画像召回：空（血管 %d 条 + 画像系统 %d 条，去重后 0 条）",
                              len(hits_a), len(hits_b))
+                    _loop_meter("inject", n=0, texts=[])
             except Exception as _e:      # noqa: silent-ok — 召回层不在也不能影响回答
                 LOG.debug("画像召回接入失败（忽略）：%s", _e)
             # ---- 【固化队列】扫画像库，够格进队列（跟当前这轮无关，是维护动作）----
@@ -10451,7 +10543,13 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #      而不是"谁先返回就用谁"或"全都塞进 system"（后者会挤掉上下文并干扰模型）。
             #   ③ 优率不到 0.90 的素材不会被当成事实用：0.60~0.90 交元认知与健康医生，
             #      低于 0.60 直接不注入。分档与判据见 `_rag_quality` 的说明。
-            _rag_inject = _rag_concurrent(user_input)
+            #   ⚠️ **例外只有一类**：时效性事实（`_is_realtime_fact`）—— 那类问题的答案
+            #      用户没说过、记忆库里必然没有、模型先验里也没有，**只有联网能给**。
+            #      对它们，合格的联网结果直接进 system（并强制带来源）。
+            _rt_fact = _is_realtime_fact(user_input)
+            if _rt_fact:
+                LOG.info("时效性事实：允许联网结果直接进 system（这类问题只有联网能答）")
+            _rag_inject = _rag_concurrent(user_input, realtime=_rt_fact)
             if _rag_inject:
                 sys_text += _rag_inject
             # ---- 第一部分之二 · 精神记忆：以前**想明白的一句话认知** ----
@@ -13165,6 +13263,10 @@ def api_models():
         _sync_local_models()
     except Exception as e:        # noqa: silent-ok — 补列表失败不许影响"列出模型"本身
         LOG.debug("本地模型自动检测异常（忽略）：%s", e)
+    try:                          # 看门狗懒启动：界面一打开（它一定会拉这个列表）就有人看着大脑了
+        _brain_watchdog_ensure()
+    except Exception as e:        # noqa: silent-ok — 看门狗起不来不许影响列模型
+        LOG.debug("大脑看门狗启动失败（忽略）：%s", e)
     cur = None
     eng = BRAIN_ENGINE
     base = (CONTROL.get("brain", {}).get("api", {}).get("base_url", "") or "")
@@ -13290,6 +13392,10 @@ def api_model_select():
                 # 顺带把"这个模型在慢盘上、首载要多久"如实告诉用户（本地模型才量，云端不涉及）
                 try:
                     _g = _model_path_in_swap_yaml(brain["api"].get("model") or "")
+                    # ⚠️ **先报"盘在报错"，再报"读得慢"** —— 前者才是 205 秒那种真凶（见函数说明）
+                    _dh = _disk_health_warn(_g)
+                    if _dh:
+                        note = (_dh + "\n" if note else _dh)
                     _dn = _slow_disk_note(_g)
                     if _dn:
                         note = (note + "\n" if note else "") + _dn
@@ -13479,6 +13585,49 @@ def _lexical_hook(q, rows):
 _REQ_INFLIGHT = {"n": 0, "last": 0.0}
 
 
+def _disk_health_warn(path, minutes=30):
+    """这个文件所在的盘**现在**在报错吗？是 → 返回一句**带数字的实话**，否则空串。
+
+    【为什么要有它（2026-09-18 实测）】
+      `_slow_disk_note` 只说"读得慢、首载要多久"，但真正让用户干等 205 秒的不是慢，是**盘在报错**：
+      DeepSeek-V4-Pro 的 gguf 在外置 USB 盘上，那块盘当天在系统日志里报了成百上千条
+      `controller error` / `paging operation error` —— 那种状态下 llama.cpp **一页一页读不回权重**，
+      一个 token 要 100 秒。而界面上**一个字都没提示**。
+      这里不猜：直接查系统日志里那块盘近 N 分钟有几条盘错误，**把条数摆出来**。
+
+    结果缓存 60 秒 —— `/api/models` 会被界面反复轮询，不能每次都去查事件日志。
+    """
+    try:
+        drive = os.path.splitdrive(os.path.abspath(str(path or "")))[0].upper()
+        if not drive or drive.startswith("C:"):
+            return ""            # 本机盘（C:）不啰嗦 —— 出问题的从来不是它
+        _ck = "disk_warn|%s|%d" % (drive, int(minutes))
+        _now = time.time()
+        _hit = _DISK_WARN_CACHE.get(_ck)
+        if _hit and _now - _hit[0] < 60:
+            return _hit[1]
+        xpath = ("*[System[Provider[@Name='disk'] and TimeCreated[timediff(@SystemTime) <= %d]]]"
+                 % (int(minutes) * 60000))
+        r = subprocess.run(["wevtutil", "qe", "System", "/q:" + xpath, "/c:200", "/rd:true", "/f:text"],
+                           capture_output=True, text=True, timeout=10)
+        out = (r.stdout or "")
+        n = out.count("Event[") or out.count("事件[")
+        msg = ""
+        if n:
+            msg = ("⚠️ **这个模型所在的盘（%s）现在正在报错**：系统日志里近 %d 分钟有 %d 条盘错误"
+                   "（controller / paging）。实测这种状态下它会一页一页从坏盘读权重 —— "
+                   "**可能一个 token 就要上百秒**，甚至加载失败。建议把它挪到本机盘（C:）。"
+                   % (drive, int(minutes), n))
+        _DISK_WARN_CACHE[_ck] = (_now, msg)
+        return msg
+    except Exception as e:      # noqa: silent-ok — 查不到就不提示，绝不影响切换
+        LOG.debug("盘健康探测失败（忽略）：%s", e)
+        return ""
+
+
+_DISK_WARN_CACHE = {}
+
+
 def _slow_disk_note(gguf_path):
     """量一下这个模型文件所在的盘读多快，把"首载要多久"如实算给用户听。
 
@@ -13564,6 +13713,94 @@ def _warmup_local_async(base_url, model):
         threading.Thread(target=_run, name="xj-warmup", daemon=True).start()
     except Exception as e:          # noqa: silent-ok — 连线程都起不来也不能影响切换
         LOG.debug("预热线程启动失败（忽略）：%s", e)
+
+
+# ================== 大脑看门狗：9292 掉了就自动拉回来 ==================
+# 【为什么要有它（2026-09-18 实测）】llama-swap 会**静默死**：进程消失、它自己的日志最后一行
+#   还是正常的 200、系统事件日志里也没有崩溃记录。实测两次（21:14、01:10），用户看到的就是
+#   界面上那句"大脑没有应答"，然后只能手工重启。
+#   "发现自己少了一个器官就把它装回去"本来就是载体该做的事 —— 这里补上。
+# 【边界（三条，缺一条就可能帮倒忙）】
+#   ① 只对**本地 llama-swap 这条线**动手：控制文件里的大脑 base_url 不含 9292 就不管（云端不归它管）；
+#   ② 限流：最多每 5 分钟试一次，起不来时不许疯狂重试（会把机器拖垮）；
+#   ③ **如实记账**：拉起来了写清 pid 与耗时，没拉起来写清原因 —— 一条都不许省、不许假装成功。
+_BRAIN_WD = {"started": False, "last_try": 0.0, "tries": 0, "saved": 0, "note": ""}
+_BRAIN_WD_GAP = 300.0          # 两次尝试之间至少隔这么久（秒）
+_BRAIN_WD_EVERY = 45.0         # 看门狗自己巡检的间隔（秒）
+_BRAIN_WD_LOCK = threading.Lock()
+
+
+def _brain_watchdog_round():
+    """巡检一轮。返回**一句实话**（空串 = 不用报）。"""
+    base = (CONTROL.get("brain", {}).get("api", {}).get("base_url", "") or "")
+    if "9292" not in base:
+        return ""                       # 现在的大脑不是这条线（比如切了云端）→ 不归它管
+    try:
+        if requests.get("http://127.0.0.1:9292/v1/models", timeout=4).status_code == 200:
+            return ""                   # 活着，什么都不做
+    except Exception:      # noqa: silent-ok — 探不通就是"可能掉线"，继续往下走
+        pass
+    _now = time.time()
+    if _now - _BRAIN_WD["last_try"] < _BRAIN_WD_GAP:
+        return ""                       # 限流：刚试过，别刷
+    _BRAIN_WD["last_try"] = _now
+    _BRAIN_WD["tries"] += 1
+
+    root = os.path.dirname(os.path.abspath(__file__))
+    cfg = os.path.join(root, "llama-swap.yaml")
+    exe = _find_running_swap()          # 万一它还活着（只是没应答）就从进程取真路径
+    for c in (os.path.join(root, "llama-swap", "llama-swap.exe"),
+              os.path.join(root, "llama-swap.exe")):
+        if not exe and os.path.exists(c):
+            exe = c
+    if not exe:
+        try:
+            exe = (_discover_paths(kick=False) or {}).get("swap") or ""
+        except Exception as e:      # noqa: silent-ok — 探测失败就当没找到
+            LOG.debug("看门狗找 llama-swap 失败（忽略）：%s", e)
+    if not (exe and os.path.exists(cfg)):
+        return ("大脑看门狗：9292 无应答，但**没找到 llama-swap.exe 或配置** → 没拉起来"
+                "（exe=%r）｜如实记，不假装" % (exe or "空"))
+    p = _start_swap(exe, cfg)
+    if p is None:
+        return ("大脑看门狗：9292 无应答，`_start_swap` 返回 None → **没拉起来**｜请手工查")
+    for i in range(20):
+        time.sleep(1)
+        try:
+            if requests.get("http://127.0.0.1:9292/v1/models", timeout=3).status_code == 200:
+                _BRAIN_WD["saved"] += 1
+                return ("大脑看门狗：**9292 掉了 → 已自动拉起**（pid=%d，约 %ds 就绪）"
+                        "｜第 %d 次救回｜**这是载体做的事，不是它自己恢复的**"
+                        % (p.pid, i + 1, _BRAIN_WD["saved"]))
+        except Exception:      # noqa: silent-ok — 还没起来，继续等
+            continue
+    return ("大脑看门狗：9292 无应答，已拉起 pid=%d 但 20 秒内没就绪 → "
+            "**没算成功**，如实记（可能模型在坏盘上读不动）" % p.pid)
+
+
+def _brain_watchdog_loop():
+    while True:
+        time.sleep(_BRAIN_WD_EVERY)
+        try:
+            _m = _brain_watchdog_round()
+            if _m:
+                LOG.info("%s", _m)
+                _BRAIN_WD["note"] = _m
+        except Exception as e:      # noqa: silent-ok — 看门狗自己出错不许拖垮应用
+            LOG.debug("大脑看门狗巡检失败（忽略）：%s", e)
+
+
+def _brain_watchdog_ensure():
+    """懒启动（界面第一次拉模型列表时起）。幂等。"""
+    with _BRAIN_WD_LOCK:
+        if _BRAIN_WD["started"]:
+            return {"started": False, "why": "已经在看着了"}
+        _BRAIN_WD["started"] = True
+        threading.Thread(target=_brain_watchdog_loop, name="xj-brain-watchdog",
+                         daemon=True).start()
+    LOG.info("大脑看门狗已起：每 %.0fs 看一次 9292，掉了就自动拉回来（最多每 %.0f 分钟试一次）",
+             _BRAIN_WD_EVERY, _BRAIN_WD_GAP / 60.0)
+    return {"started": True, "thread": "xj-brain-watchdog"}
 
 
 def _brain_status():

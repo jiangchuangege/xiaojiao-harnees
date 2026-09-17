@@ -326,7 +326,7 @@ flowchart TB
 
 | 状态 | 存放位置 | 切换火种时是否变化 |
 |---|---|---|
-| 记忆 | `xiaojiao_memory.txt`、向量库文件、`logs/memory/` | 不变 |
+| 记忆 | `logs/quarantine/xiaojiao_memory.txt`（早期遗留存盘，2026-09-17 从仓库根搬入隔离区）、向量库文件、`logs/memory/` | 不变 |
 | 工具 | `plugins/` 目录 | 不变 |
 | 世界 | `xiaojiao_control.json`、`logs/world/` | 不变 |
 | 会话 | `xiaojiao_sessions.json`、`logs/mind_stream/<会话 id>.json` | 不变 |

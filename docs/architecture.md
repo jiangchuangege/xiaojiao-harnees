@@ -440,7 +440,7 @@ MiniGPT 的能力来自本地大模型蒸馏，这条链路仍在仓库里：
 | `training_data_pool.txt` | 清洗脚本 / 蒸馏器 | `train_model.py` |
 | `vocab.pkl` | `train_model.py` | `xiaojiao_harness.py` |
 | `mini_gpt_model.pth` | `train_model.py` | `xiaojiao_harness.py` |
-| `xiaojiao_memory.txt` | 记忆接口 / 用户 | `xiaojiao_harness.py` |
+| `logs/quarantine/xiaojiao_memory.txt` | 记忆接口 / 用户（早期遗留存盘，2026-09-17 从仓库根搬入隔离区） | `xiaojiao_harness.py` |
 
 ---
 

@@ -150,7 +150,7 @@ LCCC（Large-scale Chinese Conversation Corpus）是对话列表，每个对话�
 
 ### 3.2 知识库蒸馏：`distill_and_train.py`
 
-读取 `xiaojiao_knowledge.txt` 与 `xiaojiao_memory.txt`，按连续 10 个以上短横线（`-{10,}`）切块，只保留长度大于 50 的块，最多处理前 5 块。每块请求教师生成 5 组问答：
+读取 `xiaojiao_knowledge.txt` 与 `logs/quarantine/xiaojiao_memory.txt`（后者是早期遗留存盘，2026-09-17 从仓库根搬进隔离区；`distill_and_train.py` 里有 `os.path.exists` 保护，缺了只是少一份原料、不会崩），按连续 10 个以上短横线（`-{10,}`）切块，只保留长度大于 50 的块，最多处理前 5 块。每块请求教师生成 5 组问答：
 
 ```python
 # 请求：让教师只输出 JSON 数组
@@ -268,10 +268,10 @@ python start_xiaojiao.py       # 或：一键拉起本地大脑与 Web 界面
 | `mini_gpt_model.pth` | 训练产物 | `state_dict` |
 | `model_config.json` | 训练产物 | 架构六项：`embed_size` / `num_heads` / `hidden_size` / `num_layers` / `vocab_size` / `seq_len` |
 | `progress.txt` | 训练留痕 | 单行步数，只写不读 |
-| `xiaojiao_memory.txt` | 记忆 | 多种格式并存，见下 |
+| 早期遗留的记忆存盘（现已在 `logs/quarantine/xiaojiao_memory.txt`，2026-09-17 从仓库根搬入） | 记忆 | 多种格式并存，见下 |
 | `massive_distill.log` | 日志 | 时间戳前缀行 |
 
-`xiaojiao_memory.txt` 的写入方不止一个，实测 72 行里存在三种格式：
+那份记忆存盘的写入方不止一个，实测 72 行里存在三种格式：
 
 | 写入方 | 行格式 |
 | --- | --- |
@@ -299,7 +299,7 @@ python start_xiaojiao.py       # 或：一键拉起本地大脑与 Web 界面
 | 8 | `think(user_input)` 组装提示词并交给 `generate_with_model()` | 两个函数都不存在；实际是 `retrieve_reply()` / `generate()` / `deep_think()` 与 `agent_run()` |
 | 9 | `convert.py` 兼顾 `list` 与 `dict` 两种结构 | 只处理 `list`；非列表的对话直接跳过 |
 | 10 | 从语料中抽出成对的「用户 / 助手」 | 按偶数下标为用户、奇数下标为助手配对，并去掉中文与全角标点之间的空格 |
-| 11 | `xiaojiao_memory.txt` 每行 `时间戳 - 内容` | 三种格式并存，仅 `save_memory` 写入的行符合该格式 |
+| 11 | 那份记忆存盘每行 `时间戳 - 内容` | 三种格式并存，仅 `save_memory` 写入的行符合该格式（该文件 2026-09-17 已移入 `logs/quarantine/`） |
 | 12 | 蒸馏 QA 直接写入训练池 | 写入格式为 `问题 答案`，不含「用户 / 小焦」标记，与训练池约定不一致 |
 
 风险项（需在运行前处理）：

@@ -68,11 +68,46 @@ def adjust_candidates(cands, state=None):
         pass
     b = _psyche.bias(state)
     kws = b.get("keywords") or ()
-    if not items or not kws:
+    if not items:
+        return items, {"state": b["state"], "keywords": [], "moved": [], "note": "无候选，未重排"}
+    # ★ 心带模型走 v2：优先用心的原话算向量（心不查表，向量抓语义）
+    _q = ""
+    try:
+        _q = str(_psyche.colors().get("query") or "").strip()
+    except Exception:
+        pass
+    if not _q and not kws:
         return items, {"state": b["state"], "keywords": [], "moved": [], "note": "方向中性，未重排"}
     before = [id(c) for c in items]
-    # 稳定排序：key 只用"命中数"，Python 的 sorted 稳定 → 同分保持原顺序
-    items = sorted(items, key=lambda c: -_score(c.get("text") if isinstance(c, dict) else c, kws))
+    # ★ 优先向量；没有心的话或向量失败 → 退回关键词
+    if _q:
+        try:
+            from core import embedder as _EM
+            import math as _math
+            def _cos(a, b_):
+                _d = sum(x*y for x, y in zip(a, b_))
+                _na = _math.sqrt(sum(x*x for x in a))
+                _nb = _math.sqrt(sum(x*x for x in b_))
+                return _d/(_na*_nb) if _na and _nb else 0.0
+            _qv = _EM.embed(_q)
+            if not _qv:
+                # 心的原话都拿不到向量 → 这个后端现在不能用，如实退回关键词（要求 3）
+                raise ValueError("心的原话拿不到向量")
+            _n = len(_qv)
+
+            def _vec(c):
+                _e = _EM.embed(str(c.get("text") if isinstance(c, dict) else c or ""))
+                # ⚠️ 实测（2026-09-18）：候选里只要有一条**空文本**，`embed("")` 返回 None →
+                #    `zip(_qv, None)` 抛 TypeError → 被外层 except 吃掉 → **整批**静默退回
+                #    关键词匹配，语义排序全丢（一条坏候选废掉整批）。
+                #    这里给它一个**零向量**：那条自己排最后，别的候选照常按语义排。
+                return _e if _e else [0.0] * _n
+
+            items = sorted(items, key=lambda c: -_cos(_qv, _vec(c)))
+        except Exception:
+            items = sorted(items, key=lambda c: -_score(c.get("text") if isinstance(c, dict) else c, kws))
+    else:
+        items = sorted(items, key=lambda c: -_score(c.get("text") if isinstance(c, dict) else c, kws))
     after = [id(c) for c in items]
     moved = []
     for i, (bf, af) in enumerate(zip(before, after)):
