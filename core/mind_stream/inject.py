@@ -98,6 +98,14 @@ def build_block(st, text="", intent="chat"):
     _frame = re.compile(r"^(?:聊到「[^」]*」时我回应了：|没说完：)")
     und = [_frame.sub("", str(x))[:40] for x in (st.get("user_understanding") or [])][-4:]
     thoughts = [_frame.sub("", str(x))[:70] for x in (st.get("recent_thoughts") or [])][-3:]
+    # 【2026-09-18 补一刀（用户实测抓到的自我强化环）】"它自己说过"里**不许再出现"我这儿没有记录"**这类
+    #   否定式回答：那等于每轮都把"我不知道"重新摆在它面前，它就会一直照着答。
+    #   实测：用户说完四件事再问「我住在哪」，它答"没有关于你住哪的记录"；
+    #   这一轮被写进"它自己说过"→ 下一轮又把"没有记录"摆回去 → **自己把自己钉在"不知道"上**。
+    #   注意：这里**只是不把它自己那句否定的回答再喂回去**，不改任何判据、不改它这一轮能看到的真实记忆。
+    _NEG = ("没有关于", "没有记录", "没有找到", "没查到", "查了一下我的记忆", "我目前没有",
+            "我好像没记住", "没有关于“你", "没印象", "不记得")
+    thoughts = [t for t in thoughts if not any(w in t for w in _NEG)]
     unsaid = [_frame.sub("", str(x))[:50] for x in (st.get("unsaid") or [])][-2:]
     opens = [_frame.sub("", str(x))[:40] for x in (st.get("open_questions") or [])][-3:]
     tone = st.get("tone_state") if st.get("tone_state") in TONES else "neutral"

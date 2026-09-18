@@ -202,6 +202,61 @@ def clip_line(line, limit):
     return head + "…"
 
 
+_Q_MARKS = ("什么", "谁", "哪", "怎么", "多少", "为什么", "是否", "能不能", "有没有", "是不是",
+            "多久", "几点", "几号", "几时", "吗", "呢")
+
+
+def _looks_like_question(text):
+    """是不是**在提问**（判据要窄：只认明确问句；宁可少判，也不误伤事实陈述）。"""
+    t = str(text or "").strip()
+    if not t:
+        return False
+    if t.endswith(("？", "?", "吗", "呢")):
+        return True
+    return any(w in t for w in _Q_MARKS)
+
+
+def _bigram_overlap(a, b):
+    """共有 2-gram ÷ 短句的 2-gram 数（0~1）。用它判"是不是同一句"，不调模型、不依赖向量。"""
+    def _bg(s):
+        s = "".join(ch for ch in str(s or "") if ch.strip())
+        return set(s[i:i + 2] for i in range(max(0, len(s) - 1)))
+    A, B = _bg(a), _bg(b)
+    if not A or not B:
+        return 0.0
+    return len(A & B) / float(min(len(A), len(B)))
+
+
+def _drop_self_echo(query, hits, line=0.9):
+    """剔掉"同一个问题 + 它自己上次的回答"那些行。返回 `(保留的, 剔掉几条)`。
+
+    【为什么必须有】实测（2026-09-18）：用户说了四件事、再问「我住在哪」，
+    它答「我没有关于你住哪的信息」—— 因为 top1 那条的 key 就是这句问题本身，
+    内容是它上一轮的同款回答（相似度 1.0000，而真正的事实那条只有 0.89）。
+    **它拿自己上次的"我不知道"当事实**。剔掉这一行，事实那行就会顶上来。
+    【为什么只剔问句】`key` 相同的**陈述句**（「我叫张三」）恰恰是记忆的正主，
+    那是"用户亲口说的"，一个字都不能动 —— 所以这里再要求"用户那半句是问句"。
+    """
+    out, dropped = [], 0
+    for h in hits or []:
+        k = str((h or {}).get("key") or "")
+        txt = str((h or {}).get("text") or "")
+        # ④ 这一条是"它自己说我不知道"那一类 → 永远不注入（存量里还有一批这种行）
+        if any(w in txt for w in ("没有关于你", "没有关于你住", "没有记录", "没查到", "没有关于“你",
+                                  "我刚才查了一下我的记忆", "我目前没有关于", "没有关于你生日")):
+            dropped += 1
+            continue
+        u = ""
+        for seg in txt.split("用户：")[1:]:
+            u = seg.split("\n")[0].strip()
+            break
+        if k and _bigram_overlap(query, k) >= line and _looks_like_question(u or k):
+            dropped += 1
+            continue
+        out.append(h)
+    return out, dropped
+
+
 def retrieve(query, top_k=None, threshold=None, max_tokens=None,
              log=True, kind=None, now=None):
     """检索相关记忆并拼成可注入的文本。
@@ -244,6 +299,24 @@ def retrieve(query, top_k=None, threshold=None, max_tokens=None,
     raw = memory_vec.search_memory(query, top_k=max(top_k * 3, top_k),
                                    threshold=_recall_th, dedup_text=True)
     vector_ms = (time.time() - t0) * 1000.0      # 纯向量检索这一段（判据：< 100ms）
+    # ★ **剔掉"自我回灌"行（2026-09-18 补，用户实测抓到的真病根）** ★
+    # 【症状】用户先说了四件事，再问「我住在哪」→ 它答「我没有关于你住哪的信息」，五问四错。
+    #   查库发现：四件事**都在库里**（相似度 0.89 能被检索到），可每次 top1 都是**1.0000**
+    #   的另一条 —— 那条的 key 就是**这句问题本身**，内容是**它上一轮的回答**（"我没有记录"）。
+    #   于是：它拿自己上次"我不知道"当事实，一字不改地再说一遍 —— **错答自我强化**。
+    #   这是"自我回灌"最凶的那个形状：不是分值虚高，是把它自己的回答当成了知识。
+    # 【判据（确定性、不调模型）】一行同时满足两条就剔：
+    #   ① `key` 与本次提问**几乎同一句**（2-gram 重合 ≥ 0.9）；
+    #   ② 用户那半句是**问句**（不是陈述）——陈述句的 key 相同反而是宝贝（「我叫张三」）。
+    raw, _dropped = _drop_self_echo(query, raw)
+    if _dropped:
+        try:
+            import logging
+            logging.getLogger("xiaojiao.retriever").info(
+                "剔掉 %d 条自我回灌行（同一句问题 + 它自己上次的回答）：%s",
+                _dropped, str(raw[0].get("text"))[:40].replace("\n", " ") if raw else "剔完没别的了")
+        except Exception:      # noqa: silent-ok — 日志失败不影响检索
+            pass
     if kind:
         raw = [h for h in raw if h.get("kind") == kind]
 

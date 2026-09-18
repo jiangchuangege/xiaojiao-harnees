@@ -372,6 +372,10 @@ def search_memory(query, top_k=5, threshold=0.0, dedup_text=True):
             hits.append({"id": m.get("id", ""), "text": m.get("text", ""),
                          "kind": m.get("kind", "dialogue"),
                          "entities": m.get("entities") or [], "ts": float(m.get("ts") or 0),
+                         # 【2026-09-18 带上 key】检索侧要用它判"这是不是同一个问题又被问了一次" ——
+                         #   那一类（同一句 + 它自己上次的回答）会让它拿自己上次的"我不知道"当事实，
+                         #   必须能被识别出来。见 `core/retriever.py` 的 `_drop_self_echo()`。
+                         "key": str(m.get("key") or ""),
                          "score": round(s, 4), "rank": len(hits) + 1})
             if len(hits) >= max(1, int(top_k or 5)):
                 break
