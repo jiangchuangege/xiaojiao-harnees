@@ -9603,14 +9603,11 @@ _MY_FACT_WORDS = ("住", "家", "名字", "叫", "生日", "岁", "喜欢", "爱
                   "伴侣", "城市", "地方", "手机", "电脑", "车")
 
 
-def _direct_fact_answer(q):
-    """问到"用户本人说过的事"、且库里有他的原话 → 返回 `{"answer","why"}`；否则 None。
+def _find_user_fact(q):
+    """找"用户本人说过的那句话"（住哪/生日/喜欢什么/在学什么/养的宠物…）。返回 `(原话, 说明)` 或 None。
 
-    【判据全是确定性的，不调模型】
-      · 问题要短（≤ 24 字）、含「我」、是个问句、问的还得是**本人的事**（住/生日/喜欢/学/养…）；
-      · 库里 top1~5 里必须有一条**用户陈述句**（不是他问过的话）、相似度 ≥ 0.6、
-        而且**问到的那个词就出现在那句原话里**（防止答偏，例如问"住哪"却答"喜欢猫"）。
-    【铁的边界】只搬原话、一个字不加工；查不到就返回 None（照常交给模型，绝不编）。
+    判据全是确定性的、不调模型；查不到就返回 None（调用方照常交给模型，**绝不编**）。
+    两种查法：① 向量检索（相似度 ≥ 0.6 且是**用户陈述句**）；② 向量没到阈值时**按关键词扫库**。
     """
     s = str(q or "").strip()
     if not s or len(s) > 24:
@@ -9626,8 +9623,8 @@ def _direct_fact_answer(q):
         from core import memory_vec as _MV
         hits = _MV.search_memory(s, top_k=5, threshold=0.6) or []
     except Exception as e:      # noqa: silent-ok — 库读不到就交给模型
-        LOG.debug("事实直答：查库失败（交给模型）：%s", e)
-        return None
+        LOG.debug("找原话：查库失败（交给模型）：%s", e)
+        hits = []
     for h in hits:
         txt = str((h or {}).get("text") or "")
         u = ""
@@ -9640,12 +9637,8 @@ def _direct_fact_answer(q):
             continue
         if not any(w in u for w in _kw):   # 问的词不在原话里 → 不抢答（防答偏）
             continue
-        return {"answer": "（照你自己说过的话答你）**你说过：%s**" % u,
-                "why": "问=「%s」｜原话=「%s」｜相似度 %.3f" % (s, u, float(h.get("score") or 0))}
+        return u, "问=「%s」｜原话=「%s」｜相似度 %.3f" % (s, u, float(h.get("score") or 0))
     # ---- 向量没命中时的兜底：**按关键词扫库**（确定性，不调模型）----
-    # 【为什么需要】字级小脑在短句上分不开："我在学什么" 与 "我在学Python" 的余弦可能掉到阈值以下，
-    #   而"问的词在不在原话里"这件事**本来就不需要向量**。实测：「我在学什么」靠向量找不到，
-    #   靠下面这段一次就找到了。
     try:
         from core import memory_vec as _MV2
         import io as _io
@@ -9654,7 +9647,7 @@ def _direct_fact_answer(q):
         p = _MV2.path()
         if p and _os.path.exists(p):
             lines = _io.open(p, encoding="utf-8", errors="replace").read().split("\n")
-            for ln in reversed(lines[-800:]):            # 只看最近 800 行：够用，且越近越可能是他要的
+            for ln in reversed(lines[-800:]):            # 只看最近 800 行：越近越可能是他要的
                 if not ln.strip():
                     continue
                 try:
@@ -9670,11 +9663,36 @@ def _direct_fact_answer(q):
                     continue
                 if not any(w in u for w in _kw):
                     continue
-                return {"answer": "（照你自己说过的话答你）**你说过：%s**" % u,
-                        "why": "问=「%s」｜按关键词扫库命中=「%s」（向量没到阈值，关键词兜底）" % (s, u)}
+                return u, "问=「%s」｜按关键词扫库命中=「%s」（向量没到阈值，关键词兜底）" % (s, u)
     except Exception as e:      # noqa: silent-ok — 兜底失败就交给模型
-        LOG.debug("事实直答：关键词兜底失败（交给模型）：%s", e)
+        LOG.debug("找原话：关键词兜底失败（交给模型）：%s", e)
     return None
+
+
+def _direct_fact_answer(q):
+    """**事实直答**：照用户原话直接答（不过模型）。返回 `{"answer","why"}` 或 None。"""
+    got = _find_user_fact(q)
+    if not got:
+        return None
+    u, why = got
+    return {"answer": "（照你自己说过的话答你）**你说过：%s**" % u, "why": why}
+
+
+def _fact_back_for_messages(q):
+    """**把"用户说过的那句话"作为一条 assistant 消息接回去**（让它用自己的语气说）。
+
+    与 `_direct_fact_answer` 的分工（两个都试过、结果都记在 CHANGELOG 里）：
+      · 直答 = 载体照抄原话（**形式上就是查表**，用户一眼看出像模板）；
+      · 这一条 = 只把原话摆在**紧挨生成位置**的一条 assistant 消息里，
+        让模型**用自己的语气**讲出来 —— 与"心接回"同一招（静态注入失败过四次，
+        挨着生成 + 第一人称才接上）。
+    【为什么是 assistant 而不是 system】system 是"资料"，assistant 是"我自己想过的"。
+    """
+    got = _find_user_fact(q)
+    if not got:
+        return None
+    u, why = got
+    return {"role": "assistant", "content": "（我记得你说过：%s）" % u[:60]}, why
 
 
 def _eyc_state_now():
@@ -9832,6 +9850,23 @@ def mind_done(mind, answer, truncated=False, skipped=False):
 
 
 _HEART_BACK = {"n": -1}      # 上一次"接回"时的心是第几次（见 `_heart_back_for_messages`）
+_FACT_BACK = {"msg": None, "fact": ""}   # 这一轮接回的"用户说过的那句事实"（见 `_fact_back_for_messages`）
+# 它"又否认了"的判据（**只在"库里有用户原话"那一轮用**，不是全轮次扫描）
+_DENY_WORDS = ("没有关于", "没有你", "没有找到", "没有记录", "没记", "没查到", "不记得",
+               "你没告诉我", "还没跟我说过", "没有印象", "没说过", "不知道你",
+               # 2026-09-18 补：实测它还会用这种说法否认 —— 「我暂时还不太确定你在学什么」。
+               # 只在"这一轮确实找到了用户原话"时才用这张表，所以放宽一点是安全的。
+               "不太确定", "不确定", "没把握", "想不起来")
+
+
+def _denies_record(answer):
+    """它这一轮是不是又说"我没有记录"。返回命中的那句原话（给日志用）或空串。"""
+    a = str(answer or "")
+    head = a[:200]
+    for w in _DENY_WORDS:
+        if w in head:
+            return w
+    return ""
 
 
 def _heart_back_for_messages():
@@ -10032,11 +10067,22 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         #   载体现成能查到，就照原话回答（并标明这是你说过的），把"否认"这条路直接堵掉。
         # 【铁的边界】只搬**用户原话**，一个字不加工、不推断、不替它延伸话题；
         #   查不到就**照常交给模型**（绝不编一条"你说过…"）。
-        _direct = _direct_fact_answer(user_input_ctx)
+        _direct = _direct_fact_answer(user_input_ctx) if CAP.get("fact_direct_answer", False) else None
         if _direct:
-            LOG.info("事实直答：这句问的是用户本人说过的事，且库里有他的原话 → 载体直接答（不过模型）｜%s",
-                     str(_direct.get("why"))[:90])
+            LOG.info("事实直答（开关打开）：这句问的是用户本人说过的事，且库里有他的原话 → 载体直接答"
+                     "（不过模型）｜%s", str(_direct.get("why"))[:90])
             return str(_direct.get("answer") or ""), True, [], False, []
+        if CAP.get("fact_direct_answer", False) is False:
+            _fb = _fact_back_for_messages(user_input_ctx)
+            if _fb:
+                # 不在这一层 append（messages 还没拼到这个函数这儿）—— 先记下来，
+                # 由拼 messages 的那一段紧挨着用户消息插进去（与"心接回"同一个位置口径）。
+                _FACT_BACK["msg"] = _fb[0]
+                _FACT_BACK["fact"] = str(_fb[1])
+                LOG.info("用户事实接回：把「%s」作为 assistant 一条摆在紧挨生成的位置（让它自己说）",
+                         str(_fb[1])[:80])
+        else:
+            _FACT_BACK["fact"] = ""
 
         # ================== 关系：**它自己感知到"这话伤了/哄了我"** ==================
         # 【为什么要这样 —— 用户实测指出"因噎废食"】旧版怕变成"触发词表"，干脆不判断，
@@ -11051,8 +11097,18 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                          str(_fam["note"])[:70])
         except Exception:      # noqa: silent-ok — 认不出来或模块不在，都不许影响回答
             pass
-        messages.append({"role": "user", "content": _current})
-        # ---- 引导续写（prefill）**必须放在最后一条** ----
+        # ---- 「用户说过的那句事实」也接回给它自己（2026-09-18 试的第二种做法）----
+        # 【为什么要试这一版】第一版是"事实直答"——载体照抄用户原话，确定但**形式上就是查表**。
+        #   这一版换成"心接回"那一招：只把用户原话**摆在紧挨生成位置的一条 assistant 消息**里，
+        #   让模型**用自己的语气**说出来（不替它组织，也不替它否认）。
+        try:
+            _fm2 = _FACT_BACK.get("msg")
+            if _fm2:
+                messages.append(dict(_fm2))
+                _FACT_BACK["msg"] = None
+        except Exception:      # noqa: silent-ok — 接不上也不许影响回答
+            pass
+        messages.append({"role": "user", "content": _current})        # ---- 引导续写（prefill）**必须放在最后一条** ----
         # 【原来放错了位置，等于没放 —— 这是实测挖出来的】
         #   它原来 append 在"历史还没拼进来"的时候，于是最终消息顺序是：
         #     system → assistant(半句) → user(历史1) → assistant(历史2) → user(本轮)
@@ -11287,6 +11343,27 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 LOG.info("元认知标注：C 档且本轮未查证 → 已标注为参考而非结论")
         except Exception as e:      # noqa: silent-ok — 加不上标注不影响回答本体
             LOG.debug("忽略异常(%s:%d): %s", __file__, 7520, e)
+        # ---- 用户事实的**兜底**：先让它自己说；它要是又说"我没有记录"，载体就拿原话顶上 ----
+        # 【为什么两步都要（实测数据）】
+        #   · 只做"接回"（把原话摆在紧挨生成的位置让它自己说）：**3/5** —— 说中那三次的语气完全是它自己的
+        #     （「菏泽啊……山东那个牡丹之都」），但另两次它照样开口"我好像没有关于你生日的明确记录"；
+        #   · 只做"事实直答"（不过模型、照抄原话）：**5/5**，但形式上就是查表，用户一眼看出像模板。
+        #   所以这一版是**先让它自己说，说漏了才由载体兜底**：自然的那部分留给人，否认的那部分堵掉。
+        # 【边界】兜底只在"这一轮确实找到过用户原话"时才生效（`_FACT_BACK["fact"]`），
+        #   而且替换后的回答**明写**是照用户原话，不伪装成模型自己想起来的。
+        try:
+            _fq = str(_FACT_BACK.get("fact") or "")
+            _dw = _denies_record(answer) if _fq else ""
+            if _fq and _dw:
+                _u = _fq.split("原话=「", 1)[-1].split("」", 1)[0] or _fq
+                _u = _u.split("按关键词扫库命中=「", 1)[-1].split("」", 1)[0] or _u
+                answer = ("（照你自己说过的话答你）**你说过：%s**\n\n"
+                          "（上面这句是你自己说过的原话；我本来想用自己的话讲，但这轮我又说了"
+                          "「没有记录」，那是不对的 —— 所以直接把你说过的原话还给你。）" % _u[:60])
+                LOG.info("用户事实兜底：这一轮它又说「%s」→ 已改用用户原话直接回答 ｜ %s",
+                         _dw, _u[:40])
+        except Exception as e:      # noqa: silent-ok — 兜底失败就用它原来的回答
+            LOG.debug("用户事实兜底失败（忽略）：%s", e)
         # ---- 元认知 · **答后交叉检查**（2026-09-18 接上；原来只在自测里跑得到）----
         # 【为什么接在这里】`core/metacognition/crosscheck.py` 早就写好、自测也全绿，
         #   但**主流程一次都没调过它** —— 也就是说"答后交叉检查"这一项一直是**离线能力**。
