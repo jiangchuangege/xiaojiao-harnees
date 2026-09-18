@@ -734,6 +734,26 @@ def main():
     save_cfg(c)
     print("   ✅ xiaojiao_control.json 已配置(keep_warm/llama-swap/路径)")
 
+    # 8.5) **把 llama-swap.yaml 里写死的路径改成这台机器上的真路径**（2026-09-19 加）
+    # 【为什么装机器时要自己做这一步】那几行是绝对路径（`C:/llama/llama-server.exe` + 各自的 gguf）。
+    #   换台机器不改，路由就是"一调就干等"，而报错长得像"模型坏了"。用户的原话是「死路径别人有点不太愿意」。
+    #   规则与 `tools/setup_paths.py` 完全一致：**只改"指向的文件不存在"的那些**，并且先备份。
+    print("\n[9/11-补] 把 llama-swap.yaml 的路径对齐到这台机器 ...")
+    try:
+        from core import paths as _PATHS
+        _fx = _PATHS.fix_swap_cfg(only_missing=True, dry_run=False)
+        if not _fx.get("ok"):
+            print("   ⓘ 没改：%s" % _fx.get("why"))
+        elif not (_fx.get("changes") or []):
+            print("   ✅ 不用改（里面写着的路径在这台机器上都存在）")
+        else:
+            for _c in _fx["changes"]:
+                print("   · %s 的 %s：%s → %s" % (_c["route"], _c["what"], _c["old"], _c["new"]))
+            print("   ✅ 已改（备份：%s）" % _fx.get("backup"))
+    except Exception as e:      # noqa: silent-ok — 改不动也不许把装机流程弄断
+        LOG.debug("对齐 llama-swap 路径失败：%s", e)
+        print("   ⓘ 跳过（可稍后手工跑：python tools/setup_paths.py --apply）")
+
     # 10) 报告（分级：必需 / 可选）
     print("\n[10/11] 结果报告")
     print("   ── 必需项（缺了无法启动小焦）──")

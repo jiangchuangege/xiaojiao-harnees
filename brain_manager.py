@@ -14,10 +14,19 @@ LOG = get_logger(__name__)
 # 大脑注册表：每个大脑 = 一个可连的"模型服务"(唯一端口/唯一指纹)
 # state: RUN(权重在显存) / SLEEP(权重在内存, 进程在) / OFF(未加载)
 # 新增大脑只需在 BRAINS 加一项 + 实现它的 _sleep/_wake(或默认 keep-alive)
+# 【`proc` 不再写死 `C:/llama/llama-server.exe`（2026-09-19）】换台机器盘符/目录不同 →
+#   统一的解析在 `core.paths.find_llama_server()`：环境变量 XIAOJIAO_LLAMA_SERVER >
+#   PATH > 项目/常见目录 > 深搜；这里只在**注册表构建时**问一次，拿不到就空着（下游会再问）。
+try:
+    from core import paths as _PATHS
+    _LLAMA_SERVER = _PATHS.find_llama_server()[0]
+except Exception:      # noqa: silent-ok — 解析不了也不许把模块 import 弄挂
+    _LLAMA_SERVER = ""
+
 BRAINS = {
     "chat": {   # 聊天大脑：llama.cpp (llama-server)
         "name": "聊天大脑 (Qwen 4B, llama-swap)", "port": 9292,
-        "type": "llama", "vram_gb": 3.5, "state": "SLEEP", "proc": "/".join(["C:/llama/llama-server.exe"]),
+        "type": "llama", "vram_gb": 3.5, "state": "SLEEP", "proc": _LLAMA_SERVER,
     },
     "video": {  # 视频大脑：ComfyUI + Wan2.1
         "name": "视频大脑 (Wan2.1 + ComfyUI)", "port": 8188,
@@ -83,28 +92,34 @@ def _llama_cfg():
     llama = brain.get("llama", {}) if isinstance(brain.get("llama"), dict) else {}
     server = str(llama.get("server") or "")
     gguf = str(llama.get("gguf") or "")
-    if not (server and os.path.exists(server)):
-        server = os.environ.get("XIAOJIAO_LLAMA_SERVER", "") or server
-    if not (gguf and os.path.exists(gguf)):
-        gguf = os.environ.get("XIAOJIAO_GGUF", "") or gguf
-    if not (server and os.path.exists(server)):
-        server = shutil.which("llama-server") or ""
-        if not server:
-            for d in ("C:/llama", ".", "..", os.path.expanduser("~")):
-                c = os.path.join(d, "llama-server.exe")
-                if os.path.exists(c):
-                    server = c
-                    break
-    if not (gguf and os.path.exists(gguf)):
-        for d in ("C:/llama", ".", "..", os.path.expanduser("~/Downloads")):
-            if not os.path.isdir(d):
-                continue
-            for fn in sorted(os.listdir(d)):
-                if fn.lower().endswith(".gguf"):
-                    gguf = os.path.join(d, fn)
-                    break
-            if gguf and os.path.exists(gguf):
-                break
+    # 【2026-09-19 收口】控制文件里的路径能用就用；不能用时**统一交给 `core.paths`** ——
+    #   这里原来自己写了一份"环境变量→PATH→常见目录"的查找，跟 `start_xiaojiao.py` 那份重复，
+    #   而且目录表是写死的（`C:/llama`）。现在只有一份实现，环境变量优先级也一致。
+    if not (server and os.path.exists(server)) or not (gguf and os.path.exists(gguf)):
+        try:
+            if not (server and os.path.exists(server)):
+                server = _PATHS.find_llama_server()[0] or server
+            if not (gguf and os.path.exists(gguf)):
+                gguf = _PATHS.find_gguf()[0] or gguf
+        except Exception:      # noqa: silent-ok — 解析器不可用就退回老的写死目录
+            if not (server and os.path.exists(server)):
+                server = shutil.which("llama-server") or ""
+                if not server:
+                    for d in ("C:/llama", ".", "..", os.path.expanduser("~")):
+                        c = os.path.join(d, "llama-server.exe")
+                        if os.path.exists(c):
+                            server = c
+                            break
+            if not (gguf and os.path.exists(gguf)):
+                for d in ("C:/llama", ".", "..", os.path.expanduser("~/Downloads")):
+                    if not os.path.isdir(d):
+                        continue
+                    for fn in sorted(os.listdir(d)):
+                        if fn.lower().endswith(".gguf"):
+                            gguf = os.path.join(d, fn)
+                            break
+                    if gguf and os.path.exists(gguf):
+                        break
     return server, (gguf if gguf and os.path.exists(gguf) else "")
 
 

@@ -33,27 +33,43 @@ ENGINE = BRAIN.get("engine", "auto")
 
 
 def resolve_llama_paths():
-    """解析大模型路径：控制文件(存在才用) -> 环境变量(XIAOJIAO_LLAMA_SERVER/XIAOJIAO_GGUF) -> 自动查找。换电脑不用改代码。"""
+    """解析大模型路径：控制文件(存在才用) -> 统一解析器（环境变量 XIAOJIAO_LLAMA_SERVER/XIAOJIAO_GGUF
+    -> PATH -> 项目/常见目录）。换电脑不用改代码。
+
+    【2026-09-19 收口到 `core.paths`】这里原来自己写了一份查找逻辑，而 `brain_manager.py`、
+    `llama-swap.yaml`、两个浏览器自测各自又写了一份 —— 同一件事四份实现，改一处漏三处。
+    现在只有一份（`core/paths.py`），本函数只保留"控制文件优先"这一层项目自己的规矩。
+    """
     server = BRAIN.get("llama", {}).get("server", "")
     gguf = BRAIN.get("llama", {}).get("gguf", "")
     if not (os.path.exists(server) and os.path.exists(gguf)):
-        server = os.environ.get("XIAOJIAO_LLAMA_SERVER", server) or ""
-        gguf = os.environ.get("XIAOJIAO_GGUF", gguf) or ""
-    if not os.path.exists(server):
-        server = shutil.which("llama-server") or ""
-        if not server:
-            for d in ("C:/llama", ".", "..", os.path.expanduser("~")):
-                c = os.path.join(d, "llama-server.exe")
-                if os.path.exists(c):
-                    server = c; break
-    if not (gguf and os.path.exists(gguf)):
-        gguf = ""
-        for d in ("C:/llama", ".", "..", os.path.expanduser("~/Downloads"), os.path.expanduser("~")):
-            if not os.path.isdir(d): continue
-            for fn in sorted(os.listdir(d)):
-                if fn.lower().endswith(".gguf"):
-                    gguf = os.path.join(d, fn); break
-            if gguf: break
+        try:
+            from core import paths as _PATHS
+            if not os.path.exists(server):
+                server = _PATHS.find_llama_server()[0]
+            if not (gguf and os.path.exists(gguf)):
+                gguf = _PATHS.find_gguf()[0]
+        except Exception as e:      # noqa: silent-ok — 解析器出问题就退回下面的老办法
+            LOG.debug("统一路径解析不可用，退回本地查找：%s", e)
+            if not os.path.exists(server):
+                server = shutil.which("llama-server") or ""
+                if not server:
+                    for d in ("C:/llama", ".", "..", os.path.expanduser("~")):
+                        c = os.path.join(d, "llama-server.exe")
+                        if os.path.exists(c):
+                            server = c
+                            break
+            if not (gguf and os.path.exists(gguf)):
+                gguf = ""
+                for d in ("C:/llama", ".", "..", os.path.expanduser("~/Downloads"), os.path.expanduser("~")):
+                    if not os.path.isdir(d):
+                        continue
+                    for fn in sorted(os.listdir(d)):
+                        if fn.lower().endswith(".gguf"):
+                            gguf = os.path.join(d, fn)
+                            break
+                    if gguf:
+                        break
     return server, gguf
 
 def stop_stray_direct_line(port=None, expect="llama-server"):

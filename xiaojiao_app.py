@@ -14521,7 +14521,21 @@ def api_model_addlocal():
     ys = open(yp, encoding="utf-8").read()
     if ("  " + mid + ":") not in ys:
         gg = gguf.replace("\\", "/")
-        ys = ys.rstrip() + ("\n  %s:\n    cmd: \"C:/llama/llama-server.exe --port ${PORT} --model %s -c %d --reasoning off\"\n    ttl: 0\n    useModelName: %s\n" % (mid, gg, ctx, mid))
+        # 【2026-09-19 两处收口】① exe 不再写死 `C:/llama/llama-server.exe`（换台机器就找不到）——
+        #   走统一解析 `core.paths.find_llama_server()`（环境变量 > PATH > 项目/常见目录）；
+        #   ② **路径里有空格必须加引号** —— 这正是本机那条路由当初"进程立刻退出"的真因
+        #   （`C:/xiaojiao/xiaojiao harness/…` 目录名带空格，不加引号会被拆成两截）。
+        #   外层用**单引号**、内层用**双引号**：llama-swap 的 `${PORT}` 占位符要留在这个形状里才被替换。
+        try:
+            from core import paths as _PATHS
+            _srv = _PATHS.find_llama_server()[0] or "llama-server"
+        except Exception as e:      # noqa: silent-ok — 解析器不可用就退回 PATH 上的名字
+            LOG.debug("解析 llama-server 路径失败，退回 `llama-server`：%s", e)
+            _srv = "llama-server"
+        _srv_q = ('"%s"' % _srv) if " " in _srv else _srv
+        _gg_q = ('"%s"' % gg) if " " in gg else gg
+        ys = ys.rstrip() + ("\n  %s:\n    cmd: '%s --port ${PORT} --model %s -c %d --reasoning off'\n"
+                            "    ttl: 0\n    useModelName: %s\n" % (mid, _srv_q, _gg_q, ctx, mid))
         open(yp, "w", encoding="utf-8").write(ys)
     # ② brain_manager BRAINS 加
     bp = os.path.join(root, "brain_manager.py")

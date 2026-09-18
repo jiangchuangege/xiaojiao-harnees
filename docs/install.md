@@ -153,6 +153,29 @@ Windows 上也可以双击 `一键安装.bat`（它只做一件事：调用 `ins
 
 各组件的路径探测中，小脑以 `*.pth` 为主：换任意自训模型后只需改 `brain.xiaojiao`，代码不动。
 
+**五项外部路径统一收在一个地方**（2026-09-19 起）：`core/paths.py` ——
+`llama-server`、GGUF 模型、`llama-swap`、浏览器、SD 模型。顺序是
+**环境变量 > PATH / 项目目录 / 常见目录 > 深搜**，每项都如实回报"靠什么找到的"；
+找不到就返回空并**明写该设哪个环境变量**，绝不猜一个看起来像的路径。
+
+| 环境变量 | 管什么 |
+| --- | --- |
+| `XIAOJIAO_LLAMA_SERVER` | `llama-server` 可执行文件 |
+| `XIAOJIAO_GGUF` | 聊天模型 `.gguf` |
+| `XIAOJIAO_LLAMA_SWAP` | 模型热切换器（可选件，没有就直连 `llama-server`） |
+| `XIAOJIAO_CHROME` | 渲染类自测用的浏览器（找不到就如实跳过该自测） |
+| `XIAOJIAO_SD_MODEL` | 播客封面用的 SD 模型（可选件） |
+
+```powershell
+python tools/setup_paths.py            # 体检：五项各自在哪、靠什么找到的
+python tools/setup_paths.py --apply    # 把 llama-swap.yaml 里"指向不存在文件"的路径对齐到本机（先备份）
+```
+
+> `llama-swap.yaml` 里那几条 `cmd` 是绝对路径。**换机器不用改代码**：装机器时
+> `install_all.py`（第 9 步后）与 `install_auto.py` 都会自动对齐一次，且**只改指向不存在文件的那几行**、
+> 改前整份备份到 `logs/backup_before_setup_paths/`；改完用 `python tools/check_brain_paths.py` 复检。
+> 「一键添加本地模型」写新路由时也不再写死 `llama-server` 路径，并对含空格的路径自动加引号。
+
 ### 3.4 模型检测判据：协议连通
 
 安装向导与「装小焦体检」都不只看"配置里填没填"，而是真发一次请求：
@@ -187,10 +210,11 @@ Windows 上也可以双击 `一键安装.bat`（它只做一件事：调用 `ins
 
 ## 6. 换电脑与迁移
 
-代码里没有必须修改的绝对路径，三种方式任选：
+代码里没有必须修改的绝对路径，下面四种方式任选：
 
 | 方式 | 做法 |
 | --- | --- |
+| 一条命令对齐（推荐） | `python tools/setup_paths.py --apply` —— 自动探测这五项（`llama-server` / GGUF / `llama-swap` / 浏览器 / SD 模型），把 `llama-swap.yaml` 里**指向不存在文件**的路径换成本机的（只改坏的、先备份）。装机器时 `install_all.py` / `install_auto.py` 会自动做一次 |
 | 自动查找 | 把 `llama-server.exe` 与模型 GGUF 放到项目目录、用户目录或 `Downloads`，启动器会自动找到 |
 | 环境变量 | 见下表 |
 | 控制文件 | 直接改 `xiaojiao_control.json` 的 `brain.llama.server` / `gguf` / `port`、`brain.xiaojiao.*`、`scrapling.*` |

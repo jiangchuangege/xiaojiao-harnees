@@ -1,5 +1,11 @@
 # llama-swap 配置 —— 小焦多大脑热切换
 # llama-swap 监听 8080，按 model 名把请求路由到对应 upstream(动态端口 ${PORT})，按需加载/卸载 → 秒级切换、省显存。
+# ⚠️ **下面是开发这套代码那台机器上的绝对路径**（模型/`llama-server` 各自在哪）。
+#    换台机器**不用改代码**，二选一：
+#      · 一条命令对齐：`python tools/setup_paths.py --apply`（自动探测；只改"指向不存在文件"的那几行，先备份）
+#      · 或自己指定：`set XIAOJIAO_LLAMA_SERVER=完整路径` / `set XIAOJIAO_GGUF=完整路径`
+#    装机器时 `install_all.py` / `install_auto.py` 会**自动做这一步**。
+#    改完复检：`python tools/check_brain_paths.py`；解析逻辑只有一份，在 `core/paths.py`。
 # 全局：llama-swap 等 upstream 变健康的上限（秒）。默认 120 ——
 # 实测 deepseek-v4 首次加载要 120.6 秒，正好被默认值卡死在门外（报 health check timed out）。
 healthCheckTimeout: 300

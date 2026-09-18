@@ -311,6 +311,30 @@ flowchart TB
 安装器不写死任何路径：小脑按全盘检索 `*.pth`（体积优先）并配对 `vocab*.pkl`，其余组件按关键词与盘符探测。
 模型可用性按协议连通判定，即真发一次请求（本地看端口，云端看模型列表或对话接口），而不是只看配置里填没填。
 
+### 换台机器 / 路径自己指定（`core/paths.py`）
+
+外部路径（`llama-server`、GGUF 模型、`llama-swap`、浏览器、SD 模型）**统一只有一份解析实现**：
+`core/paths.py`，顺序是 **环境变量 > PATH / 项目目录 / 常见目录 > 深搜**，每一项都会如实回报"靠什么找到的"。
+任何一项都能由用户自己指定，自动探测永远让位：
+
+| 环境变量 | 管什么 | 不设时的行为 |
+| --- | --- | --- |
+| `XIAOJIAO_LLAMA_SERVER` | `llama-server` 可执行文件 | PATH → 项目/常见目录 → 深搜 |
+| `XIAOJIAO_GGUF` | 聊天模型 `.gguf` | 项目目录里名字带 xiaojiao 的优先，其次常见目录 |
+| `XIAOJIAO_LLAMA_SWAP` | 模型热切换器（可选件） | 项目 `llama-swap/` → PATH |
+| `XIAOJIAO_CHROME` | 渲染类自测用的浏览器 | PATH → 常见安装位置；找不到就**如实跳过**该自测 |
+| `XIAOJIAO_SD_MODEL` | 播客封面用的 SD 模型（可选件） | 常见目录；找不到只是封面不可用 |
+
+```powershell
+python tools/setup_paths.py            # 只看：五项各自在哪、靠什么找到的
+python tools/setup_paths.py --apply    # 把 llama-swap.yaml 里"指向不存在文件"的路径对齐到本机（先备份）
+python tools/setup_paths.py --deep     # 允许整盘深搜（慢，几十秒）
+```
+
+> 一句话说明：`llama-swap.yaml` 里那几行是绝对路径，**换机器不用改代码** —— 装机器时
+> `install_all.py` / `install_auto.py` 会自动对齐一次，也可以随时用上面那条命令手工对齐。
+> `tools/check_brain_paths.py` 复检"每条路由指着的东西在不在"。
+
 ### 启动
 
 ```powershell

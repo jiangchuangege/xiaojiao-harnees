@@ -30,7 +30,11 @@ sys.path.insert(0, _ROOT)
 import requests  # noqa: E402
 
 BASE = "http://127.0.0.1:5000"
-CHROME = "G:/xiaojiao harness/chrome-win64/chrome.exe"
+# 【2026-09-19 去掉写死的 `G:/xiaojiao harness/chrome-win64/chrome.exe`】换台机器那个路径必然不存在，
+#   于是这个自测会"失败"，而失败原因跟被测功能没关系。现在统一走 `core.paths.find_chrome()`
+#   （环境变量 XIAOJIAO_CHROME > PATH > 常见安装位置）；找不到就**如实跳过**，不假装跑过。
+from core import paths as _PATHS  # noqa: E402
+CHROME = _PATHS.find_chrome()[0]
 
 PASS, FAIL = [], []
 
@@ -70,6 +74,9 @@ def main():
         from playwright.sync_api import sync_playwright
     except Exception as e:
         print("⏭️  Playwright 不可用，跳过：%s" % e)
+        return 0
+    if not CHROME:
+        print("⏭️  没找到浏览器，跳过（自己指定：set XIAOJIAO_CHROME=完整路径）")
         return 0
     try:
         if requests.get(BASE + "/health", timeout=5).status_code != 200:

@@ -79,6 +79,15 @@ BODY = """## 这一版是什么
 - **（2026-09-19）两个体检工具的假红 + 一处文档星号**：`check_brain_paths.py` 遇上带空格的路径
   （`--model "C:/…/xiaojiao harness/X.gguf"`）会把后半截当成新路径 → 误报"路径不存在"（配置本来是对的）；
   `CHANGELOG.md` 有一句加粗按 CommonMark 侧翼规则**不成对**，星号会原样显示。两处都修了。
+- **（2026-09-19）外部路径不再写死，换台机器不用改代码**：五项外部路径（`llama-server` / GGUF 模型 /
+  `llama-swap` / 浏览器 / SD 模型）统一收进一份解析 `core/paths.py` ——
+  **环境变量 > PATH / 项目目录 / 常见目录 > 深搜**，每项都会如实回报"靠什么找到的"，
+  找不到就明写该设哪个环境变量（`XIAOJIAO_LLAMA_SERVER` / `XIAOJIAO_GGUF` / `XIAOJIAO_LLAMA_SWAP` /
+  `XIAOJIAO_CHROME` / `XIAOJIAO_SD_MODEL`），**绝不猜一个看起来像的路径**。
+  `llama-swap.yaml` 里那几条绝对路径可一键对齐：`python tools/setup_paths.py --apply`
+  （**只改指向不存在文件的那几行**、改前整份备份；装机器时安装器会自动做一次）。
+  原先散在五处、其中几处写死的查找（`start_xiaojiao.py` / `brain_manager.py` /
+  「一键添加本地模型」/ 两个浏览器自测 / 播客的 SD 模型）全部收口到那一份。
 - **新增一图一文**：《一具身体，等一颗火种：小焦的器官、大脑与心》—— 大脑/心/器官总图 + 器官对照表
 - **真 bug 修复**：`/api/video/promptkb` 永远返回 0；`llama-swap.yaml` 的 `coder` 死路由；
   `llama-swap.yaml` 里带空格的模型路径缺引号（这是"模型 500 / upstream command exited prematurely"的真因）

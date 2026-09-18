@@ -15,7 +15,16 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # xiaojiao
 _SVC = os.path.dirname(os.path.abspath(__file__))
 _MEDIA = os.path.join(_ROOT, "media", "podcast")
 os.makedirs(_MEDIA, exist_ok=True)
-_SD_MODEL = os.environ.get("XIAOJIAO_SD_MODEL") or r"G:\moxing\v1-5-pruned-emaonly.safetensors"
+_SD_MODEL = os.environ.get("XIAOJIAO_SD_MODEL") or ""
+if not _SD_MODEL:
+    # 【不再写死 `G:\moxing\...`（2026-09-19）】换台机器盘符不同 → 走统一解析：
+    #   环境变量 XIAOJIAO_SD_MODEL > 项目/常见目录里带 sd / pruned 的 *.safetensors。
+    #   找不到就是**空**（播客封面那条路会如实说"没有 SD 模型"，不猜一个看起来像的路径）。
+    try:
+        from core import paths as _PATHS
+        _SD_MODEL = _PATHS.find_sd_model()[0]
+    except Exception:      # noqa: silent-ok
+        _SD_MODEL = ""
 
 # ===== 全局懒加载单例 =====
 _tts = None       # ChatterboxTTS

@@ -23,7 +23,11 @@ import requests  # noqa: E402
 
 PASS, FAIL = [], []
 BASE = "http://127.0.0.1:5000"
-CHROME = "G:/xiaojiao harness/chrome-win64/chrome.exe"
+# 【2026-09-19 去掉写死的 `G:/xiaojiao harness/chrome-win64/chrome.exe`】理由同
+#   `test_stream_render.py`：换台机器那个路径必然不存在，报错却与被测功能无关。
+#   统一走 `core.paths.find_chrome()`；找不到就如实跳过。
+from core import paths as _PATHS  # noqa: E402
+CHROME = _PATHS.find_chrome()[0]
 
 # 用户**不该**在界面上看到的词（技术痕迹）
 FORBIDDEN = ("exceeds context", "超过上下文", "上下文超限", "token 上限", "tokens 上限",
@@ -53,6 +57,9 @@ def main():
         from playwright.sync_api import sync_playwright
     except Exception as e:
         print("⏭️  Playwright 不可用，跳过 DOM 检查：%s" % e)
+        return 0
+    if not CHROME:
+        print("⏭️  没找到浏览器，跳过 DOM 检查（自己指定：set XIAOJIAO_CHROME=完整路径）")
         return 0
 
     with sync_playwright() as p:
