@@ -366,7 +366,12 @@ def main():
 
     # ---------------------------------------------------------------- F
     print("\n[F] should_use_tool：样本不足时**不许误判**")
-    r = BD.should_use_tool(q("全新话题：样本不足"))
+    # 【2026-09-19 修：判据不许读**真实档案**】不传 `path` 时读的是
+    #   `logs/metacognition/boundary.jsonl` —— 那是**用户跑出来的数据**（本机 2850 行，还在长）。
+    #   于是同一组判据的结论会随"小焦跑了多少轮"变来变去：实测同一条自测在全量跑里红的是
+    #   「2 条时 samples==2」、单独跑时红的是「样本 0 条」——**而且上一轮失败没清干净的行会污染下一轮**（自毒）。
+    #   所以这里的断言一律走**临时档案**；真实档案那边只留一条打标记的行，专供最后「[清理]」那组验。
+    r = BD.should_use_tool(q("全新话题：样本不足"), path=TMP_PATH)
     ck("F", "一条样本都没有 → use_tool=False", r["use_tool"] is False, r)
     ck("F", "样本 0 条时 samples=0（如实报数）", r["samples"] == 0, r["samples"])
     ck("F", "样本不足的 why 明说'样本不足'", "样本不足" in r["why"], r["why"])
@@ -376,30 +381,32 @@ def main():
        any("\u4e00" <= ch <= "\u9fff" for ch in r["why"]) and any(ch.isdigit() for ch in r["why"]),
        r["why"])
     qs = q("样本不足验证：这个新话题")
-    BD.record(qs, "C", path=REAL_PATH, note=TAG, source="自测")
-    BD.record(qs, "C", path=REAL_PATH, note=TAG, source="自测")
-    r = BD.should_use_tool(qs)
+    BD.record(qs, "C", path=TMP_PATH, note=TAG, source="自测")
+    BD.record(qs, "C", path=TMP_PATH, note=TAG, source="自测")
+    BD.record(q("真实档案也要能清干净"), "C", path=REAL_PATH, note=TAG, source="自测")
+    r = BD.should_use_tool(qs, path=TMP_PATH)
     ck("F", "同类只有 2 条 C → 仍然 False（不到 3 条底线）",
        r["use_tool"] is False and r["samples"] == 2, r)
     ck("F", "2 条时 why 里带真实条数与门槛（2 条 / 不到 3 条）",
        "2 条" in r["why"] and "不到 3 条" in r["why"], r["why"])
     ck("F", "不同话题的历史不会误伤（问别的事 → 不误判成该走工具）",
-       BD.should_use_tool(q("完全另一个话题：晚饭吃什么"))["use_tool"] is False)
+       BD.should_use_tool(q("完全另一个话题：晚饭吃什么"), path=TMP_PATH)["use_tool"] is False)
     ck("F", "问题为空 → 不误判",
-       BD.should_use_tool(None)["use_tool"] is False and BD.should_use_tool("")["use_tool"] is False)
+       BD.should_use_tool(None, path=TMP_PATH)["use_tool"] is False
+       and BD.should_use_tool("", path=TMP_PATH)["use_tool"] is False)
 
     # ---------------------------------------------------------------- G
     print("\n[G] should_use_tool：同类连续没把握 / 自评有把握却答错 → **必须 True**")
     qc = q("连续没把握验证：这类问题")
     for i in range(3):
-        BD.record(qc, "C", source="自测", note="%s 第%d条" % (TAG, i + 1))
-    r = BD.should_use_tool(qc)
+        BD.record(qc, "C", path=TMP_PATH, source="自测", note="%s 第%d条" % (TAG, i + 1))
+    r = BD.should_use_tool(qc, path=TMP_PATH)
     ck("G", "同类连续 3 条 C 档 → use_tool=True", r["use_tool"] is True, r)
     ck("G", "samples 如实等于 3", r["samples"] == 3, r["samples"])
     ck("G", "why 里带真实比例（占 100%）与理由",
        "没把握" in r["why"] and "100%" in r["why"], r["why"])
     ck("G", "换个说法的同类问题也被认出来（不然历史永远攒不起来）",
-       BD.should_use_tool(qc.replace("这类问题", "这种问题"))["use_tool"] is True)
+       BD.should_use_tool(qc.replace("这类问题", "这种问题"), path=TMP_PATH)["use_tool"] is True)
 
     qf = q("自评有把握却答错验证：这类问题")
     BD.record(qf, "A", correct=True, source="自测", note=TAG)
