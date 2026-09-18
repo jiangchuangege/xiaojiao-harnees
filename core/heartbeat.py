@@ -88,11 +88,40 @@ def path():
 # 【为什么每次心跳都写一行】验收要能证明"挂起期间心跳一直在追加" ——
 #   只有一行行的记录才能证明"一直在"，一个总计数字不能。
 #   代价是文件会长（5 秒一行 ≈ 每天 1.7 万行、约 1 MB），如实标注在文档里。
+# 心跳日志**轮转**（2026-09-19 加，用户反映"心跳超级多"）
+# 【为什么】每 5 秒一行 → **一天约 1.7 万行**。实测跑到第 40333 行、1.9MB，
+#   翻日志时全是 `{"ts":…, "n":…, "awake":true}` 这种一行一样的东西。
+#   心跳本身不能少（睡着时它是唯一还在动的），但**日志不必无限长**：
+#   超过 KEEP_MAX 行就只留最后 KEEP_LAST 行（原子重写，先看得到历史也不丢"最近这段"）。
+BEAT_LOG_KEEP_MAX = 20000
+BEAT_LOG_KEEP_LAST = 5000
+
+
+def _rotate_if_needed():
+    """心跳日志太长就留下最近那段（行数上限可按上面的常量调）。**失败不影响心跳。**"""
+    try:
+        if not os.path.exists(_PATH):
+            return
+        with open(_PATH, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.read().split("\n")
+        lines = [x for x in lines if x.strip()]
+        if len(lines) <= BEAT_LOG_KEEP_MAX:
+            return
+        keep = lines[-BEAT_LOG_KEEP_LAST:]
+        tmp = _PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(keep) + "\n")
+        os.replace(tmp, _PATH)
+    except Exception:      # noqa: silent-ok — 轮转失败也得继续跳（心跳比日志重要）
+        pass
+
+
 def _append(rec):
     try:
         os.makedirs(os.path.dirname(_PATH), exist_ok=True)
         with open(_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        _rotate_if_needed()
     except Exception:      # noqa: silent-ok — 写不进日志也不能让心跳停（心跳比日志重要）
         pass
 

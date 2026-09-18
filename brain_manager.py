@@ -45,6 +45,10 @@ BRAINS = {
         "name": "音乐大脑 (MusicGen)", "port": 0,
         "type": "inproc", "vram_gb": 2.0, "state": "OFF",
     },
+    "qwopus3.5-4b-coder-mtp-q5_k_m.gguf": {  # 新增: Qwopus3.5-4B-Coder-MTP-Q5_K_M.gguf
+        "name": "Qwopus3.5-4B-Coder-MTP-Q5_K_M.gguf", "port": 9292,
+        "type": "llama", "vram_gb": 5.0, "state": "OFF",
+    },
     # 未来扩展(示例, 加进 BRAINS 即可被调度):
     # "image": {"name":"图像大脑(SD3)","port":8189,"type":"comfy","vram_gb":4.0,"state":"OFF"},
     # "reason": {"name":"推理大脑(DeepSeek)","port":8081,"type":"llama","vram_gb":6.0,"state":"OFF"},

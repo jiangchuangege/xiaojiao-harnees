@@ -10557,12 +10557,19 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("关系：它自己写下「无」（这句话没伤到、也没在哄）")
         except Exception as _e:      # noqa: silent-ok — 关系这一栏出问题也不能影响回答
             LOG.debug("关系感知接入失败（忽略）：%s", _e)
-        LOG.info("心：心起「%s」（心跳第 %s 下）｜心理[%s]｜命被动=%s%s",
-                 str(_ev.get("heart") or "（未起）")[:40], _ev.get("beat"),
-                 _ev.get("state"), "、".join(_ev.get("touches_life") or []) or "无",
-                 "｜像以前那次" if _ev.get("familiar") else "")
+        # 【2026-09-19 降噪（用户反映"心跳超级多"）】心**起了**才记 INFO；
+        #   没起心（"（未起）"）的那种以前也记 INFO —— 一天几百行，翻日志时全是噪音。
+        #   现在：起心照旧 INFO（那是有意义的），没起心降成 DEBUG（要看时把级别调下来就能看到）。
+        if _ev.get("heart"):
+            LOG.info("心：心起「%s」（心跳第 %s 下）｜心理[%s]｜命被动=%s%s",
+                     str(_ev.get("heart"))[:40], _ev.get("beat"),
+                     _ev.get("state"), "、".join(_ev.get("touches_life") or []) or "无",
+                     "｜像以前那次" if _ev.get("familiar") else "")
         if not _ev.get("heart"):
-            LOG.info("心：这一轮没起心 —— %s", str(_ev.get("why"))[:60])
+            # 【2026-09-19 降噪（用户反映"心跳超级多"）】没起心那种以前也记 INFO ——
+            #   一天几百行，翻日志全是噪音。现在降成 DEBUG（要查时把日志级别调下来就能看到）。
+            LOG.debug("心：这一轮没起心（心跳第 %s 下）—— %s",
+                      _ev.get("beat"), str(_ev.get("why"))[:60])
         else:
             LOG.info("情绪恢复：强度 %.3f（回落前 %.3f）", float(_PS.heart().get("intensity") or 0.0),
                      float(_PS.heart().get("intensity0") or 0.0))

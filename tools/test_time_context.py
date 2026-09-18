@@ -90,7 +90,15 @@ if requests is not None:
 
         a1 = ask("今天几号？")
         print("     「今天几号？」→ %s" % a1.replace("\n", " ")[:110])
-        ck("答里出现真实日期 %s" % TODAY, TODAY in a1, a1[:90])
+        # 【2026-09-19 放宽格式（判据没放宽，只是别把"中文写法"判成错）】
+        #   实测它答的是「今天是2026年9月19日星期六凌晨2点32分29秒。」——
+        #   **日期完全正确**，只是写成中文而不是 `2026-09-19`。
+        #   这条判据要的是"答里出现真实日期"，所以两种写法都认（去掉空白后比对）。
+        _flat = re.sub(r"\s+", "", a1)
+        _today_cn = time.strftime("%Y年%-m月%-d日") if os.name != "nt" else \
+            "%d年%d月%d日" % (int(time.strftime("%Y")), int(time.strftime("%m")), int(time.strftime("%d")))
+        ck("答里出现真实日期 %s（中文写法也认）" % TODAY,
+           (TODAY in a1) or (_today_cn in _flat), a1[:90])
         ck("**没有**说错年份（没出现 2025）", "2025" not in a1, a1[:90])
 
         a2 = ask("2026年世界杯冠军是谁？")
