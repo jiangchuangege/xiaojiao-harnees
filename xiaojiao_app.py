@@ -10020,6 +10020,18 @@ def _direct_fact_answer(q):
     return {"answer": "**你说过：%s**" % u, "why": why}
 
 
+def _said_it_once(line, material, line_ratio=0.18):
+    """这一行**在资料里找得到吗**（2-gram 重合 ≥ line_ratio 就算找得到）。
+
+    用途：新闻/数据类回答是"一条一条列的"，**编出来的那一条必须删掉** ——
+    实测它会把自己想起的热搜词（一首 2006 年的歌）当成今天的新闻列进去。
+    """
+    try:
+        return _said_it(material, line, line=line_ratio)
+    except Exception:      # noqa: silent-ok — 判不了就当"找得到"，宁可留着也不乱删
+        return True
+
+
 def _fact_back_for_messages(q):
     """**把"用户说过的那句话"作为一条 assistant 消息接回去**（让它用自己的语气说）。
 
@@ -11777,6 +11789,24 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 LOG.info("时间更正：回答里把别的日期说成「今天」→ 已在其后如实补一句")
         except Exception as e:      # noqa: silent-ok — 加不上也不影响回答
             LOG.debug("时间更正失败（忽略）：%s", e)
+        # ---- 新闻/数据类：**回答里对不上来源的条目删掉**（用户实测：它把热搜里的歌名当新闻编进去）----
+        # 【为什么必须删条目而不是加一句"可能有误"】"今天有什么新闻"这种回答，**条目本身就是内容** ——
+        #   编出来的条目会被当成真事读走。判据是确定性的：拿这一行去跟**这一轮真正抓回来的资料**
+        #   比字面重合（2-gram），对不上的就是"资料里没有的东西"。
+        try:
+            if _CTX.get("route_kind") in ("news", "fresh_data") and web_text:
+                _kept, _drop = [], []
+                for _ln in str(answer or "").split("\n"):
+                    _s = _ln.strip()
+                    if _s[:1] in ("-", "·", "*", "•") and len(_s) > 6 and not _said_it_once(_s, web_text):
+                        _drop.append(_s[:60])
+                        continue
+                    _kept.append(_ln)
+                if _drop:
+                    answer = "\n".join(_kept)
+                    LOG.info("对不上来源的条目已删（%d 条）：%s", len(_drop), " ／ ".join(_drop[:3]))
+        except Exception as e:      # noqa: silent-ok — 删不掉就原样给，绝不影响回答
+            LOG.debug("条目核对失败（忽略）：%s", e)
         # ---- 内心话不许漏进聊天页面：回答开头那段括号内心独白剥掉（用户截图实测） ----
         try:
             _stripped, _inner = _strip_leading_inner(answer)
