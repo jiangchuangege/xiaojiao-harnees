@@ -7211,6 +7211,27 @@ def merge_context(user_text, history, n=5):
                 "why": "「%s」延续上一条请求「%s」" % (cur, prev[:24]),
                 "need_clarify": False, "original": cur}
 
+    # ---------- 2b. **更正/澄清类**：「我是说最近」「我说的是收入」 ----------
+    # 【用户截图实测】先问「最近国家收入」→ 它答了一堆；用户接着说「我是说最近」→
+    #   它**没把上一句接上**，反而反问"你说的最近是哪段记忆里的最近"，还把不相关的记忆
+    #   （「我养的狗叫什么」→ 大黄）一起倒了出来。根因：这一句是**对上一句的更正**，
+    #   而 `merge_context` 当时只认"继续/更多/全部/指代"四类，没有"我是说…"这一类。
+    #   所以它被当成**新问题**：检索照旧乱捞，回答自然啥都有。
+    _CLARIFY_WORDS = ("我是说", "我说的是", "我不是说", "我指的是", "指的是", "说的是", "是说",
+                      "我的意思", "表达的是", "问的是")
+    if any(w in cur for w in _CLARIFY_WORDS) and len(cur) <= 18:
+        if not prev:
+            return dict(base, kind="clarify", need_clarify=True,
+                        why="用户在做更正，但上面没有可更正的请求")
+        topic = _topic_of(prev)
+        # 【为什么要写成"问题还是这一句"】实测踩到：合并成「最近国家收入（更正：我是说最近）」之后，
+        #   检索词抽取只看见最后那个「最近」→ 搜回来的是**一首叫《最近》的歌**（李圣杰），
+        #   它于是开始讲那首歌。所以这里把"被更正的那句"放回主位、更正只当修饰。
+        merged = "%s（用户更正的是说法/时间范围：「%s」；**要回答的问题还是这一句**）" % (prev, cur)
+        return {"text": merged, "merged": True, "kind": "clarify", "topic": topic,
+                "why": "「%s」是对上一条「%s」的更正" % (cur, prev[:24]),
+                "need_clarify": False, "original": cur}
+
     # ---------- 3. 补全类 A：要"全部" ----------
     if _asks_all_of_it(cur) and len(cur) <= 18:
         if not prev:
@@ -8905,6 +8926,27 @@ def _is_realtime_fact(q):
     if _RT_YEAR.search(s) and any(w in s for w in _RT_FACT_WORDS):
         return True
     return any(h in s for h in _RT_TIME_HINTS) and any(w in s for w in _RT_FACT_WORDS)
+
+
+def _is_fresh_data(q):
+    """问的是不是"要去查才有、而且会随时间变"的**数据类**问题（财政/收入/GDP/人口/价格…）。
+
+    【为什么要单开一条（用户截图实测）】问「最近国家收入」，实测 `_detect_intent` 判成 chat、
+    `_is_realtime_fact` 判成 False → **一个源都没查**，于是它只能凭先验编：
+    「2025 年全年财政收支概况（财政部 2026 年 1 月发布）」「2026 年上半年…16.5 万亿元，增长 5.3%」
+    —— 看着像权威数据，其实**没有一条是可核对的来源**（元认知那行也如实写着"本轮没能查到可核实的来源"）。
+    【判据】时间词 + **数据词**同时命中（与 `_is_realtime_fact` 同一思路：两个条件都要，避免误伤）。
+    """
+    s = str(q or "").strip()
+    if not s:
+        return False
+    _time = ("最近", "最新", "今年", "去年", "目前", "现在", "当前", "上月", "上个月", "本月",
+             "这个月", "季度", "上半年", "下半年", "前半年", "近期", _RT_YEAR.pattern)
+    _data = ("收入", "财政", "税收", "预算", "赤字", "债务", "gdp", "GDP", "cpi", "CPI",
+             "数据", "统计", "指标", "增速", "增长率", "人口", "房价", "价格", "销量", "营收",
+             "利润", "市值", "股价", "汇率", "利率", "存款", "贷款", "外汇", "进出口", "贸易额")
+    has_time = any(w in s for w in _time if w != _RT_YEAR.pattern) or bool(_RT_YEAR.search(s))
+    return bool(has_time and any(w in s for w in _data))
 
 
 def _rag_grade(cands, query, realtime=False):
@@ -10719,12 +10761,20 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #    它只能凭训练数据里的旧时间观作答（答成"还没结束"）。
             #    判据是**词面**的，见 `_is_realtime_fact`：时间词 + 事实词同时命中才算。
             _rt_fact_q = _is_realtime_fact(user_input_ctx)
-            if _pre_intent == "chat" and not _rt_fact_q:
+            # 【2026-09-18 加一类】数据类问题（财政/收入/GDP/人口/价格…）同样"只有查了才有"：
+            #   实测「最近国家收入」被判成 chat、也没进时效性事实那一类 → **一个源都没查**，
+            #   它只能凭先验编出「财政部 2026 年 1 月发布…16.5 万亿元，增长 5.3%」这种**没有来源的数字**。
+            #   所以这一类也走"必须联网"这条路（判据见 `_is_fresh_data`：时间词 + 数据词同时命中）。
+            _fresh_q = _is_fresh_data(user_input_ctx)
+            _must_net = bool(_rt_fact_q or _fresh_q)
+            if _pre_intent == "chat" and not _must_net:
                 LOG.info("闲聊轮不联网检索（省时间；需要联网时会自动走 query 意图）")
                 _q, _qhint = "", ""
             else:
                 if _rt_fact_q and _pre_intent == "chat":
                     LOG.info("时效性事实：虽是 chat 意图，**这一路必须联网**（不然只能凭先验瞎猜）")
+                if _fresh_q and _pre_intent == "chat":
+                    LOG.info("数据类问题：虽是 chat 意图，**这一路必须联网**（数字必须有来源）")
                 _q, _qhint = resolve_search_query(user_input_ctx)
             if _q:
                 info = web_search(_q, num=5)
@@ -11037,7 +11087,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   ⚠️ **例外只有一类**：时效性事实（`_is_realtime_fact`）—— 那类问题的答案
             #      用户没说过、记忆库里必然没有、模型先验里也没有，**只有联网能给**。
             #      对它们，合格的联网结果直接进 system（并强制带来源）。
-            _rt_fact = _is_realtime_fact(user_input)
+            _rt_fact = _is_realtime_fact(user_input) or _is_fresh_data(user_input)
             if _rt_fact:
                 LOG.info("时效性事实：允许联网结果直接进 system（这类问题只有联网能答）")
             _rag_inject = _rag_concurrent(user_input, realtime=_rt_fact)
