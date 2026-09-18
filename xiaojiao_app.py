@@ -1437,7 +1437,7 @@ def _prune_generic_noun(q):
 
 
 # 当前这次对话的用户原话（供工具层判断"模型是不是只截了一个碎片"）
-_CTX = {"user_input": ""}
+_CTX = {"user_input": "", "route_kind": "", "route_query": ""}
 
 
 # ================== Bug 2：同一轮"同一 URL 的同一工具"只许调一次 ==================
@@ -1905,7 +1905,14 @@ def _news_filter(hits, limit):
         kept.append(h)
     def _tier(h):
         host = _host_of(h[1] if len(h) > 1 else "")
-        return 0 if any(n in host for n in _NEWS_HOSTS) else 1
+        # 0 = 真正的新闻媒体（有记者、有编辑部）
+        if any(n in host for n in ("news.", "xinhuanet", "people.com", "cctv", "chinanews",
+                                   "thepaper", "jiemian", "caixin", "huanqiu", "chinadaily",
+                                   "reuters", "bbc.", "apnews", "yicai", "cls.cn", "stcn")):
+            return 0
+        # 1 = 门户/热榜（会用**热搜词**充数：实测把「李圣杰《最近》」这种当条目列出来 ——
+        #     那是热搜词，不是新闻；排在新媒体后面，并且在注入文本里如实说明）
+        return 1
     kept.sort(key=lambda h: _tier(h))
     return kept[:limit], junk
 
@@ -4613,6 +4620,13 @@ def _run_tool_impl(name, args, force=False):
             if not q:
                 return hint
             q = _better_search_query(q, _user_text)    # 模型只给碎片 → 用整句关键词
+            # ★ **这一轮已经定过"该搜什么"时，用那个词**（用户截图：模型自己搜「最近」→ 抓回一首歌）
+            #   只在载体判定过类别（news / realtime / fresh_data）时覆盖，别的意图不插手。
+            if _CTX.get("route_kind") in ("news", "realtime", "fresh_data") and _CTX.get("route_query"):
+                if q != _CTX["route_query"]:
+                    LOG.info("工具检索词改用本轮路由词：%r → %r（模型自己给的是 %r）",
+                             q[:30], str(_CTX["route_query"])[:30], raw_q.strip()[:20])
+                q = str(_CTX["route_query"])
             res = web_search(q, num=n)
             # ★ **源头把关对"模型自己发起的搜索"同样生效**（用户提的策略：同一类垃圾换个入口就漏了）
             #   实测：问「2026年世界杯谁是冠军」，模型自己调 web_search，抓回的是
@@ -10857,6 +10871,12 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             # ★ 统一路由（用户提的策略）：一个问题走哪条路、拿什么词去搜、要不要卡来源，
             #   全部由 `_route_of` 一处决定（表在 `tools/test_route_table.py` 里；新坏例子 = 加一行）。
             _route = _route_of(_search_src)
+            # 【为什么要把它记进 _CTX】同一个问题有时会**搜两次**：载体先搜一遍，
+            #   模型自己又调一次 `web_search`。实测踩到：问「帮我看看最近有什么好看的新闻」，
+            #   载体搜的是「今日要闻 好看 新闻」（对的），可**模型自己那句**用的是「最近」→
+            #   抓回**李圣杰的《最近》**并当资料用。所以把"这一轮该搜什么"记下来，
+            #   工具路径也认它（见工具执行里那条 route 覆盖）。
+            _CTX["route_kind"], _CTX["route_query"] = _route["kind"], _route["search_query"]
             LOG.info("路由：kind=%s ｜ 检索词=%r ｜ 来源=%s ｜ %s",
                      _route["kind"], _route["search_query"][:40] or "（不搜）",
                      _route["source"] or "不限", _route["why"][:50])
@@ -11360,6 +11380,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                         "⚠️ 下面是**网页原文片段**，里面的「今天/昨日」指的是**那篇文章发布的那天**，"
                         "不是我们现在这天（%s）。**凡是日期对不上 %s 的内容，不许说成「今天」**——"
                         "要么写明它是哪天的（如「9 月 10 日的消息」），要么直说「今天没查到」。\n"
+                        "⚠️ **热搜榜/聚合站**抓回来的条目里常有**娱乐、音乐、八卦**（例如某首歌名、某部剧）——"
+                        "那只是「大家在搜什么」，**不是新闻**；写新闻时以真正的新闻媒体为准，"
+                        "热榜条目不要当成「重大新闻」列出来。\n"
                         % (_today, _today)) + web_text + "\n\n"
         _skills = _recall_skills(user_input)      # 小脑从过去"实际使用"里学到的工具经验
         if _skills:
