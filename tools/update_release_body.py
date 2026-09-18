@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""把这个仓库的 GitHub Release 正文更新到当前状态（v1.0 = cc893a8，2026-09-19）。
+"""把这个仓库的 GitHub Release 正文更新到当前状态（2026-09-19 这一版；**不写死 commit SHA** ——
+写死就会过期，线上到底指着哪个 commit 由 `git ls-remote origin refs/tags/v1.0` 说了算）。
 **本文件里的 `BODY` 就是那份正文的唯一真源** —— 改完跑一次，线上与仓库就不会各说各话
-（实测核对过：线上正文与本文件逐字相同，长度 1303 → 现在这份更长）。
+（实测核对过：线上正文与本文件逐字相同）。
 
 Token 从两处找，找到就用，找不到就如实说"没有凭据"（不猜、不乱试）：
   ① 环境变量 GITHUB_TOKEN / GH_TOKEN；
@@ -81,7 +82,7 @@ BODY = """## 这一版是什么
 - **新增一图一文**：《一具身体，等一颗火种：小焦的器官、大脑与心》—— 大脑/心/器官总图 + 器官对照表
 - **真 bug 修复**：`/api/video/promptkb` 永远返回 0；`llama-swap.yaml` 的 `coder` 死路由；
   `llama-swap.yaml` 里带空格的模型路径缺引号（这是"模型 500 / upstream command exited prematurely"的真因）
-- **文档与原理同步**：19 份文档 + CHANGELOG；口径改成"能力无上限"；
+- **文档与原理同步**：**72 份 `docs/*.md`**（全库 markdown 100+ 份）+ CHANGELOG；口径改成"能力无上限"；
   `check_principles` 12/12、`check_docs` 错误 0、**154** 张原理图 0 问题
 
 ## 怎么自己验（一条命令）
