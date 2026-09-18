@@ -3742,11 +3742,20 @@ def _idle_think():
                                    % "；".join(str(x)[:30] for x in _ex))
             if p.get("ok"):
                 said = str(p.get("meaning") or "")
-                if len(said) >= 6 and said not in (c.get("examples") or []):
-                    pf.form(said, from_heart=str(c.get("heart") or ""))
-                    LOG.info("偏好：**它自己回看出来的**「%s」（来自 %d 次相像的心）",
-                             said[:50], int(c.get("n") or 0))
-                    acted = {"act": "preference", "said": said, "n": c.get("n")}
+                if len(said) >= 6:
+                    _w = pf.form(said, from_heart=str(c.get("heart") or ""))
+                    if _w.get("ok"):
+                        LOG.info("偏好：**它自己回看出来的**「%s」（来自 %d 次相像的心）",
+                                 said[:50], int(c.get("n") or 0))
+                        acted = {"act": "preference", "said": said, "n": c.get("n")}
+                    else:
+                        # 【为什么要把"没记"单独记一行】原来这里**不看 `form()` 的返回值**，
+                        #   一律打「它自己回看出来的」—— 可 `form()` 会因为「跟已有偏好太像」或
+                        #   「这不像偏好（把素材抄了一遍）」而**根本没写**。
+                        #   日志说形成了、库里其实没有，就是**把没写说成写了**。现在只写成功才算数。
+                        LOG.info("偏好：这句**没记**（%s）｜它说的是：「%s」",
+                                 _w.get("why"), said[:50])
+                        acted = {"act": "preference_none", "said": said}
                 else:
                     acted = {"act": "preference_none", "said": said}
             return acted

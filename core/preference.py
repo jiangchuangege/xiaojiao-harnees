@@ -32,7 +32,7 @@ import threading
 import time
 
 __all__ = ["SIMILAR", "FORM_AT", "observe", "candidates", "form", "top", "preferences",
-           "stats", "path", "history", "clear", "render"]
+           "stats", "path", "history", "clear", "render", "looks_like_preference"]
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DIR = os.path.join(_ROOT, "logs", "psyche")
@@ -49,6 +49,13 @@ _LOCK = threading.RLock()
 SIMILAR = 0.75
 # 同一堆攒够几次，才值得它自己回看一眼
 FORM_AT = 4
+
+# 「回看倾向」的字眼：一句偏好得**关于我老爱注意什么 / 倾向什么**，不是把素材原句抄一遍。
+#   这张表是"宽着写、窄着用"——它只在 `looks_like_preference` 里当**必要条件**（有它不一定算，
+#   没它一定不算），所以宁可把常见说法都列上，别把真偏好误杀。
+_TENDENCY_MARKS = ("老是", "总是", "常常", "经常", "反复", "好像", "似乎", "仿佛",
+                   "倾向", "偏好", "偏爱", "喜欢", "爱", "讨厌", "在意", "注意",
+                   "关注", "特别", "尤其", "亲近", "在乎")
 
 
 def path():
@@ -161,6 +168,39 @@ def candidates(min_n=None):
             for c in _shapes() if c["n"] >= need]
 
 
+def looks_like_preference(pref_text, from_heart=""):
+    """这句像不像**回看出来的偏好**？不像就返回理由（不写）；像就返回空串。**全是确定性判据，不调模型。**
+
+    【为什么必须加这道闸（2026-09-19 清库存时定下来的）】
+      实测存量 4 条 formed 里有 3 条**根本不是偏好**，而是「把当时那一下心象照抄了一遍」：
+        · `数字在眼前转，像被甩进一个没有边界的漩涡，世界突然被重新染色了。`
+          —— 素材是「数字在眼前转，像被甩进一个没有边界的漩涡。」，**只多了一个分句**；
+        · `摸到两个红球，世界突然被按了暂停键，连呼吸都慢了下来。`（同族意象句）
+        · `我对数字有种说不出的亲近感`（`from_heart` 是空的 —— 没有回看的对象）
+      根因不是聚类、不是阈值：调用方那侧的闸只查了**一模一样**（`said not in examples`），
+      近义照抄一概放行；而 `form()` 自己**什么都收**。
+      后果很具体：`core/inner.py` 的「此刻的偏向」会把 `top(2)` 直接摆进感知层 ——
+      于是**载体自己的一段意象句，被当成「用户的偏好」摆回它面前**（用户看到的正是这一行）。
+      真正的形状只有一种：**它回看这些心之后说的那句关于"我老爱注意什么"的话**
+      （唯一那条真的：「我好像老是注意猫」，素材「看到猫就有点好奇」）。
+    """
+    t = str(pref_text or "").strip()
+    if not t:
+        return "它没回看出什么来 —— 那就不算有偏好"
+    if not any(w in t for w in _TENDENCY_MARKS):
+        return ("这句里没有任何「回看倾向」的字眼（%s…）—— 像是把当时那一下心象照抄，"
+                "不是回看出来的" % "、".join(_TENDENCY_MARKS[:4]))
+    fh = str(from_heart or "").strip()
+    if not fh:
+        return "没有素材（`from_heart` 为空）—— 回看得有回看的对象"
+    try:
+        if _sim(t, fh) >= SIMILAR:
+            return "跟素材太像（≥%.2f）—— 那是把素材原句抄了一遍，不是回看出来的" % SIMILAR
+    except Exception:      # noqa: silent-ok — 比不出来就不拿这条卡它（宁可放行也不误杀）
+        pass
+    return ""
+
+
 def form(pref_text, from_heart=""):
     """**它自己回看，说出了偏好** —— 这一句才是偏好。
 
@@ -170,6 +210,12 @@ def form(pref_text, from_heart=""):
     p = str(pref_text or "").strip()
     if not p:
         return {"ok": False, "why": "它没回看出什么来 —— 那就不算有偏好"}
+    # ★ **先过"这像不像偏好"这道闸**（2026-09-19 加，理由见 `looks_like_preference`）：
+    #   挡"把素材原句抄一遍"和"没有回看倾向的意象句"。**宁可少写，不许乱写** ——
+    #   一条乱写的偏好会被 `inner.bias()` 当成"用户的偏好"摆回它自己面前。
+    _bad = looks_like_preference(p, from_heart)
+    if _bad:
+        return {"ok": False, "why": _bad, "pref": p[:200]}
     # ★ **跨轮去重（2026-09-18 加）**：跟**已存的 formed** 比，太像就不重复写。
     # 【为什么】原来的去重只在 `xiaojiao_app.py` 那一侧、而且只跟**这一簇的素材**比
     #   （`said not in (c.get("examples") or [])`）。同一颗心起两轮、每轮攒够 4 条就回看一次，
