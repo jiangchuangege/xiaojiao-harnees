@@ -9594,6 +9594,89 @@ def _event_what_now(max_age=None):
         return ""
 
 
+# ---------------- 事实直答：用户本人说过的事，载体直接照原话答（2026-09-18） ----------------
+# 见 `agent_run` 里那一段的说明：事实写进了库、也注进了 system，4B 还是不采信 ——
+# 那就把"否认"这条路堵掉：这种确定性事实**不过模型**，载体照用户原话答。
+_MY_Q_MARKS = ("哪", "什么", "谁", "几", "多少", "吗", "呢", "？", "?")
+_MY_FACT_WORDS = ("住", "家", "名字", "叫", "生日", "岁", "喜欢", "爱", "学", "工作", "职业",
+                  "养", "宠物", "狗", "猫", "吃", "喝", "过敏", "身体", "父母", "女儿", "儿子",
+                  "伴侣", "城市", "地方", "手机", "电脑", "车")
+
+
+def _direct_fact_answer(q):
+    """问到"用户本人说过的事"、且库里有他的原话 → 返回 `{"answer","why"}`；否则 None。
+
+    【判据全是确定性的，不调模型】
+      · 问题要短（≤ 24 字）、含「我」、是个问句、问的还得是**本人的事**（住/生日/喜欢/学/养…）；
+      · 库里 top1~5 里必须有一条**用户陈述句**（不是他问过的话）、相似度 ≥ 0.6、
+        而且**问到的那个词就出现在那句原话里**（防止答偏，例如问"住哪"却答"喜欢猫"）。
+    【铁的边界】只搬原话、一个字不加工；查不到就返回 None（照常交给模型，绝不编）。
+    """
+    s = str(q or "").strip()
+    if not s or len(s) > 24:
+        return None
+    if "我" not in s:
+        return None
+    if not any(w in s for w in _MY_Q_MARKS):
+        return None
+    _kw = [w for w in _MY_FACT_WORDS if w in s]
+    if not _kw:
+        return None
+    try:
+        from core import memory_vec as _MV
+        hits = _MV.search_memory(s, top_k=5, threshold=0.6) or []
+    except Exception as e:      # noqa: silent-ok — 库读不到就交给模型
+        LOG.debug("事实直答：查库失败（交给模型）：%s", e)
+        return None
+    for h in hits:
+        txt = str((h or {}).get("text") or "")
+        u = ""
+        for seg in txt.split("用户：")[1:]:
+            u = seg.split("\n")[0].strip()
+            break
+        if not u or len(u) > 30:
+            continue
+        if _looks_like_question(u):        # 用户那半句是提问 → 那不是事实
+            continue
+        if not any(w in u for w in _kw):   # 问的词不在原话里 → 不抢答（防答偏）
+            continue
+        return {"answer": "（照你自己说过的话答你）**你说过：%s**" % u,
+                "why": "问=「%s」｜原话=「%s」｜相似度 %.3f" % (s, u, float(h.get("score") or 0))}
+    # ---- 向量没命中时的兜底：**按关键词扫库**（确定性，不调模型）----
+    # 【为什么需要】字级小脑在短句上分不开："我在学什么" 与 "我在学Python" 的余弦可能掉到阈值以下，
+    #   而"问的词在不在原话里"这件事**本来就不需要向量**。实测：「我在学什么」靠向量找不到，
+    #   靠下面这段一次就找到了。
+    try:
+        from core import memory_vec as _MV2
+        import io as _io
+        import json as _json
+        import os as _os
+        p = _MV2.path()
+        if p and _os.path.exists(p):
+            lines = _io.open(p, encoding="utf-8", errors="replace").read().split("\n")
+            for ln in reversed(lines[-800:]):            # 只看最近 800 行：够用，且越近越可能是他要的
+                if not ln.strip():
+                    continue
+                try:
+                    r = _json.loads(ln)
+                except Exception:      # noqa: silent-ok — 坏行跳过
+                    continue
+                txt = str(r.get("text") or "")
+                u = ""
+                for seg in txt.split("用户：")[1:]:
+                    u = seg.split("\n")[0].strip()
+                    break
+                if not u or len(u) > 30 or _looks_like_question(u):
+                    continue
+                if not any(w in u for w in _kw):
+                    continue
+                return {"answer": "（照你自己说过的话答你）**你说过：%s**" % u,
+                        "why": "问=「%s」｜按关键词扫库命中=「%s」（向量没到阈值，关键词兜底）" % (s, u)}
+    except Exception as e:      # noqa: silent-ok — 兜底失败就交给模型
+        LOG.debug("事实直答：关键词兜底失败（交给模型）：%s", e)
+    return None
+
+
 def _eyc_state_now():
     """给神经总线用的 EYC 状态（拿不到就返回空 dict —— 不编）。"""
     try:
@@ -9936,6 +10019,25 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                  _per.get("direction") or "（没挑出来）", _per.get("parsed_by"),
                  str(_per.get("raw") or "")[:80].replace("\n", " "))
         _ev = _TL2.on_event("user", user_input_ctx, why="用户这一句", perception=_per)
+        # ================== 事实直答：**用户本人说过的事，载体直接照原话答** ==================
+        # 【为什么要这一条（用户实测逼出来的，2026-09-18）】
+        #   用户先说了「我住在菏泽」等四件关于自己的事，再问「我住在哪」——
+        #   实测：事实**确实写进了库**、**确实检索到了**（top1 相似度 0.89）、**确实注进了 system**
+        #   （日志：`画像召回：…已注入 system｜用户住在菏泽`），可 4B 开口还是
+        #   「我帮你查了一下我的记忆，没有关于你住哪的记录」——**它不采信注入的事实**。
+        #   这不是措辞问题（改过一版措辞，5 问从 1 中变 0 中，已回滚），是**最后一跳**的问题。
+        # 【载体在这件事上的本分】问到"用户本人说过的事"（住哪 / 叫什么 / 生日 / 喜欢什么 /
+        #   在学什么 / 养的宠物 / 家人在做什么…）时，**答案本来就在库里、而且是用户亲口说的**——
+        #   这种确定性事实，跟"你有哪些工具"一样，**不需要过模型的判断**：
+        #   载体现成能查到，就照原话回答（并标明这是你说过的），把"否认"这条路直接堵掉。
+        # 【铁的边界】只搬**用户原话**，一个字不加工、不推断、不替它延伸话题；
+        #   查不到就**照常交给模型**（绝不编一条"你说过…"）。
+        _direct = _direct_fact_answer(user_input_ctx)
+        if _direct:
+            LOG.info("事实直答：这句问的是用户本人说过的事，且库里有他的原话 → 载体直接答（不过模型）｜%s",
+                     str(_direct.get("why"))[:90])
+            return str(_direct.get("answer") or ""), True, [], False, []
+
         # ================== 关系：**它自己感知到"这话伤了/哄了我"** ==================
         # 【为什么要这样 —— 用户实测指出"因噎废食"】旧版怕变成"触发词表"，干脆不判断，
         #   改成 `POST /api/relation` 手动标 —— 那是把该它自己做的事推给了人。
