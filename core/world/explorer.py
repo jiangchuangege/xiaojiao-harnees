@@ -125,6 +125,22 @@ def _append(path, obj):
         return False
 
 
+# 【哪些词**一看就不是话题**（2026-09-18 实测排出来的垃圾话题表）】
+# 实测它"今天该探什么"排出来的是 ["http","example","com","baidu","是谁"] —— 全是上网留下的
+# 技术词与疑问词，照这个去逛当然逛不到东西。这三张表就是那次实测的产物。
+_NOT_TOPIC_ASCII = frozenset((
+    "http", "https", "www", "com", "cn", "net", "org", "html", "json", "api", "url", "uri",
+    "uuid", "example", "baidu", "google", "test", "none", "null", "true", "false", "utf",
+    "jpg", "png", "gif", "pdf", "zip", "exe", "dll", "css", "js", "py", "cmd", "exe",
+))
+_NOT_TOPIC_ASCII_HINT = frozenset(("get", "post", "put", "the", "and", "for", "you", "are"))
+_NOT_TOPIC_CJK = frozenset((
+    "是谁", "是什么", "什么", "怎么", "如何", "为什么", "哪里", "哪个", "多少", "几点", "几号",
+    "你好", "哈哈", "谢谢", "好的", "可以", "没有", "一个", "这个", "那个", "我们", "你们",
+    "自己", "现在", "今天", "最近", "帮我", "告诉", "看看", "一下", "因为", "所以", "但是",
+))
+
+
 def default_topics():
     """没有历史可依据时的兜底话题（保证"没人问也在做事"有一条起跑线）。"""
     return ["人工智能", "开源项目", "科技新闻"]
@@ -312,6 +328,16 @@ class WorldExplorer:
             for w in re.findall(r"[\u4e00-\u9fff]{2,6}|[A-Za-z]{3,}", txt):
                 if w in _STOP or len(w) < 2:
                     continue
+                # 【2026-09-18 加一道词性过滤（实测逼出来的）】它"今天该探什么"是从对话里数词频来的，
+                #   而对话里混进了上网查的技术词与疑问词 —— 实测排出来的话题是
+                #   ["http", "example", "com", "baidu", "是谁"]：**全是垃圾**，
+                #   照这个去逛当然逛不到东西。这里把"一看就不是话题"的剔掉：
+                #     · 网址/协议/扩展名那类 ASCII 词；· 疑问词与口语尾巴。
+                _lw = w.lower()
+                if _lw in _NOT_TOPIC_ASCII or _lw in _NOT_TOPIC_ASCII_HINT:
+                    continue
+                if w in _NOT_TOPIC_CJK:
+                    continue
                 counts[w] = counts.get(w, 0) + 1
         # 注意这里必须用 `_topic_name(t)` 而不是 `t`：topics() 的一项是个 dict，
         # 直接拿来当字典的键会 `TypeError: unhashable type: 'dict'`（实测踩到）。
@@ -321,7 +347,9 @@ class WorldExplorer:
                 continue
             counts[name] = counts.get(name, 0) + int(w or 1)
         for name in (self.cfg.get("topic_interests") or []):
-            counts[str(name)] = counts.get(str(name), 0) + 3
+            # 权重从 3 提到 8：**用户在意的事**应该压过"对话里恰好出现得多的词" ——
+            # 实测按 3 算的时候，出门方向被 "http"/"com"/"baidu" 这类词挤掉了。
+            counts[str(name)] = counts.get(str(name), 0) + 8
         out = [k for k, _ in sorted(counts.items(), key=lambda x: -x[1])[:limit]]
         return out or default_topics()
 

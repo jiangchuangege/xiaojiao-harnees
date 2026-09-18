@@ -9438,10 +9438,57 @@ _BROWSE_STARTED = {"tried": False}
 
 
 def _browse_explorer():
-    """拿世界层探索器；拿不到返回 None（世界层缺席不该影响对话）。"""
+    """拿世界层探索器；拿不到返回 None（世界层缺席不该影响对话）。
+
+    【2026-09-18 补：让它**按用户关心的事**去逛 + 配额可配】
+    实测：它会自己出门，但逛回来的东西很泛（世界地图里 71 个站、29 个话题，多是随手撞到的）。
+    而探索器本身早就留了口子 `cfg["topic_interests"]`（命中加权 +3，排在探什么的前面）——
+    只是**没人往里放东西**。这里放两样：
+      · **用户在意的方向**：偏好库（它自己回看认下的那几句）+ 用户画像里的内容，
+        作为它出门时的"值得看的方向"。⚠️ 这些**只是加权**，不是命令 —— 它仍然是自己在逛；
+      · **每日配额**：`capabilities.world_daily_budget`（默认 50），改了立刻生效。
+    """
     try:
         from core.world.explorer import get_explorer
-        return get_explorer()
+        ex = get_explorer()
+        if ex is None:
+            return None
+        try:
+            _ints = []
+            try:
+                from core import preference as _PF
+                _ints += [str(x) for x in (_PF.top(5) or [])]
+            except Exception as e:      # noqa: silent-ok — 偏好读不到就少一份加权
+                LOG.debug("逛世界：读偏好失败（忽略）：%s", e)
+            try:
+                from core import user_profile as _UP
+                _ints += [str(x)[:20] for x in (_UP.top(5) or [])] if hasattr(_UP, "top") else []
+            except Exception as e:      # noqa: silent-ok
+                LOG.debug("逛世界：读画像失败（忽略）：%s", e)
+            _ints = [x.strip()[:20] for x in _ints if str(x).strip()][:8]
+            # 偏好那句是**一句完整的话**（「我好像老是注意猫」），直接拿去搜会搜出乱七八糟的东西 ——
+            # 这里只留"它在意的那点东西"（注意/喜欢/爱/在学 后面的那一截）。
+            _kw = []
+            for _x in _ints:
+                _m = None
+                for _mark in ("注意", "喜欢", "爱", "在学", "亲近感", "亲近", "关心"):
+                    if _mark in _x:
+                        _m = _x.split(_mark, 1)[1]
+                        break
+                _k = (_m if _m is not None else _x).strip(" 　的，。、！？")
+                if _k:
+                    _kw.append(_k[:10])
+            _ints = _kw or _ints
+            if _ints:
+                ex.cfg["topic_interests"] = _ints
+                LOG.info("逛世界：出门方向按你关心的来（%d 条加权）：%s",
+                         len(_ints), " ／ ".join(_ints[:4]))
+            _budget = int(CAP.get("world_daily_budget", 0) or 0)
+            if _budget > 0:
+                ex.cfg["daily_budget"] = _budget
+        except Exception as e:      # noqa: silent-ok — 配置推不进去也要能逛
+            LOG.debug("逛世界：推配置失败（忽略）：%s", e)
+        return ex
     except Exception as e:      # noqa: silent-ok — 世界层没起来就这一轮不逛
         LOG.debug("逛世界：探索器不可用（忽略）：%s", e)
         return None
