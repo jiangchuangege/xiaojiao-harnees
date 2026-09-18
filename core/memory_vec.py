@@ -21,6 +21,7 @@
       失败反思），对话记忆写进去会污染它。本模块启动时就把这条红线钉死。
 """
 import base64
+import io
 import json
 import os
 import struct
@@ -184,6 +185,48 @@ def add_memory(text, kind="dialogue", entities=None, ts=None, meta=None, key_tex
     with _LOCK:
         p = path()
         os.makedirs(os.path.dirname(p), exist_ok=True)
+        # ★ ★ ★ **写入侧去重（2026-09-18 补，按"同一句问题只留一份"）** ★ ★ ★
+        # 【症状（用户实测）】同一句「我住在菏泽」问三次 → 库里多三行（450 → 451 → 452）。
+        #   一次性的存量清理治不了这个：**源头每次都在写**，清完还会攒起来。
+        # 【判据】**索引键相同（key = 用户那句话）**就算"同一个问题"：
+        #   此时**刷新那一行的正文**（同一行、同一个 id，不新增行），并记下 `refreshed_at`
+        #   与 `same_key_n`（问过几次）。三个字段都是**只加**的，不删任何东西。
+        # 【为什么不各存一条】同一个问题问十遍，会得到十条只在措辞上不同的答案 ——
+        #   它们检索时互相挤（问同一句话，十条命中），这就是"重复正文"这一类污染的来源。
+        #   记忆要的是"这个问题的答案是什么"，不是"它答过几次"。
+        #   ⚠️ 如实标注：**旧的那版正文会被新的盖掉**（不保留多版本）——
+        #   想留多版本就在 `refreshed_at` 那条日志里找（每次刷新都打一行）。
+        _new_key = str(rec.get("key") or "")
+        if _new_key:
+            for _pos in range(len(_INDEX["meta"]) - 1, max(-1, len(_INDEX["meta"]) - 400), -1):
+                _old = _INDEX["meta"][_pos]
+                if str(_old.get("key") or "") != _new_key:
+                    continue
+                _old["text"] = text[:2000]
+                _old["v"] = rec["v"]
+                if "vectors" in rec:
+                    _old["vectors"] = rec["vectors"]
+                _old["refreshed_at"] = rec["ts"]
+                _old["same_key_n"] = int(_old.get("same_key_n") or 1) + 1
+                try:
+                    _n = _replace_line(p, str(_old.get("id") or ""), _old)
+                except Exception as _e:      # noqa: silent-ok — 改不动就当这次没写（绝不新增一行）
+                    _n = False
+                    try:
+                        import logging as _lg
+                        _lg.getLogger("xiaojiao.memory_vec").warning(
+                            "同 key 刷新落盘失败（本次不写，不新增行）：%s", _e)
+                    except Exception:      # noqa: silent-ok
+                        pass
+                if _n:
+                    try:
+                        import logging as _lg
+                        _lg.getLogger("xiaojiao.memory_vec").info(
+                            "同一个问题又问了一次 → 刷新原行，不新增（第 %d 次）：%s",
+                            _old["same_key_n"], _new_key[:40])
+                    except Exception:      # noqa: silent-ok
+                        pass
+                return str(_old.get("id") or "")
         with open(p, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         _INDEX["rows"].append(vec)
@@ -200,6 +243,35 @@ def add_memory(text, kind="dialogue", entities=None, ts=None, meta=None, key_tex
         elif np is not None and len(_INDEX["rows"]) == 1:
             _rebuild_matrix()
     return rec["id"]
+
+
+def _replace_line(p, rid, rec):
+    """把库里 id == rid 的那一行换成 rec（**行数不变**，原子重写）。成功返回 True。
+
+    为什么需要它：同一个问题又问一次时，要**刷新那一行**而不是新增一行。
+    写临时文件再 `os.replace` —— 写到一半崩了也不会留半个库。
+    """
+    if not rid or not os.path.exists(p):
+        return False
+    lines = io.open(p, encoding="utf-8", errors="replace").read().split("\n")
+    hit = False
+    for i, ln in enumerate(lines):
+        if not ln.strip():
+            continue
+        try:
+            if str(json.loads(ln).get("id") or "") == rid:
+                lines[i] = json.dumps(rec, ensure_ascii=False)
+                hit = True
+                break
+        except Exception:      # noqa: silent-ok — 坏行跳过
+            continue
+    if not hit:
+        return False
+    tmp = p + ".tmp"
+    with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines))
+    os.replace(tmp, p)
+    return True
 
 
 def ids():
