@@ -6645,6 +6645,105 @@ def _fact_net(answer):
         return answer, ""
 
 
+_TODAY_PARA = re.compile(r"今天[（(]\s*(\d{1,2})\s*[月\-/.]\s*(\d{1,2})")
+
+
+def _today_date_note(answer):
+    """回答里把**别的日期**说成"今天"时，给一句如实更正；没有这种情况就返回空串。
+
+    【用户实测（截图）】问「今天有什么重大新闻呢」，它答
+    「国务院新闻办公室**今天（9 月 10 日）**举行了一场新闻发布会」——
+    事实是：那条新闻确实是 9 月 10 日的（网页原文如此），**但今天不是 9 月 10 日**。
+    载体这边日期一直是写明的（系统时钟直答写了 2026-09-18），模型还是照网页抄 ——
+    那就**不改它的话，只在后面如实更正一句**（与元认知标注同一个做法：不改答案，只加说明）。
+    """
+    import datetime
+    now = datetime.datetime.now()
+    seen = []
+    for m, d in _TODAY_PARA.findall(str(answer or "")):
+        if (int(m), int(d)) != (now.month, now.day):
+            seen.append("%d 月 %d 日" % (int(m), int(d)))
+    if not seen:
+        return ""
+    return ("\n\n（时间更正：上面那句里的「今天」其实是 %s 的消息，不是今天 %s —— "
+            "资料是从网页抄来的，网页里的那个「今天」指的是它自己发布的那天。）"
+            % ("、".join(sorted(set(seen))), now.strftime("%Y-%m-%d")))
+
+
+def _reask_with_fact(q, fact_text):
+    """它这一轮否认了 → **带着原话再问它一次**，让它用自己的话把事实说出来。
+
+    【为什么先重问、而不是直接照抄（用户点出来的）】直接照抄用户原话，等于每条回答都长一个样 ——
+    "每句话说的就不一样了"这件事恰恰是这个项目要的（它是活的，不是模板）。
+    所以顺序是：**先让它自己说 → 它否认了 → 带原话重问一次（还是它自己说，措辞自然不同）→
+    再否认才由载体照抄兜底**。实测这一条只在"它否认"的那一轮多花一次模型调用。
+    返回它这次说的话（空串表示没答上来）。
+    """
+    try:
+        out = llm_chat([
+            {"role": "system",
+             "content": ("用户本人**以前说过**下面这句话，这是**事实**（不是你猜的）：\n"
+                         "「%s」\n\n请直接用你自己的话回答用户现在的问题，"
+                         "把这件事说给他听；**不要**说「我没有记录」「你没告诉过我」这类话。"
+                         % str(fact_text)[:80])},
+            {"role": "user", "content": str(q or "")}])
+        return str(out or "").strip()
+    except Exception as e:      # noqa: silent-ok — 重问失败就走照抄兜底
+        LOG.debug("带原话重问失败（走照抄兜底）：%s", e)
+        return ""
+
+
+def _said_it(fact, answer, line=0.35):
+    """回答里**有没有把用户那句原话说出来**（2-gram 重合 ≥ line 就算说了）。
+
+    【为什么要这条**除"否认"之外的**判据】实测：问「我在学什么」，它答
+    「我在学……**我在学怎么让你满意。**」——**既没否认、也没说事实**，通篇在演。
+    光靠"它否认了吗"抓不到这种，所以再加一条：拿用户原话跟回答比字面重合，
+    对不上就说明"这一轮没把事实说出来"（于是走带原话重问 → 再不行才照抄兜底）。
+    """
+    def _bg(s):
+        s = "".join(ch for ch in str(s or "") if ch.strip())
+        return set(s[i:i + 2] for i in range(max(0, len(s) - 1)))
+    A, B = _bg(fact), _bg(answer)
+    if not A or not B:
+        return False
+    return (len(A & B) / float(len(A))) >= float(line)
+
+
+def _strip_leading_inner(text):
+    """把回答**开头那一段内心话**剥掉（它本该只在"心里"，不该出现在聊天页面上）。
+
+    【用户实测（截图）】聊天页面里它这条回复是这么开头的：
+    「（心里有点慌，怕你失望）」然后才是正文 —— 那是**内心话漏进了给用户看的回复**。
+    来源有两处：① "心接回"把心那句话作为 assistant 消息摆在紧挨生成的位置，模型有时**接着它往下写**；
+    ② 人格层本来就允许它用括号写内心独白，于是这层括号成了它的习惯起手式。
+    【判据（保守）】只看**开头**：以（或( 开头、且在第一段内就闭合、且总长 ≤ 40 字的括号，
+    才当内心话剥掉；中间出现的括号**一个字都不动**（那是正常行文）。
+    返回 `(剥完的文本, 剥掉的内容)`；没剥就 `(原文, "")`。
+    """
+    t = str(text or "")
+    out_inner = []
+    for _ in range(3):                     # 最多剥三层（它有时会连着写几段内心话）
+        s = t.lstrip()
+        if not s or s[0] not in "（(":
+            break
+        close = "）" if s[0] == "（" else ")"
+        i = s.find(close)
+        # 【2026-09-18 放宽】原来只剥 ≤40 字的开头括号，实测它会把整段"心里想：…"（几十上百字、
+        #   里面甚至写着"我记忆库里没有这条记录"）打给用户看 —— 那种必须一起剥掉。
+        #   现在：开头括号**最多 240 字**都算内心话；中间出现的括号仍然一个字不动。
+        if i <= 0 or i > 240:
+            break
+        inner = s[1:i].strip()
+        if not inner:
+            break
+        out_inner.append(inner)
+        t = s[i + 1:].lstrip()
+    if not out_inner:
+        return t, ""
+    return t, " ｜ ".join(out_inner)
+
+
 def _degeneration_net(text, where=""):
     """**最后一道网**：任何要交给用户的文本，出门前都过一遍复读解毒。
 
@@ -11037,7 +11136,18 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         if mem_text:
             context += "（相关记忆）\n" + mem_text + "\n\n"
         if web_text:
-            context += "（联网检索到的资料）\n" + web_text + "\n\n"
+            # 【2026-09-18 加日期纪律（用户实测截图逼出来的）】
+            #   问「今天有什么重大新闻呢」，它答「国务院新闻办公室**今天（9月10日）**举行了一场新闻发布会」——
+            #   那个"今天"是**网页原文里的今天**（那篇文章是 9 月 10 日发的），不是我们这一天。
+            #   载体这边两个日期都写明了（系统时钟直答写了 2026-09-18），模型还是照着网页抄。
+            #   所以在这里把"网页的今天 ≠ 我们的今天"摆到资料头上，并给一条硬要求：
+            #   **日期对不上今天的，不许说成"今天"**；查不到今天的就如实说"今天没查到"。
+            _today = time.strftime("%Y-%m-%d")
+            context += ("（联网检索到的资料）\n"
+                        "⚠️ 下面是**网页原文片段**，里面的「今天/昨日」指的是**那篇文章发布的那天**，"
+                        "不是我们现在这天（%s）。**凡是日期对不上 %s 的内容，不许说成「今天」**——"
+                        "要么写明它是哪天的（如「9 月 10 日的消息」），要么直说「今天没查到」。\n"
+                        % (_today, _today)) + web_text + "\n\n"
         _skills = _recall_skills(user_input)      # 小脑从过去"实际使用"里学到的工具经验
         if _skills:
             context += "（小脑学到的工具用法，可参考）\n" + _skills + "\n\n"
@@ -11354,14 +11464,43 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         try:
             _fq = str(_FACT_BACK.get("fact") or "")
             _dw = _denies_record(answer) if _fq else ""
+            if _fq:
+                _u0 = _fq.split("原话=「", 1)[-1].split("」", 1)[0] or _fq
+                _u0 = _u0.split("按关键词扫库命中=「", 1)[-1].split("」", 1)[0] or _u0
+                if not _dw and not _said_it(_u0, answer):
+                    _dw = "没说事实（通篇在演）"
             if _fq and _dw:
                 _u = _fq.split("原话=「", 1)[-1].split("」", 1)[0] or _fq
                 _u = _u.split("按关键词扫库命中=「", 1)[-1].split("」", 1)[0] or _u
-                answer = ("**你说过：%s**\n\n（这句是你自己说过的原话。）" % _u[:60])
+                # ① **先带原话重问它一次**（用户点的：这样每句话不一样，是它自己说的）
+                _again = _reask_with_fact(user_input_ctx, _u[:60])
+                if _again and not _denies_record(_again):
+                    answer = _again
+                    LOG.info("用户事实兜底①：带原话重问成功，它自己说出来了（%d 字）", len(_again))
+                else:
+                    # ② 重问还否认 → 才由载体照抄原话兜底（并明写来源）
+                    answer = ("**你说过：%s**\n\n（这句是你自己说过的原话。）" % _u[:60])
+                    LOG.info("用户事实兜底②：重问仍否认 → 改用用户原话直接回答 ｜ %s", _u[:40])
                 LOG.info("用户事实兜底：这一轮它又说「%s」→ 已改用用户原话直接回答 ｜ %s",
                          _dw, _u[:40])
         except Exception as e:      # noqa: silent-ok — 兜底失败就用它原来的回答
             LOG.debug("用户事实兜底失败（忽略）：%s", e)
+        # ---- 时间对不上就说一句（用户截图：它把 9 月 10 日的新闻说成"今天"）----
+        try:
+            _dnote = _today_date_note(answer)
+            if _dnote:
+                answer = answer.rstrip() + _dnote
+                LOG.info("时间更正：回答里把别的日期说成「今天」→ 已在其后如实补一句")
+        except Exception as e:      # noqa: silent-ok — 加不上也不影响回答
+            LOG.debug("时间更正失败（忽略）：%s", e)
+        # ---- 内心话不许漏进聊天页面：回答开头那段括号内心独白剥掉（用户截图实测） ----
+        try:
+            _stripped, _inner = _strip_leading_inner(answer)
+            if _inner:
+                answer = _stripped
+                LOG.info("剥掉开头那段内心话（它该只在心里，不该给用户看）：%s", _inner[:40])
+        except Exception as e:      # noqa: silent-ok — 剥不掉就用原文，绝不影响回答
+            LOG.debug("剥开头内心话失败（忽略）：%s", e)
         # ---- 元认知 · **答后交叉检查**（2026-09-18 接上；原来只在自测里跑得到）----
         # 【为什么接在这里】`core/metacognition/crosscheck.py` 早就写好、自测也全绿，
         #   但**主流程一次都没调过它** —— 也就是说"答后交叉检查"这一项一直是**离线能力**。
