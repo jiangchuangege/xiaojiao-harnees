@@ -10868,9 +10868,15 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                              "不许说「无法获取时间」，也不要加表格和多余解释。" % _facts)},
                 {"role": "user", "content": str(user_input or "")}])
             _said = str(_said or "").strip()
-            # 核对：它得把「年-月-日」和「时:分」都说出来，否则算没说对
-            if (_said and _now.strftime("%Y-%m-%d") in _said
-                    and _now.strftime("%H:%M") in _said):
+            # 核对：它得把年月日、时分都说出来，否则算没说对。
+            # ⚠️ 不能拿 `%Y-%m-%d` 去比 —— 实测它说的是「2026 年 9 月 18 日星期五晚上 9 点 57 分 25 秒」，
+            #    **数字全对、格式是中文**，第一版判据把这句判成了"对不上"（差点又把模板退回来）。
+            #    所以只比**数字**：年 / 日 / 时（含 12 小时制）/ 分，四个都在才算说对。
+            _nums = [int(x) for x in re.findall(r"\d+", _said)]
+            _nset = set(_nums)
+            _hour_ok = (_now.hour in _nset) or ((_now.hour - 12) in _nset if _now.hour > 12 else False)
+            _ok_said = (_now.year in _nset) and (_now.day in _nset) and _hour_ok and (_now.minute in _nset)
+            if _said and _ok_said:
                 answer = _said
                 LOG.info("时间问题：由它自己说出（并对上了系统时钟）｜%s", _said[:50])
             elif _said:
