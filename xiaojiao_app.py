@@ -1860,6 +1860,13 @@ def _is_news_query(q):
                                 "发生了什么", "有什么大事"))
 
 
+# 黄历/日历/星座/历史上的今天这一类 —— **不产事实**，任何联网查询里都该剔掉
+# 【为什么要全局剔（用户提的策略）】原来只在"新闻类"查询里剔，于是「今年 GDP 增速」
+#   这种数据类查询照样把「华易黄历网」抓回来当资料 —— 同一类垃圾，换个问题就漏。
+_JUNK_TITLE_WORDS = ("黄历", "万年历", "历史上的今天", "农历", "宜忌", "星座", "生肖", "今天是几号",
+                     "几月几号", "节假日安排", "放假安排")
+
+
 # 【新闻类查询：换检索词 + 源头把关（2026-09-18，用户截图逼出来的）】
 # 【症状】问「今天有什么重大新闻呢」→ 检索词保持**整句**（`今天有什么重大新闻呢`）→
 #   搜索引擎把它理解成"今天"→ 返回 **查日历的站（jintianjihao.com）与"历史上的今天"** ——
@@ -1932,10 +1939,11 @@ def web_search(query, num=6):
         if not hits:
             continue
         hits.sort(key=lambda x: _search_relevance(query, x[0], x[2])[0], reverse=True)
-        if _news:
-            hits, _junk = _news_filter(hits, max(num, 8))
-            if _junk:
-                LOG.info("新闻类查询：剔掉 %d 条日历/黄历/历史上的今天类结果（它们不产新闻）", _junk)
+        # ★ **源头把关对每一次检索都生效**（不只新闻类）：黄历/日历/历史上的今天这类站
+        #   不产事实，抓回来只会污染回答。新闻类排序时再把新闻源提到前面。
+        hits, _junk = _news_filter(hits, max(num, 8))
+        if _junk:
+            LOG.info("源头把关：剔掉 %d 条黄历/日历/历史上的今天类结果（它们不产事实）", _junk)
         top = hits[:num]
         _sc, _cov = _search_relevance(query, top[0][0], top[0][2])
         if _cov >= 0.6:                              # 主题词覆盖够高 → 这批结果是对的，不再多问引擎
@@ -4606,6 +4614,12 @@ def _run_tool_impl(name, args, force=False):
                 return hint
             q = _better_search_query(q, _user_text)    # 模型只给碎片 → 用整句关键词
             res = web_search(q, num=n)
+            # ★ **源头把关对"模型自己发起的搜索"同样生效**（用户提的策略：同一类垃圾换个入口就漏了）
+            #   实测：问「2026年世界杯谁是冠军」，模型自己调 web_search，抓回的是
+            #   「2026年大事、要事、重要节日一览表（附放假安排）」这种日历站 —— 它照样当资料用。
+            res, _junk = _news_filter(res, max(1, n))
+            if _junk:
+                LOG.info("源头把关（工具路径）：剔掉 %d 条黄历/日历/历史上的今天类结果", _junk)
             _head = ""
             if q != raw_q.strip():                     # 清洗/升级过就如实说明，方便用户核对
                 _head = "（已把「%s」清洗成检索关键词「%s」）\n" % (raw_q.strip()[:40], q)
@@ -7229,6 +7243,10 @@ def merge_context(user_text, history, n=5):
         #   它于是开始讲那首歌。所以这里把"被更正的那句"放回主位、更正只当修饰。
         merged = "%s（用户更正的是说法/时间范围：「%s」；**要回答的问题还是这一句**）" % (prev, cur)
         return {"text": merged, "merged": True, "kind": "clarify", "topic": topic,
+                # 【为什么还要单独给 `search_text`】合并后那句话里带着"更正"的原文，
+                #   检索词抽取只看最后那几个字（实测抽出了「最近」→ 搜回来一首歌）。
+                #   所以给搜索单独留一句：**搜的还是原来那个问题**。
+                "search_text": prev,
                 "why": "「%s」是对上一条「%s」的更正" % (cur, prev[:24]),
                 "need_clarify": False, "original": cur}
 
@@ -8949,6 +8967,79 @@ def _is_fresh_data(q):
     return bool(has_time and any(w in s for w in _data))
 
 
+_TOPIC_DROP = ("今天", "今日", "昨天", "最近", "最新", "近期", "目前", "现在", "当前", "有什么",
+               "有啥", "重大", "重要的", "的", "呢", "啊", "吗", "？", "?", "！", "!", "，", "。",
+               "帮我", "查一下", "看看", "告诉我", "我是说", "我说的是", "我指的是", "是什么")
+
+
+def _topic_words(s):
+    """从问句里抠出**话题词**（去掉时间词/疑问词/礼貌词）。抠不出就返回空串。"""
+    t = str(s or "")
+    for w in _TOPIC_DROP:
+        t = t.replace(w, " ")
+    return " ".join(x for x in t.split() if x)
+
+
+def _route_of(text):
+    """★ **一个问题走哪条路 —— 所有判定收在这一处**（表驱动、可自测、不调模型）★
+
+    【为什么要收成一处（用户提出的策略）】原来"该不该联网、拿什么词去搜、要不要卡来源"
+    散在四五个地方（`_is_realtime_fact` / `_is_fresh_data` / `_is_news_query` / `intent` / 各个 if），
+    于是**每冒出一个新说法就漏一次**：问「今天有什么重大新闻」搜回日历站、问「最近国家收入」
+    只讲了一首歌、问「今天几号」又很好。这一处把判定收拢，规则按顺序排，**表在测试里**：
+    新发现一个坏例子 → 就往 `tools/test_route_table.py` 加一行，不再靠现场打补丁。
+
+    返回 `{"kind", "search_query", "need_net", "source", "why"}`：
+      · `kind` —— fact_user（用户本人的事实，走记忆）/ scrape（抓网页）/ news（新闻）/
+        realtime（时效性事实）/ fresh_data（数据类）/ tool（要工具）/ chat（闲聊）
+      · `search_query` —— **这一轮该拿什么词去搜**（空串=不搜）
+      · `source` —— 搜索结果的源头要求（`news` = 只要新闻源；空 = 不限）
+    """
+    r = {"kind": "chat", "search_query": "", "need_net": False, "source": "", "why": "闲聊，不联网"}
+    s = str(text or "").strip()
+    if not s:
+        return r
+    # ① 用户本人说过的事实（库里有他的原话）→ 不联网，走"事实接回"
+    try:
+        if _find_user_fact(s):
+            return {"kind": "fact_user", "search_query": "", "need_net": False, "source": "",
+                    "why": "问的是用户本人说过的事，库里能找到原话 → 走事实接回/兜底"}
+    except Exception as e:      # noqa: silent-ok — 判不出来就当不是
+        LOG.debug("路由：用户事实判定失败（忽略）：%s", e)
+    # ② 抓网页（句子里有点名的链接）→ 抓取直通
+    try:
+        if _detect_scrape_intent(s):
+            return {"kind": "scrape", "search_query": s, "need_net": True, "source": "",
+                    "why": "句子里点名了要抓的东西 → 走抓取直通"}
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("路由：抓取判定失败（忽略）：%s", e)
+    # ③ 新闻 → 换检索词「今日要闻」+ 话题，只认新闻源
+    if _is_news_query(s):
+        _tp = _topic_words(s)
+        return {"kind": "news", "search_query": (_NEWS_QUERY + (" " + _tp if _tp else "")).strip(),
+                "need_net": True, "source": "news",
+                "why": "问的是新闻/时事 → 换词搜「%s」并只认新闻源（整句去搜会搜回日历站）" % _NEWS_QUERY}
+    # ④ 时效性事实（时间词 + 事实词）→ 用去壳后的话题词搜
+    if _is_realtime_fact(s):
+        return {"kind": "realtime", "search_query": _topic_words(s) or s, "need_net": True,
+                "source": "", "why": "时效性事实：答案只有联网能给"}
+    # ⑤ 数据类（时间词 + 数据词）→ 「<话题> 最新数据」，数字必须有来源
+    if _is_fresh_data(s):
+        _tp = _topic_words(s)
+        return {"kind": "fresh_data", "search_query": ("%s 最新数据" % _tp).strip() if _tp else s,
+                "need_net": True, "source": "",
+                "why": "数据类问题：数字必须有来源，不许凭先验编"}
+    # ⑥ 其它：按意图走（query/scrape 等要联网，chat 不联网）
+    try:
+        _it = _detect_intent(s)
+    except Exception:      # noqa: silent-ok
+        _it = "chat"
+    if _it != "chat":
+        return {"kind": "tool", "search_query": s, "need_net": True, "source": "",
+                "why": "意图=%s → 照常检索/工具" % _it}
+    return r
+
+
 def _rag_grade(cands, query, realtime=False):
     """给候选打分、排序、分级。返回结构化结果（不注入，注入由调用方决定）。
 
@@ -10193,6 +10284,8 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     except Exception as e:      # noqa: silent-ok — 融合失败就用原句，绝不能因此答不了
         LOG.debug("忽略异常(%s:%d): %s", __file__, 6650, e)
     user_input_ctx = str(_ctx_fuse.get("text") or user_input)
+    # 检索用哪句：更正类那一轮用 `search_text`（= 被更正的那句原问题），别拿合并句去搜
+    _search_src = str(_ctx_fuse.get("search_text") or user_input_ctx)
     # 记下"用户最近一次说话" —— "困了要睡"只在用户安静下来之后才谈得上（见 IDLE_BEFORE_SLEEP）。
     _LAST_DIALOGUE["at"] = time.time()
 
@@ -10761,13 +10854,17 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #    它只能凭训练数据里的旧时间观作答（答成"还没结束"）。
             #    判据是**词面**的，见 `_is_realtime_fact`：时间词 + 事实词同时命中才算。
             _rt_fact_q = _is_realtime_fact(user_input_ctx)
-            # 【2026-09-18 加一类】数据类问题（财政/收入/GDP/人口/价格…）同样"只有查了才有"：
-            #   实测「最近国家收入」被判成 chat、也没进时效性事实那一类 → **一个源都没查**，
-            #   它只能凭先验编出「财政部 2026 年 1 月发布…16.5 万亿元，增长 5.3%」这种**没有来源的数字**。
-            #   所以这一类也走"必须联网"这条路（判据见 `_is_fresh_data`：时间词 + 数据词同时命中）。
+            # ★ 统一路由（用户提的策略）：一个问题走哪条路、拿什么词去搜、要不要卡来源，
+            #   全部由 `_route_of` 一处决定（表在 `tools/test_route_table.py` 里；新坏例子 = 加一行）。
+            _route = _route_of(_search_src)
+            LOG.info("路由：kind=%s ｜ 检索词=%r ｜ 来源=%s ｜ %s",
+                     _route["kind"], _route["search_query"][:40] or "（不搜）",
+                     _route["source"] or "不限", _route["why"][:50])
             _fresh_q = _is_fresh_data(user_input_ctx)
-            _must_net = bool(_rt_fact_q or _fresh_q)
-            if _pre_intent == "chat" and not _must_net:
+            _must_net = bool(_rt_fact_q or _fresh_q or _route["need_net"])
+            if _route["kind"] == "fact_user":
+                _q, _qhint = "", "问的是用户本人说过的事（走记忆，不联网）"
+            elif _pre_intent == "chat" and not _must_net:
                 LOG.info("闲聊轮不联网检索（省时间；需要联网时会自动走 query 意图）")
                 _q, _qhint = "", ""
             else:
@@ -10775,7 +10872,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("时效性事实：虽是 chat 意图，**这一路必须联网**（不然只能凭先验瞎猜）")
                 if _fresh_q and _pre_intent == "chat":
                     LOG.info("数据类问题：虽是 chat 意图，**这一路必须联网**（数字必须有来源）")
-                _q, _qhint = resolve_search_query(user_input_ctx)
+                _q, _qhint = (_route["search_query"] or ""), ""
+                if not _q:
+                    _q, _qhint = resolve_search_query(_search_src)
             if _q:
                 info = web_search(_q, num=5)
                 # **把内置检索也记进工具轨迹**（本轮实测的体验缺口）：
@@ -11599,6 +11698,22 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                          _dw, _u[:40])
         except Exception as e:      # noqa: silent-ok — 兜底失败就用它原来的回答
             LOG.debug("用户事实兜底失败（忽略）：%s", e)
+        # ---- 「我无法联网」这类**与事实相反的自我否认**：这一轮真检索了就得改正 ----
+        # 【用户实测】工具轨迹里明明有 5 条检索结果，它却答「我目前无法实时联网搜索今天的新闻」——
+        #   把自己刚做过的事说成做不到，比答错更伤信任。
+        try:
+            _did_search = bool(tool_trace) or bool(web_text)
+            if _did_search:
+                for _w in ("无法联网", "不能联网", "没有联网能力", "无法实时联网", "没有实时联网",
+                           "没有联网能力", "无法访问网络", "我不能上网"):
+                    if _w in answer:
+                        answer = answer.rstrip() + (
+                            "\n\n（更正：这一轮**我确实检索了**——工具轨迹里那几条就是刚抓回来的；"
+                            "上面说「%s」是不对的。）" % _w)
+                        LOG.info("自我否认更正：它说「%s」，但这一轮真检索了 → 已在其后更正", _w)
+                        break
+        except Exception as e:      # noqa: silent-ok — 加不上也不影响回答
+            LOG.debug("自我否认更正失败（忽略）：%s", e)
         # ---- 时间对不上就说一句（用户截图：它把 9 月 10 日的新闻说成"今天"）----
         try:
             _dnote = _today_date_note(answer)
