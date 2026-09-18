@@ -1878,6 +1878,11 @@ _NEWS_QUERY = "今日要闻"
 _NEWS_HOSTS = ("news.", "xinhuanet", "people.com", "cctv", "chinanews", "thepaper", "jiemian",
                "caixin", "huanqiu", "chinadaily", "sina.com", "qq.com", "163.com", "ifeng",
                "yicai", "guancha", "reuters", "bbc.", "apnews", "toutiao", "cls.cn", "stcn")
+# 真正的新闻媒体（有编辑部/记者）—— 新闻类问题**只认这些**；热榜/门户（toutiao/sina/qq…）
+# 不算：它们的正文里就是"大家在搜什么"，实测会把热搜里的歌名当成新闻条目抄进回答。
+_REAL_NEWS_HOSTS = ("news.", "xinhuanet", "people.com", "cctv", "chinanews", "thepaper", "jiemian",
+                    "caixin", "huanqiu", "chinadaily", "yicai", "guancha", "reuters", "bbc.",
+                    "apnews", "cls.cn", "stcn")
 _JUNK_HOSTS = ("jintianjihao", "huangli", "wannianli", "lhlib", "历史上的今天", "todayonhistory",
                "lishishangde", "rili", "calendar", "tianqi", "xingzuo", "shenhuo", "wannianrili")
 
@@ -1956,6 +1961,18 @@ def web_search(query, num=6):
         hits, _junk = _news_filter(hits, max(num, 8))
         if _junk:
             LOG.info("源头把关：剔掉 %d 条黄历/日历/历史上的今天类结果（它们不产事实）", _junk)
+        # 新闻类：**只留真正的新闻媒体**（热榜/门户整条路都不走）——
+        #   实测热榜页正文里就是「李圣杰《最近》」这种热搜词，它照抄成"文化娱乐新闻"。
+        #   没有正规新闻源就返回空 → 让它如实说"今天没查到"，别拿热搜词充新闻。
+        if _news:
+            _real = [h for h in hits
+                     if any(n in _host_of(h[1] if len(h) > 1 else "") for n in _REAL_NEWS_HOSTS)]
+            if _real:
+                hits = _real
+                LOG.info("新闻类：只留正规新闻媒体 %d 条（热榜/门户不作数）", len(hits))
+            else:
+                LOG.info("新闻类：这一批没有正规新闻媒体 → 一条不留（宁可说没查到）")
+                hits = []
         top = hits[:num]
         _sc, _cov = _search_relevance(query, top[0][0], top[0][2])
         if _cov >= 0.6:                              # 主题词覆盖够高 → 这批结果是对的，不再多问引擎
