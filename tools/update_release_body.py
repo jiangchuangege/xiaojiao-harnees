@@ -82,14 +82,29 @@ def main():
     print("用凭据：%s" % where)
 
     def api(url, data=None, method="GET"):
-        req = urllib.request.Request(
-            url, data=(json.dumps(data).encode("utf-8") if data is not None else None),
-            method=method,
-            headers={"Authorization": "Bearer %s" % tk, "User-Agent": "xiaojiao-release",
-                     "Accept": "application/vnd.github+json",
-                     "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read().decode("utf-8"))
+        # 【为什么要自己跟跳转】实测踩到：PATCH 时 GitHub 会回 307（Temporary Redirect），
+        #   而 urllib 默认**不**对 PATCH 跟跳转 → 直接抛 HTTPError、正文没更新还以为成功了。
+        #   所以这里手动跟最多 3 跳，并且**保持同样的 method 和 body**。
+        for _hop in range(4):
+            req = urllib.request.Request(
+                url, data=(json.dumps(data).encode("utf-8") if data is not None else None),
+                method=method,
+                headers={"Authorization": "Bearer %s" % tk, "User-Agent": "xiaojiao-release",
+                         "Accept": "application/vnd.github+json",
+                         "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return json.loads(r.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                if e.code in (301, 302, 307, 308):
+                    loc = e.headers.get("Location") or ""
+                    if loc:
+                        if loc.startswith("/"):
+                            loc = "https://api.github.com" + loc
+                        print("（跟一跳：%s）" % loc[:90])
+                        url = loc
+                        continue
+                raise
 
     rel = api("https://api.github.com/repos/%s/releases/tags/%s" % (REPO, TAG))
     print("现有 Release：%s（id=%s，发布 %s）" % (rel.get("name"), rel.get("id"), rel.get("published_at")))
