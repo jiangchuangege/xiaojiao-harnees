@@ -11805,6 +11805,12 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 if _drop:
                     answer = "\n".join(_kept)
                     LOG.info("对不上来源的条目已删（%d 条）：%s", len(_drop), " ／ ".join(_drop[:3]))
+                    # 全被删光（= 抓回来的资料里根本没有条目）→ 别留一个空壳，如实说没查到
+                    _left = "".join(ch for ch in answer if ch.strip() and ch not in "#-·*• \n")
+                    if len(_left) < 12:
+                        answer = ("（这一轮联网抓回来的只是新闻站的**首页**，没有具体条目 —— "
+                                  "所以我不列了：**没有查到可核实的今日新闻**。"
+                                  "可以换个更具体的问法，比如"科技新闻"「财经新闻」。）")
         except Exception as e:      # noqa: silent-ok — 删不掉就原样给，绝不影响回答
             LOG.debug("条目核对失败（忽略）：%s", e)
         # ---- 内心话不许漏进聊天页面：回答开头那段括号内心独白剥掉（用户截图实测） ----
