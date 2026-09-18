@@ -74,9 +74,15 @@ def group_a():
         PF._PATH = os.path.join(_TMP, "pref.jsonl")
         PF.clear()
         PF.observe("看到猫就想多看一眼")
-        PF.form("我好像老是注意猫")
+        # 【2026-09-19 修这条夹具】原来这里只传一句话、**没给素材**（`from_heart` 空），
+        #   而真实调用点（`xiaojiao_app.py` 记偏好那处）**永远带着素材**：
+        #   `pf.form(said, from_heart=代表句)` —— 回看得有回看的对象。
+        #   新闸门 `looks_like_preference()` 正是按真实形状定的（没有素材不算回看），
+        #   所以这条夹具补上素材，跟线上一致；下面同时钉住"没素材不许写"。
+        PF.form("我好像老是注意猫", from_heart="看到猫就有点好奇")
         a2 = IN.attention()
         ck("**偏好也给了一股偏向**", any(x["from"] == "偏好" for x in a2["bias"]), a2["bias"])
+        ck("没有素材的那一句不许当偏好写（回看得有对象）", not PF.form("我老是注意猫").get("ok"))
     except Exception as e:      # noqa: silent-ok
         ck("偏好那一股", False, str(e)[:40])
     ck("模块里没有一处替它决定关注什么（不产出结论句）",

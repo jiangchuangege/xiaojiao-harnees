@@ -168,6 +168,32 @@ def candidates(min_n=None):
             for c in _shapes() if c["n"] >= need]
 
 
+def _literal_echo(a, b, line=0.70):
+    """**只看字面**的"抄了一遍"判据：一条把另一条包含进去，或字面相似度 ≥ `line`。
+
+    ⚠️ **这里绝对不能用向量余弦（`_sim`）** —— 这是我第一版写错、当天就翻车记下来的：
+      回看结论**天然跟素材同话题**（「我好像老是注意猫」对素材「看到猫就有点好奇」，
+      向量余弦很容易 ≥ `SIMILAR` 0.75）。拿向量判"像不像素材"，等于**专挑真偏好下手**。
+      实测证据：`tools/test_inner.py` 那条夹具按真实形状补上素材后，偏好仍然写不进去 ——
+      查下来就是这条把真偏好挡了（"偏好也给了一股偏向" 直接红）。
+      所以改判**字面**：包含关系，或 `difflib` 比例。抄的那两条实测都稳稳命中
+      （「数字在眼前转，像被甩进一个没有边界的漩涡」+ 一个分句 → 比例 0.78）。
+    """
+    x, y = str(a or "").strip(), str(b or "").strip()
+    if not x or not y:
+        return ""
+    if x in y or y in x:
+        return "跟素材是包含关系（原句抄进去了）"
+    try:
+        import difflib
+        r = difflib.SequenceMatcher(None, x, y).ratio()
+    except Exception:      # noqa: silent-ok — 比不出来就不拿这条卡它
+        return ""
+    if r >= line:
+        return "跟素材字面太像（%.2f ≥ %.2f）" % (r, line)
+    return ""
+
+
 def looks_like_preference(pref_text, from_heart=""):
     """这句像不像**回看出来的偏好**？不像就返回理由（不写）；像就返回空串。**全是确定性判据，不调模型。**
 
@@ -193,11 +219,9 @@ def looks_like_preference(pref_text, from_heart=""):
     fh = str(from_heart or "").strip()
     if not fh:
         return "没有素材（`from_heart` 为空）—— 回看得有回看的对象"
-    try:
-        if _sim(t, fh) >= SIMILAR:
-            return "跟素材太像（≥%.2f）—— 那是把素材原句抄了一遍，不是回看出来的" % SIMILAR
-    except Exception:      # noqa: silent-ok — 比不出来就不拿这条卡它（宁可放行也不误杀）
-        pass
+    echo = _literal_echo(t, fh)
+    if echo:
+        return "%s —— 那是把素材抄了一遍，不是回看出来的" % echo
     return ""
 
 
