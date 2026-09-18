@@ -9675,7 +9675,7 @@ def _direct_fact_answer(q):
     if not got:
         return None
     u, why = got
-    return {"answer": "（照你自己说过的话答你）**你说过：%s**" % u, "why": why}
+    return {"answer": "**你说过：%s**" % u, "why": why}
 
 
 def _fact_back_for_messages(q):
@@ -11357,9 +11357,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             if _fq and _dw:
                 _u = _fq.split("原话=「", 1)[-1].split("」", 1)[0] or _fq
                 _u = _u.split("按关键词扫库命中=「", 1)[-1].split("」", 1)[0] or _u
-                answer = ("（照你自己说过的话答你）**你说过：%s**\n\n"
-                          "（上面这句是你自己说过的原话；我本来想用自己的话讲，但这轮我又说了"
-                          "「没有记录」，那是不对的 —— 所以直接把你说过的原话还给你。）" % _u[:60])
+                answer = ("**你说过：%s**\n\n（这句是你自己说过的原话。）" % _u[:60])
                 LOG.info("用户事实兜底：这一轮它又说「%s」→ 已改用用户原话直接回答 ｜ %s",
                          _dw, _u[:40])
         except Exception as e:      # noqa: silent-ok — 兜底失败就用它原来的回答
