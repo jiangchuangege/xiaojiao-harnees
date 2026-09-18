@@ -1853,6 +1853,56 @@ def _search_engines(query, limit=8):
     return out
 
 
+def _is_news_query(q):
+    """问的是不是"新闻/时事"这类**只有新闻源才答得准**的问题。"""
+    s = str(q or "")
+    return any(w in s for w in ("新闻", "头条", "要闻", "时事", "资讯", "动态", "最新消息",
+                                "发生了什么", "有什么大事"))
+
+
+# 【新闻类查询：换检索词 + 源头把关（2026-09-18，用户截图逼出来的）】
+# 【症状】问「今天有什么重大新闻呢」→ 检索词保持**整句**（`今天有什么重大新闻呢`）→
+#   搜索引擎把它理解成"今天"→ 返回 **查日历的站（jintianjihao.com）与"历史上的今天"** ——
+#   一个新闻源都没有。模型只能照这些页面的原文编，于是把 9 月 10 日的旧闻说成"今天"。
+# 【改法两条，都是确定性的】
+#   ① 新闻类问题**换检索词**：「今日要闻」（有具体话题就带上话题词），别拿整句去搜；
+#   ② 结果**过源头**：日历/黄历/万年历/历史上的今天这类站**直接剔掉**；新闻源排前面。
+_NEWS_QUERY = "今日要闻"
+_NEWS_HOSTS = ("news.", "xinhuanet", "people.com", "cctv", "chinanews", "thepaper", "jiemian",
+               "caixin", "huanqiu", "chinadaily", "sina.com", "qq.com", "163.com", "ifeng",
+               "yicai", "guancha", "reuters", "bbc.", "apnews", "toutiao", "cls.cn", "stcn")
+_JUNK_HOSTS = ("jintianjihao", "huangli", "wannianli", "lhlib", "历史上的今天", "todayonhistory",
+               "lishishangde", "rili", "calendar", "tianqi", "xingzuo", "shenhuo", "wannianrili")
+
+
+def _host_of(url):
+    try:
+        from urllib.parse import urlparse
+        return (urlparse(str(url or "")).netloc or "").lower()
+    except Exception:      # noqa: silent-ok — 解析不了就当没有域名
+        return ""
+
+
+def _news_filter(hits, limit):
+    """新闻类查询的源头把关：剔掉日历/黄历类站，新闻源排前面。返回 (结果, 剔掉几条)。"""
+    kept, junk = [], 0
+    for h in hits or []:
+        host = _host_of(h[1] if len(h) > 1 else "")
+        title = str(h[0] if h else "")
+        # 域名之外**再看标题**：实测有条结果是「今日黄历查询_老黄历查询_万年历…」而 URL 是空的，
+        # 只看域名会漏掉它 —— 标题里出现这些词的，同样不产新闻。
+        if any(j in host for j in _JUNK_HOSTS) or any(
+                j in title for j in ("黄历", "万年历", "历史上的今天", "农历", "宜忌", "星座", "天气")):
+            junk += 1
+            continue
+        kept.append(h)
+    def _tier(h):
+        host = _host_of(h[1] if len(h) > 1 else "")
+        return 0 if any(n in host for n in _NEWS_HOSTS) else 1
+    kept.sort(key=lambda h: _tier(h))
+    return kept[:limit], junk
+
+
 def web_search(query, num=6):
     """免密钥 Bing/Sogou/DuckDuckGo 中文搜索，返回 [(标题, 链接, 内容)]。
 
@@ -1866,12 +1916,26 @@ def web_search(query, num=6):
     if _is_meaningless_query(query):
         LOG.warning("检索词无效，已跳过搜索：%r", str(query)[:60])
         return []
+    # ---- 新闻类问题：换检索词（别拿整句去搜，否则搜回来的是查日历的站）----
+    _news = _is_news_query(query)
+    if _news:
+        # 把问题里的**话题词**拆出来（去掉"今天/有什么/新闻/呢"这类虚词）
+        _topic = re.sub(r"(今天|今日|昨天|最近|有什么|有啥|重大|最新|的|呢|啊|吗|？|\?)", " ",
+                        str(query or "")).strip()
+        _nq = (_NEWS_QUERY + (" " + _topic if _topic else "")).strip()
+        LOG.info("新闻类查询：检索词由 %r 换成 %r（整句去搜会搜回日历/历史的今天那类站）",
+                 str(query)[:30], _nq[:40])
+        query = _nq
     fallback = []
     for v in _query_variants(query):
         hits = _search_engines(v, limit=max(num, 8))
         if not hits:
             continue
         hits.sort(key=lambda x: _search_relevance(query, x[0], x[2])[0], reverse=True)
+        if _news:
+            hits, _junk = _news_filter(hits, max(num, 8))
+            if _junk:
+                LOG.info("新闻类查询：剔掉 %d 条日历/黄历/历史上的今天类结果（它们不产新闻）", _junk)
         top = hits[:num]
         _sc, _cov = _search_relevance(query, top[0][0], top[0][2])
         if _cov >= 0.6:                              # 主题词覆盖够高 → 这批结果是对的，不再多问引擎
