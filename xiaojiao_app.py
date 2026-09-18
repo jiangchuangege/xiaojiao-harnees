@@ -6868,6 +6868,26 @@ def _strip_leading_inner(text):
     return t, " ｜ ".join(out_inner)
 
 
+def _strip_dup_lines(text):
+    """**逐条去重**：紧挨着的两行几乎一样（字面重合 ≥ 0.9）就留一条。
+
+    【用户实测（截图）】让它分享几首歌，它把**每一条都写了两遍**：
+    「·《孤勇者》（陈奕迅）—— …」紧接着又是同一条 —— 这是复读的一种**新形状**：
+    出口那道解毒网（`_degeneration_net`）抓的是"同一行刷很多遍"，逐条只重复一次它抓不到。
+    这里补一条**保守**的：只看**相邻两行**、只在高重合时才丢，中间行不参与比较。
+    """
+    lines = str(text or "").split("\n")
+    out, prev = [], ""
+    for ln in lines:
+        s = ln.strip()
+        if s and prev and len(s) > 6 and _said_it(prev, s, line=0.9):
+            continue                       # 和上一行几乎一样 → 丢
+        out.append(ln)
+        if s:
+            prev = s
+    return "\n".join(out)
+
+
 def _degeneration_net(text, where=""):
     """**最后一道网**：任何要交给用户的文本，出门前都过一遍复读解毒。
 
@@ -9008,14 +9028,22 @@ def _is_fresh_data(q):
              "这个月", "季度", "上半年", "下半年", "前半年", "近期", _RT_YEAR.pattern)
     _data = ("收入", "财政", "税收", "预算", "赤字", "债务", "gdp", "GDP", "cpi", "CPI",
              "数据", "统计", "指标", "增速", "增长率", "人口", "房价", "价格", "销量", "营收",
-             "利润", "市值", "股价", "汇率", "利率", "存款", "贷款", "外汇", "进出口", "贸易额")
+             "利润", "市值", "股价", "汇率", "利率", "存款", "贷款", "外汇", "进出口", "贸易额",
+             # 【2026-09-18 扩一类：**"最近出来的内容"**】用户实测问「给我分享最近出来的流行歌曲」——
+             #   它不是数据类、也不是新闻类，于是被判成闲聊 → **一个源都没查**，直接拿先验报了几首
+             #   2021、2014 年的老歌（用户要的是"最近出来的"）。歌/剧/游戏/新品这类同样是"只有查了才知道"。
+             "歌曲", "歌", "音乐", "专辑", "单曲", "新歌", "电影", "电视剧", "剧", "综艺",
+             "动漫", "游戏", "手机", "新品", "产品", "版本", "发布会", "赛事", "比赛", "展览")
     has_time = any(w in s for w in _time if w != _RT_YEAR.pattern) or bool(_RT_YEAR.search(s))
     return bool(has_time and any(w in s for w in _data))
 
 
 _TOPIC_DROP = ("今天", "今日", "昨天", "最近", "最新", "近期", "目前", "现在", "当前", "有什么",
                "有啥", "重大", "重要的", "的", "呢", "啊", "吗", "？", "?", "！", "!", "，", "。",
-               "帮我", "查一下", "看看", "告诉我", "我是说", "我说的是", "我指的是", "是什么")
+               "帮我", "查一下", "看看", "告诉我", "我是说", "我说的是", "我指的是", "是什么",
+               # 2026-09-18：分享类/口语尾巴也要去掉，否则检索词里会带上「给我分享…好听点」
+               "给我", "分享", "推荐", "出来", "出来的", "好听点", "好听", "几首", "一些", "点",
+               "首", "个", "吧", "呗", "啦")
 
 
 def _topic_words(s):
@@ -9072,9 +9100,19 @@ def _route_of(text):
     # ⑤ 数据类（时间词 + 数据词）→ 「<话题> 最新数据」，数字必须有来源
     if _is_fresh_data(s):
         _tp = _topic_words(s)
-        return {"kind": "fresh_data", "search_query": ("%s 最新数据" % _tp).strip() if _tp else s,
+        # 数据类 → 「<话题> 最新数据」；内容类（歌/剧/游戏/新品…）→ 「最新 <话题>」
+        _is_data = any(w in s for w in ("收入", "财政", "税收", "预算", "赤字", "债务", "GDP",
+                                        "gdp", "CPI", "cpi", "数据", "统计", "指标", "增速",
+                                        "人口", "房价", "汇率", "利率", "销量", "营收"))
+        return {"kind": "fresh_data",
+                "search_query": (("%s 最新数据" % _tp) if _is_data else ("最新 %s" % _tp)).strip()
+                                 if _tp else s,
                 "need_net": True, "source": "",
-                "why": "数据类问题：数字必须有来源，不许凭先验编"}
+                # ⚠️ 只有**数据类**才要求"每条都得对得上来源"；
+                #    **推荐类**（歌/剧/游戏/新品）是"让人挑一挑"，条目本身不是"今天的事实" ——
+                #    实测拿来源卡推荐会把整张歌单删空（用户看到的就是四个空标题）。
+                "strict_source": bool(_is_data),
+                "why": "要的是**最近的**东西（数据/歌/剧/新品…）：只有查了才知道，不许拿先验充数"}
     # ⑥ 其它：按意图走（query/scrape 等要联网，chat 不联网）
     try:
         _it = _detect_intent(s)
@@ -10921,6 +10959,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   抓回**李圣杰的《最近》**并当资料用。所以把"这一轮该搜什么"记下来，
             #   工具路径也认它（见工具执行里那条 route 覆盖）。
             _CTX["route_kind"], _CTX["route_query"] = _route["kind"], _route["search_query"]
+            _CTX["strict_source"] = bool(_route.get("strict_source")) or _route["kind"] == "news"
             LOG.info("路由：kind=%s ｜ 检索词=%r ｜ 来源=%s ｜ %s",
                      _route["kind"], _route["search_query"][:40] or "（不搜）",
                      _route["source"] or "不限", _route["why"][:50])
@@ -11789,12 +11828,20 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 LOG.info("时间更正：回答里把别的日期说成「今天」→ 已在其后如实补一句")
         except Exception as e:      # noqa: silent-ok — 加不上也不影响回答
             LOG.debug("时间更正失败（忽略）：%s", e)
+        # ---- 逐条去重：相邻两行几乎一样就留一条（用户截图：每条都写了两遍） ----
+        try:
+            _dedup = _strip_dup_lines(answer)
+            if _dedup != answer:
+                answer = _dedup
+                LOG.info("逐条去重：相邻重复行已去掉")
+        except Exception as e:      # noqa: silent-ok — 去不掉就原样给
+            LOG.debug("逐条去重失败（忽略）：%s", e)
         # ---- 新闻/数据类：**回答里对不上来源的条目删掉**（用户实测：它把热搜里的歌名当新闻编进去）----
         # 【为什么必须删条目而不是加一句"可能有误"】"今天有什么新闻"这种回答，**条目本身就是内容** ——
         #   编出来的条目会被当成真事读走。判据是确定性的：拿这一行去跟**这一轮真正抓回来的资料**
         #   比字面重合（2-gram），对不上的就是"资料里没有的东西"。
         try:
-            if _CTX.get("route_kind") in ("news", "fresh_data") and web_text:
+            if _CTX.get("strict_source") and web_text:
                 _kept, _drop = [], []
                 for _ln in str(answer or "").split("\n"):
                     _s = _ln.strip()
