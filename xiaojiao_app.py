@@ -10843,17 +10843,43 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         except Exception as e:
             LOG.debug("忽略异常(%s:%d): %s", __file__, 1520, e)
 
-    # 1b3. 问"现在几点/今天几号" → 直接用真实时间回答，不交给模型
-    #      真实缺陷：这一步原来靠模型自己答，实测它会**编日期**（答"2025 年 1 月 13 日"），
-    #      或者干脆说"我无法获取实时时间"。时间是最不该猜的东西，规则直答最稳。
+    # 1b3. 问"现在几点/今天几号" → **真实时间算好，但要它自己说**（用户要求：别给模板）
+    #      历史：这一步原来靠模型自己答，实测它会**编日期**（答"2025 年 1 月 13 日"）、
+    #      或者说"我无法获取实时时间" —— 所以改成规则直答。**但规则直答的毛病也很明显：
+    #      每条回答都长一个样（模板）**。用户点了出来：「调用时间可以，但不要是模板，让它给我说」。
+    #      现在的做法（与"用户事实"同一招）：**时间照旧由载体算准**，然后
+    #      ① 让它用自己的话把这几个数字说出来；
+    #      ② **核对它说的是不是这几个数字** —— 说错/没说/还在说"无法获取"，就退回模板。
+    #      这样既有它自己的语气，又不会编时间。
     if answer is None and re.search(r"(现在|当前|今天|此刻).{0,4}(几点|时间|日期|几号|星期|礼拜)|"
                                     r"(几点|几号|星期几|what time|current time)", user_input or "", re.I):
         _now = datetime.now()
         _wd = "一二三四五六日"[_now.weekday()]
-        answer = ("🕐 现在是 **%s**（%s，星期%s）\n\n- 北京时间（本机时区）：%s"
-                  % (_now.strftime("%Y-%m-%d %H:%M:%S"), _now.strftime("%A"),
-                     _wd, _now.strftime("%Y-%m-%d %H:%M:%S")))
-        tool_trace.append({"tool": "now", "args": {}, "result": "系统时钟直答"})
+        _facts = ("%s（%s，星期%s）" % (_now.strftime("%Y-%m-%d %H:%M:%S"), _now.strftime("%A"), _wd))
+        _tmpl = ("🕐 现在是 **%s**（%s，星期%s）\n\n- 北京时间（本机时区）：%s"
+                 % (_now.strftime("%Y-%m-%d %H:%M:%S"), _now.strftime("%A"), _wd,
+                    _now.strftime("%Y-%m-%d %H:%M:%S")))
+        answer = ""
+        try:
+            _said = llm_chat([
+                {"role": "system",
+                 "content": ("你刚看了系统时钟，**这是准确的事实**：%s。\n"
+                             "用你自己的一句话回答用户（自然的语气就行），**必须带上日期和时间**，"
+                             "不许说「无法获取时间」，也不要加表格和多余解释。" % _facts)},
+                {"role": "user", "content": str(user_input or "")}])
+            _said = str(_said or "").strip()
+            # 核对：它得把「年-月-日」和「时:分」都说出来，否则算没说对
+            if (_said and _now.strftime("%Y-%m-%d") in _said
+                    and _now.strftime("%H:%M") in _said):
+                answer = _said
+                LOG.info("时间问题：由它自己说出（并对上了系统时钟）｜%s", _said[:50])
+            elif _said:
+                LOG.warning("时间问题：它说的对不上系统时钟（%s）→ 退回直答模板", _said[:50])
+        except Exception as e:      # noqa: silent-ok — 说不了就退回模板
+            LOG.debug("时间问题让它自己说失败（退回模板）：%s", e)
+        if not answer:
+            answer = _tmpl
+        tool_trace.append({"tool": "now", "args": {}, "result": "系统时钟（%s）" % _facts})
 
     # 1b4. 问"我的公网 IP / 本机 IP / 你给我显示 IP" → 直接调 net_ip 摆出**真实结果**
     #      真实缺陷（用户实测）：这一步原来交给模型 → 它嘴上说"我通过 net_ip 查了"，
