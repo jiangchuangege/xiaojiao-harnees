@@ -1914,6 +1914,11 @@ def _news_filter(hits, limit):
         #     那是热搜词，不是新闻；排在新媒体后面，并且在注入文本里如实说明）
         return 1
     kept.sort(key=lambda h: _tier(h))
+    # ★ **有正规新闻源时，热榜/聚合一类一条都不用**（用户实测：热榜里把「李圣杰《最近》」这种
+    #   热搜词当条目列出来，它于是当成"文化娱乐新闻"写进回答）。宁可少几条，也不拿热搜词充新闻。
+    _tier0 = [h for h in kept if _tier(h) == 0]
+    if _tier0:
+        kept = _tier0
     return kept[:limit], junk
 
 
