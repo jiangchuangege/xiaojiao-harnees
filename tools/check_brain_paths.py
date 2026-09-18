@@ -29,6 +29,31 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 从配置里捞"像路径的字符串"：cmd 里的 --model X / 独立一行的 X
 _PATH_RE = re.compile(r"([A-Za-z]:[\\/][^\s\"']+|/[^\s\"']+)")
+# yaml 会把整条 cmd 用引号包起来（内层双引号留给 llama-swap 的 ${PORT} 占位符替换）——先脱掉最外面那层
+_CMD_WRAP_RE = re.compile(r"""^\s*cmd:\s*(['"])(.*)\1\s*$""")
+# 成对双引号里的整条（路径里带空格时，只有看引号才捞得对）
+_DQ_RE = re.compile(r'"([^"\n]*)"')
+
+
+def _unwrap_cmd(line):
+    """`cmd: '...'` → `...`（没被包起来就原样返回）。"""
+    m = _CMD_WRAP_RE.match(line)
+    return m.group(2) if m else line
+
+
+def _paths_in(text):
+    """捞路径。**先看引号、再看裸文本** —— 这条顺序是踩过坑才定下来的：
+
+    实测 `--model "C:/xiaojiao/xiaojiao harness/Qwopus....gguf"` 这条路径**本身是对的**，
+    但按空白切词的老写法把后面的 `harness/Qwopus....gguf` 当成了一个新路径，体检于是误报
+    「有 1 处路径不存在」——配置没错、是工具错了（假红比不报更误导人）。
+    """
+    out = []
+    for q in _DQ_RE.findall(text):
+        if re.match(r"^[A-Za-z]:[\\/]", q) or q.startswith("/"):
+            out.append(q)
+    out.extend(_PATH_RE.findall(_DQ_RE.sub(" ", text)))
+    return out
 
 
 def _swap_cfg_path():
@@ -62,7 +87,7 @@ def _routes(text):
             continue
         if cur and line.strip() and not line.strip().startswith("#"):
             out[-1]["lines"].append(line.strip())
-            for p in _PATH_RE.findall(line):
+            for p in _paths_in(_unwrap_cmd(line)):
                 out[-1]["paths"].append(p)
     return out
 
@@ -93,7 +118,7 @@ def main() -> int:
 
     # 1. llama-server 可执行文件
     exes = set()
-    for p in _PATH_RE.findall(text):
+    for p in _paths_in(text):
         if p.lower().endswith(".exe"):
             exes.add(p)
     bad = 0

@@ -10036,6 +10036,40 @@ _MY_FACT_WORDS = ("住", "家", "名字", "叫", "生日", "岁", "喜欢", "爱
                   "伴侣", "城市", "地方", "手机", "电脑", "车")
 
 
+def _user_words_of(txt, kws):
+    """从一条记忆里取出「能当作你原话引用的那一句」；取不到返回 ""。
+
+    【为什么要认两种形状（2026-09-19 实测）】
+      · **对话形状**：`…用户：我叫张三…` —— 一直是唯一认的形状；
+      · **记忆库形状**：整行就是用户那句话（`memory_vec.add_memory("我叫张三，是一名后端工程师", kind="fact")`）
+        —— **没有 `用户：` 标记**。老写法只认前者，于是这种库**一句原话都取不到** →
+        `_find_user_fact` 返回 None → 后面「它否认就带原话重问 / 再不行载体兜底」**整条路都不生效**。
+        实测后果：`tools/test_memory_recall.py` 的使用率只有 2~3/5（全看模型爱不爱用），
+        而同一套机制在真实记忆库上是 5/5 —— 差的不是模型，是**取原话这一环只认一种形状**。
+
+    【没有标记的行凭什么敢当「你说过」】记忆库（`memory_vec`）本身那一档就是**用户亲口说的**
+      （载体自己的 RAG 标注写的就是这句）。仍然加两道闸：**必须是第一人称**（防把载体写的
+      第三人称摘要「用户喜欢咖啡」当原话引出去）、**必须含问到的那个词**（防答偏）。
+    """
+    s = str(txt or "")
+    if "用户：" in s:
+        u = ""
+        for seg in s.split("用户：")[1:]:
+            u = seg.split("\n")[0].strip()
+            break
+    else:
+        u = s.split("\n")[0].strip()
+        if "我" not in u:
+            return ""
+    if not u or len(u) > 30:
+        return ""
+    if _looks_like_question(u):            # 那半句是提问 → 那不是事实
+        return ""
+    if kws and not any(w in u for w in kws):   # 问的词不在原话里 → 不抢答（防答偏）
+        return ""
+    return u
+
+
 def _find_user_fact(q):
     """找"用户本人说过的那句话"（住哪/生日/喜欢什么/在学什么/养的宠物…）。返回 `(原话, 说明)` 或 None。
 
@@ -10060,15 +10094,8 @@ def _find_user_fact(q):
         hits = []
     for h in hits:
         txt = str((h or {}).get("text") or "")
-        u = ""
-        for seg in txt.split("用户：")[1:]:
-            u = seg.split("\n")[0].strip()
-            break
-        if not u or len(u) > 30:
-            continue
-        if _looks_like_question(u):        # 用户那半句是提问 → 那不是事实
-            continue
-        if not any(w in u for w in _kw):   # 问的词不在原话里 → 不抢答（防答偏）
+        u = _user_words_of(txt, _kw)
+        if not u:
             continue
         return u, "问=「%s」｜原话=「%s」｜相似度 %.3f" % (s, u, float(h.get("score") or 0))
     # ---- 向量没命中时的兜底：**按关键词扫库**（确定性，不调模型）----
@@ -10087,14 +10114,8 @@ def _find_user_fact(q):
                     r = _json.loads(ln)
                 except Exception:      # noqa: silent-ok — 坏行跳过
                     continue
-                txt = str(r.get("text") or "")
-                u = ""
-                for seg in txt.split("用户：")[1:]:
-                    u = seg.split("\n")[0].strip()
-                    break
-                if not u or len(u) > 30 or _looks_like_question(u):
-                    continue
-                if not any(w in u for w in _kw):
+                u = _user_words_of(str(r.get("text") or ""), _kw)
+                if not u:
                     continue
                 return u, "问=「%s」｜按关键词扫库命中=「%s」（向量没到阈值，关键词兜底）" % (s, u)
     except Exception as e:      # noqa: silent-ok — 兜底失败就交给模型
@@ -10301,7 +10322,11 @@ _DENY_WORDS = ("没有关于", "没有你", "没有找到", "没有记录", "没
                "你没告诉我", "还没跟我说过", "没有印象", "没说过", "不知道你",
                # 2026-09-18 补：实测它还会用这种说法否认 —— 「我暂时还不太确定你在学什么」。
                # 只在"这一轮确实找到了用户原话"时才用这张表，所以放宽一点是安全的。
-               "不太确定", "不确定", "没把握", "想不起来")
+               "不太确定", "不确定", "没把握", "想不起来",
+               # 2026-09-19 补：`test_memory_recall` 里它连着三轮否认，原话是
+               # 「我查了一下我的记忆库，好像确实**没有存过**你的名字」—— 上面那张表一条都没命中，
+               # 于是"否认兜底"根本没触发（判据漏了说法，不是机制失灵）。**存/存在**这一族补齐。
+               "没有存过", "没存过", "没有存", "没存", "没有留下", "没留下")
 
 
 def _denies_record(answer):

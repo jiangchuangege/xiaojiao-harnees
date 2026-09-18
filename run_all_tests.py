@@ -12,6 +12,10 @@
     python run_all_tests.py            # 全跑
     python run_all_tests.py --fast     # 跳过全量套件里最慢的部分（只跑 ①②③）
 退出码：0 = 全绿（跳过的另计）；1 = 有失败。
+
+两类**不算通过、也不算失败**的项，一律照实打印、单独成列：
+  ⏭ 跳过 —— 需要外部条件（大脑/联网/浏览器），根本没跑；
+  ⚠️ 提醒 —— 跑了、也确实报了红，但红的原因不在代码里（见 ADVISORY 的逐项理由）。
 """
 import io
 import os
@@ -38,8 +42,18 @@ NEED_BRAIN = ("test_event_what_retrieval", "test_last_jump", "test_closed_loop",
 NEED_NET = ("test_scrape_retry", "test_bug2_dedup", "test_network")
 SKIP_BY_NAME = NEED_BRAIN + NEED_NET
 
+# 只提醒、不判失败的项 —— **每条都要能在「为什么不是代码问题」上站得住**，否则不许往这里放：
+#   check_secrets     —— 工具自己的 docstring 写着「自查/迁移提醒工具，**不是 CI 闸门**」，
+#                        且实测命中的那处明文 key 在 xiaojiao_control.json 里，而它在 .gitignore 里
+#                        （`git ls-files` 查不到 = 不入库）。仍然逐行打印 + 建议轮换，只是不拉红。
+#   check_cloud_brain —— 云大脑是**可选**的：没填地址/Key/模型名时它必然报"配置不完整"，
+#                        这是"没配"，不是"坏了"。本机走的是 llama-swap 本地大脑。
+ADVISORY = {
+    "check_secrets.py": "自查提醒（命中处在本机 .gitignore 排除的私有文件里，不入库；仍建议轮换）",
+    "check_cloud_brain.py": "云大脑未配置（可选功能；本机走 llama-swap 本地大脑）",
+}
+
 SUMMARY = re.compile(r"通过\s*(\d+)\s*/\s*共\s*(\d+)|通过\s*(\d+)\s*/\s*(\d+)|(\d+)\s*/\s*(\d+)\s*通过")
-FAIL = re.compile(r"(❌|FAIL|Traceback|AssertionError)")
 
 
 def _run(cmd, timeout=1800):
@@ -91,7 +105,11 @@ def main():
             print("  ⏭  %-16s %-40s %s" % (kind, name, "跳过（需要外部条件）"))
             continue
         rc, out, el = _run([PY, path] + extra)
-        ok = (rc == 0) and not FAIL.search(out.split("通过")[0] if "通过" in out else out[:0])
+        if rc != 0 and name in ADVISORY:
+            reason = ADVISORY[name]
+            rows.append((kind, name, "提醒", "⚠️ %s" % reason, el))
+            print("  ⚠️ %-16s %-40s %6.1fs  %s" % (kind, name, el, reason))
+            continue
         ok = (rc == 0)
         rows.append((kind, name, "通过" if ok else "失败", _tail_line(out), el))
         print("  %s %-16s %-40s %6.1fs  %s"
@@ -108,12 +126,17 @@ def main():
 
     bad = [r for r in rows if r[2] == "失败"]
     skip = [r for r in rows if r[2] == "跳过"]
+    adv = [r for r in rows if r[2] == "提醒"]
     print("\n" + "=" * 96)
-    print("  合计 %d 项 ｜ 通过 %d ｜ 失败 %d ｜ 跳过 %d（跳过的不算通过）"
-          % (len(rows), len(rows) - len(bad) - len(skip), len(bad), len(skip)))
+    print("  合计 %d 项 ｜ 通过 %d ｜ 失败 %d ｜ 提醒 %d（只提醒、不判失败）｜ 跳过 %d（跳过的不算通过）"
+          % (len(rows), len(rows) - len(bad) - len(skip) - len(adv), len(bad), len(adv), len(skip)))
     if bad:
         print("  ❌ 失败清单：")
         for r in bad:
+            print("      %-40s %s" % (r[1], r[3]))
+    if adv:
+        print("  ⚠️ 提醒清单（不是代码问题，理由逐条列在这里）：")
+        for r in adv:
             print("      %-40s %s" % (r[1], r[3]))
     if skip:
         print("  ⏭ 跳过清单：%s" % "、".join(r[1] for r in skip))

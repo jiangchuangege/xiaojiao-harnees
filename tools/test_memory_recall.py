@@ -70,6 +70,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--real", action="store_true", help="打真实记忆库（会写进用户记忆）")
     ap.add_argument("--no-model", action="store_true", help="只测检索，不调模型")
+    # 【为什么要加这个开关】使用率判据是"答案里有没有那个事实"（字符串判据），一旦报 ❌，
+    #   光看表格**没法知道它到底答了什么** —— 是没答、还是答错、还是换了叫法（如 PostgreSQL→Postgres）
+    #   被字符串判据冤枉。把原文打出来，才好分清"模型的问题"和"判据的问题"。
+    ap.add_argument("--show-answer", action="store_true", help="把每个问题模型答的原文打出来（排查用）")
     args = ap.parse_args()
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -144,6 +148,9 @@ def main():
               % (q, "✅" if hit else "❌",
                  ("%.3f" % gold_score) if gold_score else "-",
                  gold_rank or "-", used, dt, res.get("vector_ms", 0), res.get("rerank_ms", 0)))
+        if args.show_answer and not args.no_model:
+            print("        ↳ 注入的那条里含「%s」= %s ｜ 它答的原文：%s"
+                  % (fact, "是" if hit else "否", (ans or "").replace("\n", " ")[:200]))
 
     print("-" * 96)
     n = len(QUERIES)
