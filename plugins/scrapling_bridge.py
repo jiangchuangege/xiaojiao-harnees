@@ -615,10 +615,25 @@ class BridgeConfig:
                 except Exception as e:
                     LOG.debug("忽略异常(%s:%d): %s", __file__, 584, e)
         if not cfg.executable_path:
-            # 兜底探测：项目内 / 家目录 / 各盘关键词目录找 chrome.exe（不写死盘符与目录名）
+            # 兜底探测：**用户显式指定 → 统一解析 → 项目内 / 家目录 / 各盘关键词目录**找 chrome.exe
+            # （不写死盘符与目录名）。
+            # 【2026-09-19 补】加一条 `XIAOJIAO_CHROME`：与 `core/paths.find_chrome()` 同一口径 ——
+            #   否则用户在文档里看到的"设个环境变量就能指定浏览器"在这里不生效（实测就踩到过：
+            #   本机扫到 G: 上那份，但设了环境变量的人会以为没生效）。
             _here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            cands = [os.path.join(_here, "chrome-win64", "chrome.exe"),
+            cands = [os.environ.get("XIAOJIAO_CHROME", "").strip(),
+                     os.path.join(_here, "chrome-win64", "chrome.exe"),
                      os.path.expanduser("~\\chrome-win64\\chrome.exe")]
+            try:
+                import sys as _sys
+                if _here not in _sys.path:
+                    _sys.path.insert(0, _here)
+                from core import paths as _P
+                _pc = _P.find_chrome()[0]
+                if _pc:
+                    cands.insert(1, _pc)
+            except Exception as e:      # noqa: silent-ok — 解析器不可用就按老办法扫
+                LOG.debug("忽略异常(%s:%d): %s", __file__, 619, e)
             try:
                 import sys as _sys
                 if _here not in _sys.path:
@@ -633,7 +648,7 @@ class BridgeConfig:
             except Exception as e:
                 LOG.debug("忽略异常(%s:%d): %s", __file__, 602, e)
             for cand in cands:
-                if os.path.exists(cand):
+                if cand and os.path.exists(cand):
                     cfg.executable_path = cand
                     break
         return cfg

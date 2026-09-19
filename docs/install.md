@@ -202,6 +202,7 @@ python tools/setup_paths.py --apply    # 把 llama-swap.yaml 里"指向不存在
 | 现象 | 处理 |
 | --- | --- |
 | 端口被占用 | 默认需要 5000（Web）与 9292（llama-swap）空闲，先用 `netstat` 或 `tools/check_cloud_brain.py` 之外的端口检查手段确认 |
+| 启动时刷一串 `--- Logging error ---` + `WinError 32 另一个程序正在使用此文件` | **已经有一个小焦在跑**（Windows 不允许重命名被占用的日志文件）。现在启动器会先探一次端口，发现是自己在跑就**直接停下并告诉你地址**（一个模型都不拉），不会再让两份权重抢显存；确实要开第二份加 `--force`，想开在别的端口用 `--port 5001`。日志轮转本身也已做成"被占用就跳过、继续追加、一条不丢" |
 | 显存不足（CUDA OOM） | 调小 `xiaojiao_control.json` 的 `brain.llama.ctx`，例如从 32768 降到 16384；或改用云端 `brain.api` |
 | 只想用云端接口 | `brain.engine` 设为 `api`，填好 `brain.api.base_url` / `api_key` / `model` |
 | 找不到 `llama-swap.exe` | 设 `XIAOJIAO_LLAMA_SWAP` 指向该文件，或把 `llama-swap.exe` 放到项目目录 / `llama-swap/` 子目录 |

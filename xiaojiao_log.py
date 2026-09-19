@@ -73,6 +73,63 @@ class _ScrubFilter(logging.Filter):
         return True
 
 
+class _SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """Windows 上**别的进程正占着日志文件**时，轮转失败不许炸（实测就炸过）。
+
+    【实测现场（2026-09-19）】`python start_xiaojiao.py` 一启动，控制台连刷三段
+    `--- Logging error ---` + `PermissionError: [WinError 32] 另一个程序正在使用此文件`，
+    指向 `os.rename('logs/xiaojiao.log' → 'logs/xiaojiao.log.1')`。
+    原因不是配置错，而是**已经有一个小焦在跑**（也可能是个编辑器 / `tail -f` 开着那文件）——
+    Windows 不允许重命名**被别的进程占用**的文件。而 `logging` 默认的 `doRollover()`
+    不处理这个异常 → **每写一条日志就抛一次**、堆栈直接糊在用户脸上，
+    看起来像"启动报错"，其实业务一点没受影响。
+
+    【改法】**把轮转做成可失败的**：失败就**不轮转、继续往原文件追加** ——
+    一条日志都不丢，只是这一轮不叫"轮转"（文件涨到那个进程退出后自然会轮）。
+    并且 `rotate` 抛异常时流已经被关掉了，**必须自己把流重新打开**，否则后面每条日志
+    都会变成 "I/O operation on closed file"（那就从"吵"变成"丢"了）。
+    """
+
+    def shouldRollover(self, record):      # noqa: D102
+        # 【失败后退避】被占着的时候，`shouldRollover` 会**每写一行都返回 True** →
+        #   每行都去敲一次重命名（还要抛一次异常）。所以失败之后记一个"涨到多少再试"，
+        #   没涨到就先老实追加 —— 日志一条不丢，代价也不再是"每行一次系统调用"。
+        nxt = int(getattr(self, "_retry_after_bytes", 0) or 0)
+        if nxt:
+            try:
+                if os.path.getsize(self.baseFilename) < nxt:
+                    return False
+            except OSError:      # noqa: silent-ok — 量不出来就按标准逻辑走
+                pass
+            self._retry_after_bytes = 0
+        return logging.handlers.RotatingFileHandler.shouldRollover(self, record)
+
+    def doRollover(self):      # noqa: D102 — 覆盖标准库实现，语义见类注释
+        try:
+            return logging.handlers.RotatingFileHandler.doRollover(self)
+        except OSError as e:
+            self._rotate_skipped = int(getattr(self, "_rotate_skipped", 0)) + 1
+            try:
+                self._retry_after_bytes = os.path.getsize(self.baseFilename) + int(self.maxBytes)
+            except OSError:      # noqa: silent-ok
+                self._retry_after_bytes = 0
+            try:
+                if self.stream is None and not self.delay:
+                    self.stream = self._open()        # ← 关键：不重开就等于把日志丢了
+            except Exception:      # noqa: silent-ok — 都打不开了也不许再抛
+                pass
+            if self._rotate_skipped == 1:             # 只说一次，别每条日志来一遍
+                try:
+                    sys.stderr.write(
+                        "[xiaojiao_log] 日志轮转跳过（%s）。常见原因：**已经有一个小焦在跑**，"
+                        "或这个日志文件正被别的程序打开 —— 日志会继续写进同一个文件"
+                        "（涨到 %s 字节再试一次），业务不受影响；想轮转先关掉那个进程。\n"
+                        % (type(e).__name__, self._retry_after_bytes))
+                except Exception:      # noqa: silent-ok
+                    pass
+            return None
+
+
 def setup(level: str = "") -> None:
     """初始化根日志（幂等）：控制台 + logs/xiaojiao.log（5MB × 3 轮转）。"""
     global _configured
@@ -88,7 +145,7 @@ def setup(level: str = "") -> None:
 
     try:
         os.makedirs(_LOG_DIR, exist_ok=True)
-        fh = logging.handlers.RotatingFileHandler(
+        fh = _SafeRotatingFileHandler(
             os.path.join(_LOG_DIR, "xiaojiao.log"), maxBytes=5 * 1024 * 1024,
             backupCount=3, encoding="utf-8")
         fh.setFormatter(fmt)

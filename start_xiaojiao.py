@@ -455,12 +455,77 @@ def stop_world():
         print("  [世界层] 停止时出错（忽略）：%s" % e)
 
 
+def _port_up(port, timeout=1.5):
+    try:
+        import socket
+        s = socket.socket(); s.settimeout(timeout)
+        s.connect(("127.0.0.1", int(port))); s.close()
+        return True
+    except Exception:
+        return False
+
+
+def _already_running():
+    """已经有一个小焦在跑吗？返回 `(在跑吗, 端口)`。
+
+    【为什么启动前必须查这一步（2026-09-19 实测）】第二次 `python start_xiaojiao.py` 时：
+      · 表面症状是控制台连刷 `--- Logging error ---` + `PermissionError [WinError 32]`，
+        指向 `os.rename('logs/xiaojiao.log' → '.1')` —— Windows 不允许重命名**被别的进程占用**的文件；
+      · 真正的风险是**两份模型权重同时抢内存/显存**（本项目实测过：一个 token 要 100 秒、
+        "你好"要 205 秒），而且两个进程同时写同一份记忆/会话/日志。
+    所以这里先探 Web 端口，并且**确认对方真的是小焦**（`/health` 回 200 且带 xiaojiao 标记）
+    才算数 —— 端口上蹲着别的服务时只提示、不拦人。
+    """
+    cands = []
+    if "--port" in sys.argv:
+        # **显式指定了端口 = 明确想在别处开一份**（例如 5000 已经在跑，自己开 5001）——
+        # 那就只查这一个端口，不许拿 5000 上那个实例来拦人。
+        try:
+            cands.append(int(sys.argv[sys.argv.index("--port") + 1]))
+        except Exception:      # noqa: silent-ok — 参数不是数字就退回默认候选
+            pass
+    for p in ([] if cands else (os.environ.get("XIAOJIAO_WEB_PORT"), CONTROL.get("web_port"),
+                                os.environ.get("PORT"), 5000)):
+        try:
+            p = int(p)
+        except Exception:      # noqa: silent-ok — 不是数字就当没设
+            continue
+        if p and p not in cands:
+            cands.append(p)
+    for p in cands:
+        if not _port_up(p):
+            continue
+        try:
+            import urllib.request
+            with urllib.request.urlopen("http://127.0.0.1:%d/health" % p, timeout=3) as r:
+                body = r.read().decode("utf-8", "replace")
+                ok = getattr(r, "status", 200) == 200
+            if ok and ("xiaojiao" in body.lower() or "小焦" in body or '"ok"' in body):
+                return True, p
+        except Exception:      # noqa: silent-ok — 探不通或不认识就继续（交给后面的端口冲突逻辑）
+            continue
+    return False, 0
+
+
 def main():
     print("=" * 50)
     print("  小焦 · XiaoJiao")
     print(f"  模型名: {MODEL_NAME}")
     print(f"  大脑:   {ENGINE}")
     print("=" * 50)
+
+    # 1) **已经有一个在跑就别再起第二个**（两份权重抢显存 + 两个进程写同一个日志文件）。
+    #    注意：这一步必须放在"拉模型"之前 —— 起完再发现，代价已经付了。
+    try:
+        _run, _p = _already_running()
+        if _run and "--force" not in sys.argv:
+            print("⚠️  已经有一个小焦在跑：http://127.0.0.1:%d" % _p)
+            print("   这次启动**已停下**，一个模型都没拉（再起一份会两份权重抢内存/显存，")
+            print("   而且 logs/xiaojiao.log 会被两个进程同时写 —— 那正是刚才那串 WinError 32 的来源）。")
+            print("   要重启：先关掉那个窗口/进程；确实要强开第二份：加 `--force`。")
+            return 0
+    except Exception as e:      # noqa: silent-ok — 探测本身出错不许拦住正常启动
+        LOG.debug("检查是否已有实例在跑时出错（忽略）：%s", e)
 
     # 2b. 先拉起 llama-swap(9292), 让大脑由它管理(8080直连会检测到9292后自动跳过)
     llama_swap_proc = start_llama_swap()
