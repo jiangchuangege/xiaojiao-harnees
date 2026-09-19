@@ -80,6 +80,42 @@ def _tail_line(out):
     return (out.strip().splitlines() or ["（无输出）"])[-1][:120]
 
 
+def _xiaojiao_running():
+    """本机已经有一个小焦在跑吗？（只探端口 + `/health`，不调模型）返回端口或 0。
+
+    【为什么要在全量前先说一句（2026-09-19 实测）】用户自己开着一个小焦时，
+    **需要模型的那几项会和它抢同一个大脑**：同一次全量跑里带模型的项慢一倍
+    （`tests/stress` 156s → 307s、`test_time_context` 42s → 83s、`test_memory_recall` 71s → 117s），
+    而且 `test_memory_recall` / `test_6_capabilities` 会**偶发翻红** —— 单独复跑又是 5/5 通过。
+    那不是代码坏了，是"两拨人排队用同一个 4B"。所以这里如实提示一句，
+    让"这次的红"有据可查，而不是让人去猜。
+    """
+    import socket
+    import urllib.request
+    cands = []
+    for p in (5000, os.environ.get("PORT")):
+        try:
+            p = int(p)
+        except Exception:
+            continue
+        if p and p not in cands:
+            cands.append(p)
+    for p in cands:
+        try:
+            s = socket.socket(); s.settimeout(1.2)
+            s.connect(("127.0.0.1", p)); s.close()
+        except Exception:      # noqa: silent-ok — 探不通就跳过
+            continue
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:%d/health" % p, timeout=3) as r:
+                body = r.read().decode("utf-8", "replace")
+            if getattr(r, "status", 200) == 200 and ('"ok"' in body or "小焦" in body):
+                return p
+        except Exception:      # noqa: silent-ok
+            continue
+    return 0
+
+
 def main():
     fast = "--fast" in sys.argv
     rows = []
@@ -97,6 +133,12 @@ def main():
     print("  一条命令跑完全部 ｜ 闸门 %d 个 · 自测 %d 个 · 工具自测 %d 个%s"
           % (len(checks), len(tests), len(selftests), "" if fast else " · 全量套件 1 个"))
     print("=" * 96)
+    _busy = _xiaojiao_running()
+    if _busy:
+        print("  ⚠️  本机已经有一个小焦在 :%d 跑着 —— **需要模型的那些自测会和它抢同一个大脑**：" % _busy)
+        print("      实测同一次跑里带模型的项会慢一倍，`test_memory_recall` / `test_6_capabilities`")
+        print("      可能偶发翻红（单独复跑是过的）。想要一份干净的结论：先关掉它再跑本脚本。")
+        print("-" * 96)
 
     for kind, path, extra in work:
         name = os.path.basename(path)
