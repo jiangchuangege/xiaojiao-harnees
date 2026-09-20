@@ -433,6 +433,15 @@ def reload_control():
     LAN_ACCESS = bool(CAP.get("lan_access", False))
     ACCESS_TOKEN = str(CAP.get("access_token", "") or "").strip()
     FULL_ACCESS = bool(CAP.get("full_access", False))
+    # ---- 本地大脑的"模型名"对一次账（2026-09-21 加，理由见 `_local_model_reconcile`）----
+    #   放在这里是因为**所有**改大脑的路径最后都会走到 `reload_control()`（保存设置、切预设、
+    #   控制文件被手工改了之后的 mtime 热更新）—— 一处收口，四条路都覆盖。
+    try:
+        _fix = _local_model_reconcile()
+        if _fix:
+            LOG.warning("大脑自检：%s", _fix)
+    except Exception as e:      # noqa: silent-ok — 对账失败绝不许影响配置加载本身
+        LOG.debug("本地模型名对账失败（忽略）：%s", e)
 
 
 _ctlmtime = 0
@@ -4125,7 +4134,15 @@ def llm_error_suffix():
     """
     if not _LAST_LLM_ERROR:
         return ""
-    tip = "\n👉 怎么办：设置 → 大脑 里换一个可用的 API Key，或直接切「本地大脑」（本地模型不需要 Key）。"
+    # 【提示要分本地/云端（2026-09-21 改）】原来是"换一个可用的 API Key，或直接接本地大脑"——
+    #   可用户这次失败**本来就是本地大脑**（404 no router：本地服务不认这个模型名），
+    #   让他去换 API Key 等于指错路。本地就明说是模型名的事。
+    if _is_local_base(LLM_BASE):
+        tip = ("\n👉 怎么办：本地服务不认这个名字 —— 去 **设置 → 大脑** 里重新点一次模型"
+               "（载体现在会在保存/切预设时自动对一次账），或直接改 `xiaojiao_control.json` 的 "
+               "`brain.api.model` 为本机服务真正提供的 id（`GET %s/models` 能看到）。" % LLM_BASE)
+    else:
+        tip = "\n👉 怎么办：设置 → 大脑 里换一个可用的 API Key，或直接切「本地大脑」（本地模型不需要 Key）。"
     return "\n\n🔎 真实原因：%s%s%s" % (_LAST_LLM_ERROR, _llm_stat_note(), tip)
 
 
@@ -4166,6 +4183,16 @@ def llm_chat(messages, temperature=None):
     if _brain_asleep():
         LOG.info("挂起中：拒绝调用大脑（chat）—— 它在睡，不推理、不占显存")
         return None
+    # 【第一次真要说话之前，先把"本地模型名"对一次账（2026-09-21）】
+    #   放在这里是因为它**只试一次**、且必须在 `_llm_targets()` 取值**之前** ——
+    #   否则配置里那个显示名（`xiaojiao1.0-4B`）会原样发出去，llama-swap 回
+    #   404 no router for requested model（用户就是这么被卡的：设完预设第一句就报错）。
+    try:
+        _fix = _local_model_reconcile()
+        if _fix:
+            LOG.warning("大脑自检（说话前）：%s", _fix)
+    except Exception as e:      # noqa: silent-ok — 对账失败绝不许挡住说话
+        LOG.debug("说话前的模型名对账失败（忽略）：%s", e)
     _energy_spend(why="模型调用")
     payload = {"messages": messages,
                "temperature": (TEMPERATURE if temperature is None else float(temperature)),
@@ -12725,12 +12752,23 @@ def api_presets_load():
     # 云端 brain.api**（base_url 还指着 Agnes）→ 出现"引擎说本地、地址是云端"的四不像，
     # 结果每次提问都失败。这里做一次一致性校正：引擎是本地就把地址/Key/模型名对齐到本地。
     _b = CONTROL.get("brain", {}) or {}
-    if str(_b.get("engine", "")).lower() in ("llama", "auto") and not _is_local_base((_b.get("api") or {}).get("base_url", "")):
+    if str(_b.get("engine", "")).lower() in ("llama", "auto"):
+        _api = dict(_b.get("api") or {})
         _port = int(_b.get("llama_swap_port", 9292) or 9292)
-        _bm = _local_brain_model()
-        _b["engine"] = "llama"
-        _b["api"] = {"base_url": "http://127.0.0.1:%d/v1" % _port, "api_key": "", "model": _bm or "xiaojiao"}
-        LOG.info("预设要求本地引擎 → 已把大脑地址对齐到本地 %s（模型 %s）", _b["api"]["base_url"], _b["api"]["model"])
+        _ids = _local_served_ids(_api.get("base_url") or "http://127.0.0.1:%d/v1" % _port, timeout=2)
+        _need_addr = not _is_local_base(_api.get("base_url", ""))
+        # 【2026-09-21 补第二半】原来只校正"地址"：地址本来就是本地时整段跳过 ——
+        #   于是"引擎本地 + 地址本地 + **模型名是显示名**"（如 `xiaojiao1.0-4B` 而路由键是
+        #   `xiaojiao`）这种组合没人管，用户设完预设第一次提问就是 404 no router（真实投诉）。
+        #   现在地址和**模型名**一起校正（模型名按 `_model_id_for` 的判据映射）。
+        _need_model = bool(_ids) and str(_api.get("model") or "") not in _ids
+        if _need_addr or _need_model:
+            _bm = _model_id_for(_api.get("model"), _ids) or _local_brain_model() or "xiaojiao"
+            _b["engine"] = "llama"
+            _b["api"] = {"base_url": "http://127.0.0.1:%d/v1" % _port, "api_key": "", "model": _bm}
+            LOG.info("预设要求本地引擎 → 已把大脑对齐到本地 %s（模型 %s%s）",
+                     _b["api"]["base_url"], _b["api"]["model"],
+                     "；原来写着 %s" % _api.get("model") if _need_model else "")
     json.dump(CONTROL, open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "xiaojiao_control.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     reload_control()  # 热更新内存配置, 无需重启
     # 回给前端足够的信息：前端要用它提示"联网/工具开关"到底变成什么了
@@ -14338,6 +14376,59 @@ def _is_local_base(url):
     return any(h in u for h in ("127.0.0.1", "localhost", "0.0.0.0", "[::1]", "://::1"))
 
 
+def _local_served_ids(base_url, timeout=3):
+    """问本地服务**真的**提供哪些 model id（问不到就返回空列表）。"""
+    try:
+        r = requests.get((base_url or "").rstrip("/") + "/models", timeout=timeout)
+        if r.status_code == 200:
+            return [str(m.get("id")) for m in (r.json().get("data") or []) if m.get("id")]
+    except Exception as e:      # noqa: silent-ok — 探测失败就当作"问不到"，绝不因此挡住任何事
+        LOG.debug("本地 /models 探测失败（忽略）：%s", e)
+    return []
+
+
+def _model_id_for(value, ids):
+    """把"界面上那个名字"换成"服务真正认的 model id"。
+
+    【为什么必须分清楚这两件事（用户实测，2026-09-21）】设了预设「闲聊陪伴」之后发消息就报
+      `HTTP 404 · 接口地址或模型名不对（服务端说：no router for requested model）`
+      ｜ 接口 `http://127.0.0.1:9292/v1` ｜ 模型 **`xiaojiao1.0-4B`**
+    而 llama-swap 真正认的路由键是 **`xiaojiao`**（`useModelName: xiaojiao1.0-4B`
+    只是它**对外自报的名字**）。`models[]` 里也是这么分两列的：
+      · `name`  = 显示名（`xiaojiao1.0-4B`，给人看、下拉里显示的就是它）
+      · `model` = **要发给接口的那个 id**（`xiaojiao`，路由键）
+    `brain.api.model` 被填成了**显示名** → 每次请求都 404，而且界面上完全看不出为什么。
+    判据顺序（确定性、不调模型）：
+      ① 已经是服务提供的 id → 直接用；
+      ② 去 `models[]` 里找**同名条目**，用它的 `model` 字段（正统映射）；
+      ③ 兜底 `xiaojiao`（本项目的默认大脑）；
+      ④ 再兜底：非 coder 的第一个（⚠️ 不许随手拿 `ids[0]`：实测顺序是 coder 在前，
+         而那个 coder 的 gguf 早就不在了，请求它就是 HTTP 500 —— 真实事故）。
+    """
+    v = str(value or "").strip()
+    if not v or not ids:
+        return ""
+    if v in ids:
+        return v
+    for m in _get_models():
+        if v in (str(m.get("name") or ""), str(m.get("model") or "")):
+            mid = str(m.get("model") or "")
+            if mid and mid in ids:
+                return mid
+    if "xiaojiao" in ids:
+        return "xiaojiao"
+    # 兜底：**跳过"模型文件已经不在了"的那些**再取第一个。
+    #   ⚠️ 旧写法是"名字里带 coder 的就跳过"—— 那是**猜**：实测这台机器上叫
+    #   `qwopus3.5-4b-coder-mtp-q5_k_m.gguf` 的模型名字里也带 coder，却被正常用着。
+    #   `_dead_local_models()` 只读 yaml 的 cmd 行、只看**文件在不在**（一个事实），拿它当判据才对。
+    try:
+        dead = _dead_local_models()
+    except Exception:      # noqa: silent-ok — 认不出来就当没有死模型
+        dead = set()
+    alive = [i for i in ids if i not in dead] or list(ids)
+    return alive[0]
+
+
 def _local_served_model(base_url, want):
     """问一下本地服务**真的**提供哪些模型，返回一个能用的 model id（问不到就原样返回 want）。
 
@@ -14345,23 +14436,67 @@ def _local_served_model(base_url, want):
     base_url 指向本机 9292 —— 用户在界面上选了"本地模型"照样不能用（llama-swap 直接 404
     no router for requested model），还看不出来为什么。这里在切换时对一次账。
     """
-    try:
-        r = requests.get((base_url or "").rstrip("/") + "/models", timeout=3)
-        if r.status_code == 200:
-            ids = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
-            if ids and want not in ids:
-                # ⚠️ **不许随手挑 ids[0]**：实测 llama-swap 返回的顺序是 coder 在前，
-                # 而那个 coder 的 gguf 早就不在了（请求它 = HTTP 500 upstream exited prematurely）。
-                # 后果是：用户"加了一个新模型"→ 被静默换成一个**坏模型** → 对话全废，
-                # 界面上还显示着他选的那个名字，完全看不出为什么（真实事故）。
-                # 跟 `_local_brain_model()` 用**同一条 policy**：聊天优先用非 coder 的。
-                pick = next((i for i in ids if "coder" not in str(i).lower()), ids[0])
-                return pick, ids
-            if ids:
-                return want, ids
-    except Exception as e:  # noqa: silent-ok — 探测失败就按原样用，绝不因对账而挡住切换
-        LOG.debug("忽略异常(%s:%d): %s", __file__, 3075, e)
-    return want, []
+    ids = _local_served_ids(base_url)
+    if not ids:
+        return want, []
+    if want in ids:
+        return want, ids
+    pick = _model_id_for(want, ids)
+    return (pick or want), ids
+
+
+_LOCAL_MODEL_RECONCILED = False
+
+
+def _control_file_path():
+    """控制文件路径（**可被自测替换** —— 自测绝不能写用户真的那份配置）。"""
+    return globals().get("_CONTROL_FILE") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "xiaojiao_control.json")
+
+
+def _local_model_reconcile():
+    """**本地大脑的"模型名"对一次账**（引擎本地 + 地址本地，但名字不是本地服务提供的 → 改掉它）。
+
+    【为什么要有这一步】`api_model_select`（界面上手动切模型）那边已经会对账了，但**其它路径**
+    都对不了：预设加载只校正"地址"（地址本来就是本地时它整段跳过）、手工编辑控制文件、
+    旧配置、`_save_control` 写的值 —— 任何一条把**显示名**塞进 `brain.api.model`，
+    结果都是每次提问 404 `no router for requested model`（用户 2026-09-21 就是这个）。
+
+    只试一次（`_LOCAL_MODEL_RECONCILED`），而且**探不到服务时不算试过**（下次再来）；
+    改了就写回控制文件并留下一行"改了什么、为什么"。返回说明（没改就返回空串）。
+    """
+    global _LOCAL_MODEL_RECONCILED, LLM_MODEL
+    if _LOCAL_MODEL_RECONCILED:
+        return ""
+    if str(BRAIN_ENGINE).lower() not in ("llama", "auto"):
+        return ""
+    if not _is_local_base(LLM_BASE):
+        return ""
+    ids = _local_served_ids(LLM_BASE, timeout=2)
+    if not ids:
+        return ""                      # 服务还没起/问不到 → 不算"对过账"，下次再试
+    if str(LLM_MODEL) in ids:
+        _LOCAL_MODEL_RECONCILED = True
+        return ""
+    fixed = _model_id_for(LLM_MODEL, ids)
+    if not fixed or fixed == LLM_MODEL:
+        _LOCAL_MODEL_RECONCILED = True
+        return ""
+    old = str(LLM_MODEL)
+    brain = dict(CONTROL.get("brain", {}))
+    api = dict(brain.get("api", {}))
+    api["model"] = fixed
+    brain["api"] = api
+    CONTROL["brain"] = brain
+    LLM_MODEL = fixed
+    _LOCAL_MODEL_RECONCILED = True
+    try:                               # 写回文件（整份 CONTROL，别用 _save_control —— 它会丢预设等键）
+        json.dump(CONTROL, open(_control_file_path(), "w", encoding="utf-8"),
+                  ensure_ascii=False, indent=1)
+    except Exception as e:      # noqa: silent-ok — 写不进去也已经在内存里生效了
+        LOG.debug("模型名对账：写回控制文件失败（内存已生效）：%s", e)
+    return ("本地服务不认「%s」（它提供的是 %s）→ 已把模型名换成「%s」"
+            % (old, "/".join(ids), fixed))
 
 
 def _cloud_key_problem(base, key, model):
