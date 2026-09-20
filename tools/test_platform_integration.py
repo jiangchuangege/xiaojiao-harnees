@@ -156,7 +156,11 @@ def main():
         r = cap.scan()
         ck("C", "扫出真实工具数（>0，且来自 app 真接口）",
            r.get("count", 0) > 0 and r.get("source") == "app", (r.get("count"), r.get("source")))
-        ck("C", "工具数就是大家说的那个数（77）", r.get("count") == 77, r.get("count"))
+        # 【2026-09-21 从 `== 77` 改成 `>= 77`】77 是写这条时的基线数字；但**用户自己加的
+        #   插件会合法地让这个数变大** —— 实测：小焦自己新建了一个 `plugins/nginx-vts.json`，
+        #   于是这条硬编码等式把"用户加了东西"判成了失败（红的原因跟被测能力毫无关系）。
+        #   这里要守的是「工具**没被弄丢**」（≥ 基线），不是"一个都不许多"。
+        ck("C", "工具数不少于基线 77（用户自加插件只会更多）", r.get("count", 0) >= 77, r.get("count"))
         ck("C", "清单落了盘（capabilities.json）",
            os.path.exists(os.path.join(_ROOT, "logs", "carrier", "capabilities.json")))
         ck("C", "扫描不删任何插件文件", r.get("files", 0) > 0, r.get("files"))

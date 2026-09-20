@@ -46,7 +46,7 @@ def main():
         out = A._alt_write_on_overwrite("write_file",
                                        {"path": target, "content": "print(1)  # 新代码"},
                                        deny)
-        ck("换名写成了一条出路（不是那句空话）", bool(out) and "已被载体层拦截" in out, out[:60])
+        ck("换名写成了一条出路（不是那句空话）", bool(out) and "删除禁区" in out and "新文件" in out, out[:60])
         alt = os.path.join(tmp, "a_2.txt")
         ck("新文件真的写进去了", os.path.exists(alt) and "print(1)" in io.open(alt, encoding="utf-8").read())
         ck("说明里写明了原文件没动 + 新文件在哪",
