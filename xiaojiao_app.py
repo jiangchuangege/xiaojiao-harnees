@@ -4479,6 +4479,16 @@ def run_tool(name, args, force=False):
     # 它不该有机会走到"要不要问用户确认"那一步 —— 直接拒绝，不给模型任何周旋空间。
     _deny = _delete_redline(name, args)
     if _deny:
+        # 【2026-09-21 加：撞上"已存在的文件"时给它一条**出路**】
+        #   用户实测的卡死现场：让它写段代码 → 模型 write_file 到 `a.txt` → 已存在 →
+        #   删除禁区拦下 → 载体原文直接当回答 → 用户再问 → 模型**又调同一个 write_file** →
+        #   又是一模一样的一段话。连着三轮，**一句代码都没拿到**。
+        #   根子在拦截提示里那句"换成新建（换个文件名）或追加（mode='a'）"对模型是**空话** ——
+        #   `write_file` 根本没有 mode 参数，它照着做不了，只能重试原动作。
+        #   所以这里**由载体换名字、由载体动手、由载体说清**（不麻烦模型转述）。
+        _alt = _alt_write_on_overwrite(name, args, _deny)
+        if _alt:
+            return _alt
         return _deny
     # ---- Bug 2：本轮去重（**放在权限判断之前**）----
     # 放在前面是有意的：如果这一轮已经抓过同一个 URL，连"要不要问用户确认"都不用再走一遍 ——
@@ -4530,7 +4540,15 @@ _CONTENT_VERBS = ("写一段", "写一篇", "写一首", "写篇", "写首", "�
 _CONTENT_NOUNS = ("自我介绍", "诗", "诗歌", "故事", "童话", "小说", "文章", "作文",
                   "日记", "文案", "祝福语", "笑话", "段子", "散文", "台词", "旁白",
                   "打油诗", "顺口溜", "谜语", "对联", "情书", "演讲稿", "推文", "说说",
-                  "歌词", "剧本", "开场白", "结束语", "寄语", "短句", "文案")
+                  "歌词", "剧本", "开场白", "结束语", "寄语", "短句", "文案",
+                  # 2026-09-21 补：用户说「写一段**代码**我看看」时，要的是**当场看见**那段代码，
+                  #   不是要一个文件（实测它去写文件 → 撞上已存在的 a.txt → 连着三轮被红线拦下，
+                  #   用户一句代码都没看到）。这几类词和"诗/故事"同理：默认是**内容**。
+                  #   ⚠️ 顺序仍然"先看文件标记"：`写个脚本到桌面/存成 x.py` 照样判成"要文件"。
+                  "代码", "代码片段", "脚本", "函数", "正则")
+# 「我看看 / 看一眼」这种**明显是"给我看"**的语气：用来收口「写一段代码我看看」这类句子。
+_SHOW_MARKS = ("我看看", "看看", "看一下", "看一看", "看一眼", "给我看", "看下",
+               "展示", "念给我", "读给我", "让我看")
 
 
 def _wants_content_not_file(text):
@@ -4545,6 +4563,9 @@ def _wants_content_not_file(text):
     hit_noun = any(n in t for n in _CONTENT_NOUNS)
     if hit_verb and hit_noun:
         return True                       # 写一段 + 内容名，且没有文件标记 → 要内容
+    # 「…我看看 / 看一眼」是**给我看**的语气：没有文件标记时一律按"要内容"算（2026-09-21 补）
+    if any(m in t for m in _SHOW_MARKS) and (hit_noun or "代码" in t or "脚本" in t):
+        return True
     return None                           # 判不出来 → 不拦
 
 
@@ -4605,6 +4626,52 @@ _DELETE_GUARD_TOOLS = {
     "write_file": "write", "edit_file": "edit",
     "move_file": "move", "rename_file": "rename",
 }
+
+
+def _alt_write_on_overwrite(name, args, deny):
+    """`write_file` 撞上「目标已存在」时的**非破坏性出路**：换一个没被占用的名字写进去。
+
+    【为什么是"载体换名 + 载体动手"】
+      · 拦截本身是对的（覆盖＝不可逆，谁也不该悄悄抹掉用户已有的文件）；
+      · 但拦完**必须给一条真能走的路**：模型拿到的提示是"换个文件名或追加(mode='a')"，
+        而 `write_file` 压根没有 mode 参数 —— 这句建议它执行不了，于是**只会重试原动作**，
+        用户看到的就是"同一段拦截刷三遍、代码一句没见着"（实测现场）。
+      · 换名、写入、说明，全都由载体做完并如实交代：**原文件一个字没动、新文件在哪**。
+
+    只在**确实是"覆盖已有文件"这一种**拦截上动手（`delete` 那条红线一个字都不碰）；
+    拿不准、写不了，就返回空串 —— 那还是走原来的拒绝（保守优先）。
+    """
+    if name != "write_file" or "覆盖已经存在的文件" not in str(deny or ""):
+        return ""
+    p = str((args or {}).get("path") or "").strip()
+    c = str((args or {}).get("content") or "")
+    if not p or not c:
+        return ""
+    try:
+        d, base = os.path.split(os.path.abspath(p))
+        stem, ext = os.path.splitext(base)
+        for i in range(2, 52):
+            cand = os.path.join(d, "%s_%d%s" % (stem, i, ext))
+            if os.path.exists(cand):
+                continue
+            os.makedirs(d, exist_ok=True)
+            with open(cand, "w", encoding="utf-8") as f:
+                f.write(c)
+            _show = cand.replace("\\", "/")
+            _old_show = p.replace("\\", "/")
+            LOG.info("write_file 撞上已存在的文件 → 载体改写成新名字：%s（原文件 %s 一个字没动）",
+                     _show, p)
+            # 这段文字里带 `已被载体层拦截` 是**有意的**：`_carrier_block()` 会据此把它
+            # 当成"载体的决定"**原样交给用户**（不让模型转述），健康系统也不会把它
+            # 误记成"模型乱调工具"（见 core/health/monitor.py 的 CARRIER_MARKS）。
+            return ("⚠️ 已被载体层拦截（覆盖会毁掉原文件，不可逆）：`%s` 已经存在，"
+                    "**载体一个字都没改它**。\n"
+                    "✅ 内容已经写进**新文件**：`%s`（同目录、新名字）—— 你直接看这个就行。\n"
+                    "👉 要改原来那个文件：请你手动改，或明确说「覆盖它」，"
+                    "也可以让载体用 `edit_file` 只改其中一段。" % (_old_show, _show))
+    except Exception as e:      # noqa: silent-ok — 换名也失败就还是走原来的拒绝
+        LOG.debug("换名写入失败（忽略）：%s", e)
+    return ""
 
 
 def _delete_redline(name, args):

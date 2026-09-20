@@ -945,7 +945,7 @@ def check_file_op(op: str, path: str, new_content: str = "", allow_overwrite: bo
     if o in ("write", "append", "edit"):
         if o == "write" and not allow_overwrite and _exists(path):
             return _deny("覆盖已经存在的文件「%s」" % p,
-                         "换成新建（换个文件名）或追加（mode='a'）；"
+                         "换成新建（换个文件名）或用 edit_file 只改其中一段；"
                          "旧文件请你自己手动处理。")
         if new_content:
             hit, why = is_delete_command(new_content)
