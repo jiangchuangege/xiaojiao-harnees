@@ -1059,6 +1059,11 @@ def _trace_entry(tool, args, result):
     except Exception:      # noqa: silent-ok — 展不开就照原样记，绝不能因为记轨迹而报错
         args = args or {}
     _r = str(result or "")
+    # 【2026-09-21：机器标记不许进界面】`【载体动作】…` 那一行是给健康系统看的，
+    #   用户实测截图里就在工具气泡里看到了它（「调用 write_file — 【载体动作】这一轮不写文件…」）——
+    #   用户的原话是「你这叫改好了？」。轨迹是要经 HTTP 回给界面**显示**的，所以在这里剥掉。
+    if _r.startswith(_CARRIER_MACHINE):
+        _r = (_r.split("\n", 1)[1] if "\n" in _r else "").strip()
     e = {"tool": tool, "args": args, "result": _r[:800]}
     if len(_r) > _TOOL_RESULT_KEEP:
         e["full_len"] = len(_r)
@@ -4465,6 +4470,10 @@ def _carrier_block_answer(kind, detail=""):
             body = (body.split("\n", 1)[1] if "\n" in body else body[len(_CARRIER_MACHINE):]).strip()
         if not body:
             return ""
+        # 「没准备好」那种**没有内容可端**，就别再加"这段是它当场写的内容"那句尾巴了
+        # （用户实测看到过"没有内容 + 一句说这是它写的内容"的组合，读起来自相矛盾）。
+        if "没把内容准备好" in body:
+            return body
         return body + ("\n\n（这段是它当场写的内容，载体**没有**落成文件 —— "
                        "要存成文件就说「存成 xxx.txt」或给个路径。）")
     if kind == "delete":
@@ -4543,12 +4552,16 @@ def run_tool(name, args, force=False):
         #   不经模型转述）。第一版写成了"给模型的指令"（「请把它原样输出在回答里」）——
         #   结果用户看到的是**一句指令**，而不是他要的代码（用户实测后当场骂了回来）。
         #   所以现在的措辞是：**说清载体没写文件 + 把那份内容原样贴出来给用户**。
-        if _c:
+        if _c and len(_c) >= 24:
+            # 内容够像样才端出来（**不许拿 'hi' 这种占位货冒充"它当场写的代码"** ——
+            # 用户实测收到过一个孤零零的 `hi`，当场问「我让他写代码他写的啥？还是你弄得死模板？」）
             return (_CARRIER_MACHINE + "这一轮不写文件（用户要的是当场看内容）\n"
                     + _c[:4000])
+        # 内容太短/没准备 → **不端垃圾**，如实说清"它没准备好就去建文件了"，并告诉用户怎么说。
         return (_CARRIER_MACHINE + "这一轮不写文件（用户要的是当场看内容）\n"
-                "它没把内容准备好就想去建文件，被拦下来了。直接说要什么它就会当场写，"
-                "比如「写一个 Python 快排给我看看」；要落文件才说「存成 xxx.txt」或给一个路径。")
+                "它这一轮**没把内容准备好**就想往文件里写（准备的那点东西不到一行），被拦下来了。\n"
+                "说清楚要什么它就会当场写，比如「写一个 Python 快排我看看」；"
+                "要落文件才说「存成 xxx.txt」或给一个路径。")
     _deny = _delete_redline(name, args)
     if _deny:
         # 【2026-09-21 加：撞上"已存在的文件"时给它一条**出路**】
