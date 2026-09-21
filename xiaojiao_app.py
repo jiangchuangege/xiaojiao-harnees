@@ -4425,20 +4425,54 @@ def _carrier_block(text):
         return any(m in s for m in ("🚫", "删除禁区", "〔待确认〕", "安全红线", "SSRF", "请求太频繁"))
 
 
+_CARRIER_MACHINE = "【载体动作】"     # **机器专用标记**：给健康系统看，展示前剥掉（见下）
+
+
+def _carrier_kind(result):
+    """这段载体结果属于哪一类 —— 决定**给用户看的时候要不要那行告警横幅**。
+
+    · `content`：「用户要的是当场看内容，这一轮不写文件」这类 —— **不是告警**，不该刷横幅
+      （用户的原话：「我说写代码给我看展示到 web，没让他调用工具」——他要的就是内容本身）；
+    · `delete` ：删除红线（那条必须有 ✓ 用户当初点名要的固定措辞）；
+    · `other` ：其余载体动作，沿用原来的告警横幅。
+    """
+    s = str(result or "")
+    if s.startswith(_CARRIER_MACHINE) or "这一轮不写文件" in s:
+        return "content"
+    return "delete" if "删除" in s else "other"
+
+
 def _carrier_block_answer(kind, detail=""):
     """把载体的拦截结果整理成**直接给用户看的原文**（缺陷 2 要求的口径）。
 
     用户明确要求第一条就是这句话，一个字都不改：
         ⚠️ 删除操作被载体层拦截（安全红线）。文件未被删除。
     后面再接载体给出的原因与替代建议（也是载体写的，不是模型编的）。
+
+    【2026-09-21 加 `content` 这一类】**不给告警横幅**：用户要的是"写段代码给我看看"，
+    载体拦下"往文件里写"只是**顺手的保护**，把它渲染成「⚠️ 该操作被载体层拦截（安全红线）。
+    操作未执行。」就是拿告警吓唬人 —— 用户连着三次被这段刷屏，原话是
+    「我又没让他删什么重要文件，我让他写代码展示到 web」。
+    这一类只把内容端出来，末尾一句轻说明（机器标记 `【载体动作】` 也在这里剥掉，
+    用户看不到它，但健康系统已经看到了 —— 见 core/health/monitor.py 的 CARRIER_MARKS）。
     """
+    body = str(detail or "").strip()
+    if kind == "content":
+        if body.startswith(_CARRIER_MACHINE):
+            # 机器那一行**整行剥掉**（标记 + 紧跟其后的内部说明），用户只看内容 ——
+            # 第一版只剥标记、留着「这一轮不写文件（用户要的是当场看内容）」，
+            # 用户看到的第一行还是载体的话（实测），那就不算"把内容端出来"。
+            body = (body.split("\n", 1)[1] if "\n" in body else body[len(_CARRIER_MACHINE):]).strip()
+        if not body:
+            return ""
+        return body + ("\n\n（这段是它当场写的内容，载体**没有**落成文件 —— "
+                       "要存成文件就说「存成 xxx.txt」或给个路径。）")
     if kind == "delete":
         head = "⚠️ 删除操作被载体层拦截（安全红线）。文件未被删除。"
     else:
         head = "⚠️ 该操作被载体层拦截（安全红线）。操作未执行。"
     # 细节原样保留（**不要把 🚫 去掉**）：那是载体写给机器看的固定标记，
     # 健康系统的白名单与测试都靠它认出"这是载体主动动作"。用户看的是第一行。
-    body = str(detail or "").strip()
     tail = "\n\n（这条提示由**载体层**直接给出，没有经过模型转述 —— 拦截是载体的决定，就该由载体说清。）"
     return head + ("\n\n" + body if body else "") + tail
 
@@ -4477,6 +4511,44 @@ def run_tool(name, args, force=False):
     # ---- 安全红线：删除禁区（**第一道，优先于一切**）----
     # 为什么排在权限判断、去重、执行之前：删除是唯一不可逆的动作，
     # 它不该有机会走到"要不要问用户确认"那一步 —— 直接拒绝，不给模型任何周旋空间。
+    # ================== 「写」别乱动手：当场说 vs 落地成文件 ==================
+    # 【实测抓到的】用户说「写一段自我介绍」→ 判据**正确地**没让它进代码治病链，
+    #   但**模型自己去建了个 `self_intro.txt`**。用户要的是"当场说一段"，它却动手建了文件。
+    #   根因和之前那个同源：「写」在中文里太常见（写代码/写文件/写故事/写诗/写自我介绍…），
+    #   而模型只学会"写 = 动手"，不知道"写 = 当场说"。
+    # 【放在这里】`run_tool` 是工具的**唯一入口** ——
+    #   和"删除红线""本轮去重"同层：不管模型怎么想，这一道都拦得住。
+    #   **不是删工具、不是改提示词**，是载体层拦一道；判不出来就**不拦**（保守）。
+    # 【2026-09-21 顺序修正：这一道必须排在**删除红线之前**】
+    #   实测用户说「写一段代码我看看」（= 要我当场贴出来），模型照样调 write_file 指向已存在的
+    #   `Desktop/a.txt` → 先撞上红线 → 走了"换名写进 a_2.txt"那条路 → **用户还是没看到代码**，
+    #   桌面还多个他没要过的文件。红线的判据是"目标存不存在"，它不认识"用户其实只要看内容"；
+    #   而这一道判的正是后者。所以：**先问"用户要的是内容还是文件"，再谈红线。**
+    _content_wanted = _wants_content_not_file(_CTX.get("user_input") or "") is True
+    if _content_wanted and name in ("write_file", "append_file", "save_to"):
+        LOG.info("「写」闸：判为**要内容**（当场说）→ 不放行 %s ｜ 用户：%s",
+                 name, str(_CTX.get("user_input"))[:40])
+        # 【2026-09-21 加：**把它已经准备好的内容接住**】实测：用户问「写一段代码我看看」，
+        #   模型调 write_file 时**内容已经在参数里了**（`content`），拦下来之后直接让它"当场说"，
+        #   一个 4B 只会回一句「已完成内容输出。」—— 用户还是没看到东西。
+        #   所以这里把那段内容**原样贴回给它**，让它照着输出（载体不加工、不代写）。
+        _c = str((args or {}).get("content") or (args or {}).get("new_string") or "").strip()
+        # ⚠️ **这段文字必须带载体标记**（`已被载体层拦截`，见 core/health/monitor.py 的 CARRIER_MARKS）——
+        #   2026-09-21 实测吃过大亏：这一拦被健康系统当成了 **`tool_misuse`（工具乱调）**，
+        #   连着两轮 → 诊断 HEAVY → **三级治疗把大脑从 xiaojiao 切到了备用火种 Deepseek-V4**
+        #   → llama-swap 去慢盘重载 4GB → 一轮要等几分钟，用户看到的就是「正在组织回答… 十分钟不动」。
+        #   载体自己的拦截**不是模型的行为异常**，必须让它一眼认出来。
+        #
+        # ⚠️⚠️ 而且这段文字**是给用户看的**（带载体标记 ⇒ `_carrier_block()` 会原样交给用户，
+        #   不经模型转述）。第一版写成了"给模型的指令"（「请把它原样输出在回答里」）——
+        #   结果用户看到的是**一句指令**，而不是他要的代码（用户实测后当场骂了回来）。
+        #   所以现在的措辞是：**说清载体没写文件 + 把那份内容原样贴出来给用户**。
+        if _c:
+            return (_CARRIER_MACHINE + "这一轮不写文件（用户要的是当场看内容）\n"
+                    + _c[:4000])
+        return (_CARRIER_MACHINE + "这一轮不写文件（用户要的是当场看内容）\n"
+                "它没把内容准备好就想去建文件，被拦下来了。直接说要什么它就会当场写，"
+                "比如「写一个 Python 快排给我看看」；要落文件才说「存成 xxx.txt」或给一个路径。")
     _deny = _delete_redline(name, args)
     if _deny:
         # 【2026-09-21 加：撞上"已存在的文件"时给它一条**出路**】
@@ -4493,27 +4565,14 @@ def run_tool(name, args, force=False):
     # ---- Bug 2：本轮去重（**放在权限判断之前**）----
     # 放在前面是有意的：如果这一轮已经抓过同一个 URL，连"要不要问用户确认"都不用再走一遍 ——
     # 用户不可能希望同一个动作被问两次。真正的网络请求更是一次都不该重复发。
+    # （2026-09-21 把「写」闸提到红线之前时，**这一段必须原样保留在这个位置** —— 它是既有能力，
+    #   只是顺序往前挪了一格：写闸 → 红线 → 去重 → 执行。）
     _dup = _round_cached(name, args)
     if _dup is not None:
         LOG.info("本轮已调用过同一工具同一参数，直接复用上次结果（不再真调）：%s %s",
                  name, _summarize_args_for_log(name, args))
         return ("（本轮 `%s` 对同一目标已经调用过一次，这里直接复用上次的结果，没有重复执行）\n%s"
                 % (name, _dup))
-    # ================== 「写」别乱动手：当场说 vs 落地成文件 ==================
-    # 【实测抓到的】用户说「写一段自我介绍」→ 判据**正确地**没让它进代码治病链，
-    #   但**模型自己去建了个 `self_intro.txt`**。用户要的是"当场说一段"，它却动手建了文件。
-    #   根因和之前那个同源：「写」在中文里太常见（写代码/写文件/写故事/写诗/写自我介绍…），
-    #   而模型只学会"写 = 动手"，不知道"写 = 当场说"。
-    # 【放在这里】`run_tool` 是工具的**唯一入口** ——
-    #   和"删除红线""本轮去重"同层：不管模型怎么想，这一道都拦得住。
-    #   **不是删工具、不是改提示词**，是载体层拦一道；判不出来就**不拦**（保守）。
-    if _wants_content_not_file(_CTX.get("user_input") or "") is True \
-            and name in ("write_file", "append_file", "save_to"):
-        LOG.info("「写」闸：判为**要内容**（当场说）→ 不放行 %s ｜ 用户：%s",
-                 name, str(_CTX.get("user_input"))[:40])
-        return ("（**不要建文件**：用户要的是**当场把内容说出来**，不是要一个文件。"
-                "请直接把要写的内容作为回答输出；如果用户确实想要文件，他会明确说"
-                "「存成 xxx.txt」或给一个路径。）")
     _res = _run_tool_impl(name, args, force=force)
     _res = _weather_fallback(name, args, _res)
     _round_remember(name, args, _res)
@@ -4628,6 +4687,15 @@ _DELETE_GUARD_TOOLS = {
     "write_file": "write", "edit_file": "edit",
     "move_file": "move", "rename_file": "rename",
 }
+
+
+_FILE_DONE_RE = re.compile(
+    r"文件[^。！？\n]{0,8}(写入|保存|创建|生成|写好)"
+    r"|(写入|保存|创建|生成|写好)[^。！？\n]{0,8}文件"
+    r"|已(写入|保存|创建|生成)了?[^。！？\n]{0,4}(文件|到)"
+    # 「已经帮你写好了，路径是 …」这种：**没提"文件"两字但意思就是落盘了**（实测它这么说过）。
+    #   只在"这一轮没有任何成功的写文件动作"时才走到这条判据，所以宽一点是安全的。
+    r"|已经?帮你?写好|已帮你写入|帮你写好了")
 
 
 def _alt_write_on_overwrite(name, args, deny):
@@ -5107,7 +5175,7 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
                     # 于是编一句"已完成"（实测：红线拦下删除，它回答"已在指定位置新建了文件"）。
                     LOG.warning("载体拦截（%s）：直接把载体原文交给用户，不经过模型", tname)
                     return _carrier_block_answer(
-                        "delete" if "删除" in str(result) else "other", result), tool_trace
+                        _carrier_kind(result), result), tool_trace
                 _tripped = _tool_breaker(_fail_streak, tname, result, tool_trace)
                 if _tripped:
                     return _tripped, tool_trace
@@ -5134,7 +5202,7 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
                 # 同上（OpenAI 标准工具调用这条）：拦截原文直接给用户，不让模型转述
                 LOG.warning("载体拦截（%s）：直接把载体原文交给用户，不经过模型", tname)
                 return _carrier_block_answer(
-                    "delete" if "删除" in str(result) else "other", result), tool_trace
+                    _carrier_kind(result), result), tool_trace
             _tripped = _tool_breaker(_fail_streak, tname, result, tool_trace)
             if _tripped:
                 return _tripped, tool_trace
@@ -7997,6 +8065,25 @@ def _plan_tools(intent, system_text, current_text, max_ctx=None):
         _front = [n for n in names if any(x in str(n).lower() for x in _pol["front_tools"])]
         _rest = [n for n in names if n not in _front]
         names = _front + _rest
+    # ================== 「写」闸 · 前置到工具表：**这一轮压根不把写文件的工具给它** ==================
+    # 【为什么光在 `run_tool` 拦不够（用户实测，2026-09-21，用户的原话）】
+    #   「**我没让他写进文件，我让他写代码给我看，而不是调用工具写到文件里！！**」
+    #   实测：网页上说「写一段代码我看看」，它**照样调了 write_file**（撞上已存在的 a.txt →
+    #   红线 → 一屏关于文件的废话）。`run_tool` 那道闸拦得住"真写"，但拦不住"它去调" ——
+    #   用户看到的仍然是"一次工具调用 + 一段跟文件有关的话"。
+    #   所以判据为"要内容"时，**这一轮的工具表里就没有 write_file**：看不到就不会去点。
+    #   ⚠️ 与"渠道隔离"同一条思路，那一条的注释也写了：**看不到 ≠ 调不到**（4B 会硬编工具名），
+    #   所以 `run_tool` 里那道「写」闸**照旧保留**，这里只是不让它有机会发起。
+    try:
+        if _wants_content_not_file(_CTX.get("user_input") or "") is True:
+            _drop_write = ("write_file", "append_file", "save_to")
+            _before_w = len(names)
+            names = [n for n in names if str(n).strip() not in _drop_write]
+            if len(names) != _before_w:
+                LOG.info("「写」闸·前置：用户要的是**内容**（当场说）→ 本轮工具表拿掉 %s（%d→%d）",
+                         "、".join(_drop_write), _before_w, len(names))
+    except Exception as _e:      # noqa: silent-ok — 判不出来就不动工具表（保守）
+        LOG.debug("「写」闸·前置失败（忽略）：%s", _e)
     # ================== 渠道隔离 · 闸①：这条通道下**工具表就给空** ==================
     # 【与 `run_tool` 那道执行闸的关系】执行闸是**硬闸**（拦住执行，绝对防线）；
     #   这里只是**让模型别看到** —— 看不到就不会去点、不会去编工具名，少一轮无效往返。
@@ -9226,7 +9313,17 @@ def _route_of(text):
                 #    实测拿来源卡推荐会把整张歌单删空（用户看到的就是四个空标题）。
                 "strict_source": bool(_is_data),
                 "why": "要的是**最近的**东西（数据/歌/剧/新品…）：只有查了才知道，不许拿先验充数"}
-    # ⑥ 其它：按意图走（query/scrape 等要联网，chat 不联网）
+    # ⑥ 「写一段代码/函数/脚本」这类**生成请求**：不联网、不检索 —— 答案在它自己肚子里。
+    # 【为什么单列一条（2026-09-21 用户实测）】「写一段代码我看看」被意图判成了 query →
+    #   **跑去联网搜索**（界面上写着「正在联网搜索…」），还顺带做了 124 秒的记忆检索 ——
+    #   用户要的只是"写段代码给我看看"，一分钟以上都出不来。生成类请求**没有任何东西要查**：
+    #   把它按 chat 处理（need_net=False），别去搜。
+    if any(w in s for w in ("写一段代码", "写段代码", "写一个函数", "写个函数", "写一个脚本",
+                            "写个脚本", "写一段程序", "写段程序", "写个代码", "写一段python",
+                            "写一段 python", "写个 python")) and not _detect_scrape_intent(s):
+        return {"kind": "chat", "search_query": "", "need_net": False, "source": "",
+                "why": "「写代码/函数/脚本」是生成请求 —— 答案在它自己肚子里，不联网、不检索"}
+    # ⑦ 其它：按意图走（query/scrape 等要联网，chat 不联网）
     try:
         _it = _detect_intent(s)
     except Exception:      # noqa: silent-ok
@@ -11838,7 +11935,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     # 缺陷 2：这条兜底路径以前也会让模型总结 → 编出"已完成"
                     LOG.warning("载体拦截（%s/plan 兜底）：直接回复载体原文", tname)
                     answer = _carrier_block_answer(
-                        "delete" if "删除" in str(result) else "other", result)
+                        _carrier_kind(result), result)
                 else:
                     answer = _summarize_tool(user_input, result, tname)
 
@@ -12044,6 +12141,38 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                         break
         except Exception as e:      # noqa: silent-ok — 加不上也不影响回答
             LOG.debug("自我否认更正失败（忽略）：%s", e)
+        # ---- 反过来那一种：**说"已经写好了"但其实一次文件都没写** ----
+        # 【实测（2026-09-21，对着跑起来的实例验的）】问「把 print(1) 写进 C:/Users/Jiao/Desktop/a.txt」，
+        #   这一轮**工具轨迹是 0 条**（它压根没调 write_file），可它答的是：
+        #     「> 运行结果：`已写入文件：C:/Users/Jiao/Desktop/a.txt`」/「（文件已保存，下次执行 python a.txt…）」
+        #   —— **把没做过的动作说成做过了**。这比答错更伤：用户会真去打开那个文件，然后发现里面还是旧内容
+        #      （或者更糟：以为代码已经跑过了）。
+        # 【判据】只在**"说了完成" 且 "这一轮没有任何成功的写文件动作"**时才补一句更正；
+        #   有真动作时一个字都不加（宁可不提醒，也不冤枉它）。
+        try:
+            _wrote = False
+            for _t in (tool_trace or []):
+                _s = str(_t)
+                if ("write_file" in _s or "edit_file" in _s or "append_file" in _s) and \
+                        ("已写入" in _s or "已替换" in _s or "已写" in _s or "新文件" in _s):
+                    _wrote = True
+                    break
+            if not _wrote:
+                # 【判据用正则，不用"几个固定句子"】实测它换着说法讲："已写入文件" / "文件已保存" /
+                #   **"已完成文件写入"**（这一条不在我第一版的表里，于是漏了）。固定短语表永远追不上它，
+                #   而这里要认的其实只有一件事：**句子里在说"文件被写入/保存/创建/生成/写好了"**。
+                #   ⚠️ 只在"这一轮确实没有写文件的成功动作"时才用它 —— 所以宽一点是安全的：
+                #   有真动作时这条根本不会走到。
+                _m = _FILE_DONE_RE.search(answer or "")
+                if _m:
+                    answer = answer.rstrip() + (
+                        "\n\n（更正：这一轮**没有任何写文件的动作** —— 工具轨迹里没有成功的写入，"
+                        "上面那句「%s」是它自己说的，不是事实。要真的落盘，请直接说"
+                        "「把这段写进 <完整路径>」，那个动作会留下工具记录。）" % _m.group(0)[:24])
+                    LOG.info("文件动作更正：它说「%s」，但这一轮一次文件都没写 → 已在其后更正",
+                             _m.group(0)[:24])
+        except Exception as e:      # noqa: silent-ok — 加不上也不影响回答
+            LOG.debug("文件动作更正失败（忽略）：%s", e)
         # ---- 时间对不上就说一句（用户截图：它把 9 月 10 日的新闻说成"今天"）----
         try:
             _dnote = _today_date_note(answer)
