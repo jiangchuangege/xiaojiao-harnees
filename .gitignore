@@ -179,3 +179,7 @@ xiaojiao_app.py.bak*
 xiaojiao_profiles.json
 xiaojiao_profiles*.json
 !xiaojiao_profiles.json.example
+
+# 下载来的安装包（不是代码，别进仓库）
+*.msi
+*.exe
