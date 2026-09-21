@@ -23,6 +23,10 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import xiaojiao_app as X  # noqa: E402
+# 【2026-09-21】删除禁区现在**默认关**（用户要求：误伤太多，理由见 `_no_delete_guard_on`）。
+# 这个自测验的是「接线还在、一开就拦得住」，所以运行前显式打开它。
+X.CAP["no_delete_guard"] = True
+
 
 PASS, FAIL = [], []
 TMP = tempfile.mkdtemp(prefix="redline_")

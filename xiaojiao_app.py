@@ -4200,9 +4200,16 @@ def llm_chat(messages, temperature=None):
         LOG.debug("说话前的模型名对账失败（忽略）：%s", e)
     _energy_spend(why="模型调用")
     _tok = MAX_TOKENS
-    try:      # 「要长输出」（写代码/网页/长文）时别被预设里的 512 卡住（见 `_wants_long_output`）
-        if _wants_long_output((messages or [{}])[-1].get("content") if messages else ""):
+    try:
+        # ⚠️ **判据要看"用户这一句"**，不是 `messages[-1]` —— 实测踩到：那一栏常常是
+        #    拼好的长上下文（system/检索/历史），拿它判"要不要长输出"会判成 False，
+        #    于是额度还是预设里的 512 → 页面写到一半就断（925 字 ≈ 512 token，正是这个数）。
+        _probe = str(_CTX.get("user_input") or "")
+        if not _probe and messages:
+            _probe = str((messages[-1] or {}).get("content") or "")
+        if _wants_long_output(_probe):
             _tok = max(_tok, 2048)
+            LOG.info("长输出请求 → 本轮额度提到 %d（预设里是 %d）｜用户：%s", _tok, MAX_TOKENS, _probe[:40])
     except Exception:      # noqa: silent-ok
         pass
     payload = {"messages": messages,
@@ -4461,9 +4468,18 @@ def _wants_long_output(text):
 
 
 def _unclosed_fence(text):
-    """这段回答里**代码围栏是不是没闭合**（= 被输出长度截断了）。"""
+    """这段回答是不是**被输出长度截断了**（代码围栏开着、后面没有再出现围栏）。
+
+    ⚠️ 第一版只数 ``` 的奇偶 —— 实测**误判**：模型答完一个完整 HTML 页面后，
+    后面又带了一个单独的 ```（收尾排版），总数成了奇数 → 载体就往一条**已经写完**的回答后面
+    贴了一句"没写完就被截断了，说「继续」我就接着写"，纯属冤枉它、还误导用户。
+    所以判据收紧成两条同时成立：① ``` 个数是奇数；② **最后 200 字里一个围栏都没有**
+    （真的被截断时，末尾一定是停在正文/代码中间，不会刚好又出现围栏）。
+    """
     s = str(text or "")
-    return s.count("```") % 2 == 1
+    if s.count("```") % 2 == 0:
+        return False
+    return "```" not in s[-200:]
 
 
 def _continue_if_truncated(answer, user_input, max_rounds=2):
@@ -4830,12 +4846,43 @@ def _alt_write_on_overwrite(name, args, deny):
     return ""
 
 
+def _no_delete_guard_on():
+    """删除禁区**现在开着吗**？（2026-09-21 按用户要求改成了"默认关"）
+
+    【用户的原话】「我建议删掉，你这个误伤源太 tm 多了，我不能发现一个让你删一个吧」——
+    他的意思很清楚：这条红线的**误伤**（把"让他写代码看看"里的 `> *` / `$()` 当成删除动作、
+    把生成的代码整段替换成告警）已经比他想要的保护更烦人了。
+
+    【怎么做才算"删掉"】**只加不删**（本项目规矩）：`core/security/no_delete.py` 一行不动、
+    自测也一个不删 —— 只是**默认不再接线**。想开回来：
+      · 控制文件 `capabilities.no_delete_guard: true`，或
+      · 环境变量 `XIAOJIAO_NO_DELETE=1`
+    开了以后行为与之前完全一致（删除一律拒、覆盖一律拒、命令里的删除也拒）。
+
+    【代价必须写明】关掉之后它**真的能删你的文件**：没有回收站、不可逆。
+    """
+    import os as _os
+    if str(_os.environ.get("XIAOJIAO_NO_DELETE") or "").strip() in ("1", "true", "True", "on"):
+        return True
+    try:
+        v = CAP.get("no_delete_guard", None)
+        if v is None:
+            return False          # 没配过 = 默认关（按用户要求）
+        return bool(v) if not isinstance(v, str) else v.strip().lower() in ("1", "true", "yes", "on")
+    except Exception:      # noqa: silent-ok — 读不到就按默认（关）
+        return False
+
+
 def _delete_redline(name, args):
     """删除红线检查。返回空串 = 放行；非空 = 给用户看的**可读**拒绝提示。
 
     一律 try/except：安全模块自己出问题时**宁可放行也不能把工具链打死**
     （安全是加法，不该拿整个系统陪葬）。但会在日志里留 WARNING，绝不静默。
+
+    【2026-09-21】进来先看开关：`_no_delete_guard_on()` 为假 → 直接放行（理由见那个函数）。
     """
+    if not _no_delete_guard_on():
+        return ""
     kind = _DELETE_GUARD_TOOLS.get(name)
     if not kind:
         return ""
@@ -9660,7 +9707,27 @@ def _code_heal_answer(user_input):
     """代码治病主流程：**生成 → 跑 → 失败则诊断 → 改 → 再跑**。通过即输出。
 
     返回可直接作为回答的文本（失败也返回文本，如实说明卡在哪 —— 不假装成功）。
+
+    【2026-09-21 加第一道闸：**用户只要"看看代码"时，压根不走这条链**】
+      用户实测（原话）：「我说写代码给我看展示到 web，没让他调用工具」——
+      他让写一个完整的 HTML 页面，这条链却去**生成 Python 并真跑它**，跑的时候红线命中
+      （`> *` / `$(...)` 这类被当成删除动作）→ 整条回答被替换成一段「删除禁区」告警，
+      **他要的页面一个字都没看到**。
+      判据用现成的 `_wants_content_not_file`（"要内容"= 当场看看），命中就直接返回空串，
+      交回普通对话那条路（那边现在会当场把内容贴出来）。
     """
+    try:
+        _u = str(user_input or "")
+        _look_html = any(w in _u.lower() for w in ("html", "网页", "页面", "css", "前端", "界面", "canvas", "粒子"))
+        if _wants_content_not_file(_u) is True or _look_html:
+            # 【为什么把"网页/HTML/前端"也算进来】这条链只会**生成 Python 并真跑它** ——
+            #   用户要一个 HTML 页面，它去生成 Python、跑不动、还可能撞红线，最后把用户要的页面
+            #   替换成一段告警（实测截图）。前端这种东西本来就该**当场贴出来**给人看，不归它管。
+            LOG.info("代码治病：这一轮要的是**看代码**（或要的是网页/前端）→ 不走这条路｜用户：%s",
+                     _u[:40])
+            return ""
+    except Exception as e:      # noqa: silent-ok — 判不出来就照老路走（保守）
+        LOG.debug("代码治病：要内容判定失败（忽略）：%s", e)
     try:
         from core import diagnose_code as DC
     except Exception as e:      # noqa: silent-ok — 模块不在就退回普通回答
@@ -9682,11 +9749,13 @@ def _code_heal_answer(user_input):
     res = DC.heal(code, lambda msgs: llm_chat(msgs) or "",
                   max_rounds=3, web_fn=_heal_web, web_rounds=1)
     if res.get("blocked"):
-        LOG.info("代码治病：**红线拦截**，不重试也不查网络")
-        return ("这段代码里命中了载体的**删除禁区**，我拒绝执行它。\n\n"
-                "原因：%s\n\n"
-                "删除是不可逆操作，载体在任何情况下都不代跑这类代码。"
-                "如果确实需要删除文件，请你自己手动执行。" % res["blocked"])
+        # 【2026-09-21 改：**别把用户要的代码吞掉**】原来这里直接把整条回答换成一段"删除禁区"告警 ——
+        #   用户要的是页面/代码，结果一个字没看到，只看到告警（实测截图就是这么来的）。
+        #   红线照旧不跑那段代码（这是对的），但**代码本身要原样给他**，并说清"载体没跑它"。
+        LOG.info("代码治病：**红线拦截**，不跑这段代码 —— 改成把代码原样交给用户")
+        return ("（载体**没有替你运行**这段代码 —— 它里面有删除动作，被红线挡住了：%s\n"
+                "代码本身照原样给你，要不要跑你自己决定。）\n\n```python\n%s\n```"
+                % (str(res["blocked"])[:160], code))
     rounds = res.get("rounds", 0)
     if res["ok"]:
         LOG.info("代码治病：第 %d 轮跑通，直接输出真实运行结果", rounds)
