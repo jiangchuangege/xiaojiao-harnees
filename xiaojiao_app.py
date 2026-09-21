@@ -4557,6 +4557,23 @@ def _carrier_block_answer(kind, detail=""):
             body = (body.split("\n", 1)[1] if "\n" in body else body[len(_CARRIER_MACHINE):]).strip()
         if not body:
             return ""
+        # 【2026-09-21 再加一手：把裸内容包成**正常的代码块**】用户实测截图里，回答是一条平铺的
+        #   正文，第一行孤零零一个 `html`，下面才是页面 —— 因为模型把语言名写进了 write_file 的
+        #   `content` 里，载体只是照实把它贴出来。这里做两件事（都不改内容本身）：
+        #     ① 首行是**光秃秃的语言名**（html/python/css/…）→ 认成语言标记，不单独留一行；
+        #     ② 内容里还没有围栏 → 用 ```<语言> 包起来，界面上才是**代码块**而不是一片正文。
+        _lang = ""
+        _first, _sep, _rest = body.partition("\n")
+        if _sep and _first.strip().lower() in (
+                "html", "htm", "python", "py", "css", "js", "javascript", "json", "bash", "sh",
+                "shell", "text", "sql", "java", "c", "cpp", "c++", "go", "rust", "ts",
+                "typescript", "xml", "yaml", "yml", "ini", "toml", "powershell", "ps1"):
+            _lang = _first.strip().lower()
+            if _lang == "py":
+                _lang = "python"
+            body = _rest.strip("\n")
+        if "```" not in body:
+            body = "```%s\n%s\n```" % (_lang, body)
         # 「没准备好」那种**没有内容可端**，就别再加"这段是它当场写的内容"那句尾巴了
         # （用户实测看到过"没有内容 + 一句说这是它写的内容"的组合，读起来自相矛盾）。
         if "没把内容准备好" in body:
