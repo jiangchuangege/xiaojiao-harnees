@@ -1,0 +1,17 @@
+{
+  "name": "nginx-vts",
+  "description": "Nginx流量监控",
+  "tools": [
+    {
+      "name": "get_nginx_status",
+      "description": "获取 Nginx 实时流量状态。什么时候用：用户问「nginx 状态」「流量」「请求数」「错误数」「响应时间」时。无参数。输出 Nginx 的 JSON 统计数据。",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "method": "GET",
+      "url": "http://127.0.0.1:9913/status?format=json",
+      "response": "json"
+    }
+  ]
+}
