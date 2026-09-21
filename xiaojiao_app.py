@@ -4199,9 +4199,15 @@ def llm_chat(messages, temperature=None):
     except Exception as e:      # noqa: silent-ok — 对账失败绝不许挡住说话
         LOG.debug("说话前的模型名对账失败（忽略）：%s", e)
     _energy_spend(why="模型调用")
+    _tok = MAX_TOKENS
+    try:      # 「要长输出」（写代码/网页/长文）时别被预设里的 512 卡住（见 `_wants_long_output`）
+        if _wants_long_output((messages or [{}])[-1].get("content") if messages else ""):
+            _tok = max(_tok, 2048)
+    except Exception:      # noqa: silent-ok
+        pass
     payload = {"messages": messages,
                "temperature": (TEMPERATURE if temperature is None else float(temperature)),
-               "max_tokens": MAX_TOKENS}
+               "max_tokens": _tok}
     for _t in _llm_targets():
         _p = dict(payload, model=_t["model"])
         resp, code, body = _llm_post(_t, _p, timeout=(_local_timeout_s() if _t.get('local') else CLOUD_TIMEOUT_S))
@@ -4429,6 +4435,71 @@ def _carrier_block(text):
         s = str(text or "")
         return any(m in s for m in ("🚫", "删除禁区", "〔待确认〕", "安全红线", "SSRF", "请求太频繁"))
 
+
+
+def _wants_long_output(text):
+    """这句话是不是**需要很长输出**（写代码 / 写网页 / 长文）？
+
+    【为什么必须单列（用户实测 2026-09-21）】他让写一个完整 HTML 页面，得到的是**写了一半**的代码
+    （CSS 写到一半就断了，后面直接跟一句"元认知·自评 C"）——
+    根因：他当时用的预设「闲聊陪伴」把 `behavior.max_tokens` 设成了 **512**，
+    512 token 装不下一个页面。预设是给闲聊调的语气，不该顺手把"写代码"的额度也砍到 512。
+    所以这里按**这一轮要干什么**给额度：要长输出就至少 2048（用户配得更大就听用户的）。
+    """
+    t = str(text or "")
+    if not t:
+        return False
+    try:
+        if _wants_content_not_file(t) is True:
+            return True
+    except Exception:      # noqa: silent-ok
+        pass
+    marks = ("写代码", "写段代码", "写一个", "写个", "完整", "全部代码", "整段代码",
+             "网页", "页面", "html", "HTML", "css", "CSS", "js", "脚本", "函数",
+             "长文", "写一篇", "写一篇文章", "详细说明", "展开讲")
+    return any(w in t for w in marks)
+
+
+def _unclosed_fence(text):
+    """这段回答里**代码围栏是不是没闭合**（= 被输出长度截断了）。"""
+    s = str(text or "")
+    return s.count("```") % 2 == 1
+
+
+def _continue_if_truncated(answer, user_input, max_rounds=2):
+    """被输出长度截断就**自动接着写**（最多补两轮），并把补的内容原样接在后面。
+
+    【为什么由载体做】用户要的是"一个完整的页面/一段完整的代码"，不是"写一半"。
+    续写要求只有一条：**接着写，不要重复已有的内容、不要再从头来**（照抄给模型的指令）。
+    失败/续不动就原样返回 —— 绝不编，也绝不假装写完了。
+    """
+    out = str(answer or "")
+    if not out or "```" not in out:
+        return out
+    for _i in range(int(max_rounds)):
+        if not _unclosed_fence(out):
+            break
+        try:
+            _tail = out[-1500:]
+            _ask = ("你刚才那段被输出长度截断了（下面是你已经写出来的最后一段）。"
+                    "**接着往下写**，紧接着最后一个字符继续，不要重复、不要重新开头、不要解释：\n"
+                    "--------\n%s\n--------" % _tail)
+            _more = llm_chat([{"role": "user", "content": _ask}], temperature=0.3)
+        except Exception as e:      # noqa: silent-ok — 续写失败就用原来的
+            LOG.debug("截断续写失败（忽略）：%s", e)
+            break
+        if not _more or not str(_more).strip():
+            break
+        _add = str(_more).strip()
+        if _add in out[-400:]:      # 它把上一段又抄了一遍 → 别接，免得重复
+            LOG.info("截断续写：它把已有内容又抄了一遍 → 不接")
+            break
+        out = out.rstrip() + "\n" + _add
+        LOG.info("截断续写：第 %d 轮接上 %d 字（围栏仍未闭合=%s）",
+                 _i + 1, len(_add), _unclosed_fence(out))
+    if _unclosed_fence(out):
+        out = out.rstrip() + "\n```\n\n（上面这段**没写完就被输出长度截断了** —— 说「继续」我就接着写。）"
+    return out
 
 _CARRIER_MACHINE = "【载体动作】"     # **机器专用标记**：给健康系统看，展示前剥掉（见下）
 
@@ -5141,7 +5212,7 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
         # 与后台任务（自主性/世界层也在用同一个常量）—— 按轮传参才是正确的作用域。
         _temp_use = TEMPERATURE if temperature is None else float(temperature)
         payload = {"model": _t["model"], "messages": m, "temperature": _temp_use,
-                   "max_tokens": (200 if lean else MAX_TOKENS),
+                   "max_tokens": (200 if lean else max(MAX_TOKENS, 2048) if _wants_long_output(_CTX.get("user_input") or "") else MAX_TOKENS),
                    "tools": ([] if lean else _build_tools(only=tools_subset))}
         try:
             r, _code, _body = _llm_post(_t, payload, timeout=(_local_timeout_s() if _t.get('local') else CLOUD_TIMEOUT_S))
@@ -12138,6 +12209,12 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                          _dw, _u[:40])
         except Exception as e:      # noqa: silent-ok — 兜底失败就用它原来的回答
             LOG.debug("用户事实兜底失败（忽略）：%s", e)
+        # ---- 被输出长度截断就**自动接着写**（用户实测：让写个完整页面，得到的是写了一半的 CSS）----
+        #   放在所有"改正/兜底"之前：先把内容补全，再谈更正与标注。
+        try:
+            answer = _continue_if_truncated(answer, user_input_ctx)
+        except Exception as e:      # noqa: silent-ok — 续写失败就用它原来那份
+            LOG.debug("截断续写失败（忽略）：%s", e)
         # ---- 「我无法联网」这类**与事实相反的自我否认**：这一轮真检索了就得改正 ----
         # 【用户实测】工具轨迹里明明有 5 条检索结果，它却答「我目前无法实时联网搜索今天的新闻」——
         #   把自己刚做过的事说成做不到，比答错更伤信任。
