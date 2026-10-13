@@ -11,7 +11,7 @@
 healthCheckTimeout: 300
 models:
   xiaojiao:
-    cmd: C:/llama/llama-server.exe --port ${PORT} --model C:/llama/xiaojiao1.0-4B.gguf -c 20000 -ngl 99 --reasoning off
+    cmd: C:/llama/llama-server.exe --port ${PORT} --model C:/llama/xiaojiao1.0-4B.gguf -c 20000 -ngl 99 -fa on -ctk q8_0 -ctv q8_0 --reasoning off
     ttl: 0               # 不自动卸载(由小焦/视频切换时主动 unload)
     useModelName: xiaojiao1.0-4B
   coder:
