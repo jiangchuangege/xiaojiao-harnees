@@ -87,6 +87,23 @@ def _local_segments(want_sec, fps=16, max_frames=81):
     return out
 
 
+def video_busy(max_age=6 * 3600.0):
+    """现在有没有视频任务正占着显存（本地路径的切换/生成阶段）。
+
+    【为什么要暴露这个判断】2026-10-14 实测：本地视频跑到第 1/3 段时，llama-swap 把**聊天模型**
+    又装回了显存（大脑看门狗把掉线的 9292 拉起来之后，或某次内部调用把模型带起来了）——
+    8G 卡上两样同时在，Wan 只能大量往内存里搬，**一段 81 帧从 15 分钟变成 50 分钟**。
+    本地视频这条路本来就是"把显存让给它"，所以这期间任何"把大脑装回来"的动作都得先问一句这里。
+    """
+    now = time.time()
+    for j in _jobs.values():
+        if j.get("state") in ("switching", "generating"):
+            ts = float(j.get("ts") or 0)
+            if not ts or (now - ts) <= max_age:      # 只认"还新鲜"的，避免历史脏记录永久占着
+                return True
+    return False
+
+
 def _job_seconds(job_id):
     """这一单要几秒。用户要的是「至少 15 秒」, 所以缺省目标就是 15 秒(而不是以前的 1.4 秒)。"""
     try:

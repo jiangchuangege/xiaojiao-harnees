@@ -7,7 +7,7 @@
 #     · 「他生成的视频都没有声音呢」：台词那一栏根本不存在，于是**从界面生成的视频永远是哑的**。
 #   后端其实早就支持 seconds / narrate 了（`/api/video` 收、`_worker` 用），是**界面没接上**。
 # 这套测试钉的就是这条线：界面发得出去、后端收得到、默认值也诚实。
-import os, sys, json
+import os, sys, json, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -98,6 +98,18 @@ def main():
     ok("界面上有协议折叠框与三个按钮",
        'id="s_m_vapi"' in src and "checkVideoApi()" in src and "loadVideoApi()" in src)
     ok("界面会拦住非法 JSON（不许把坏 JSON 存进去）", "不是合法 JSON" in src)
+
+    # ---- 显存让位：本地视频在跑时，不许把聊天模型装回显存（2026-10-14 实测慢 3 倍的那个坑）----
+    va._jobs.clear()
+    ok("没有视频任务时：不算占用", va.video_busy() is False)
+    va._jobs["g"] = {"state": "generating", "ts": time.time()}
+    ok("视频生成中：算占用", va.video_busy() is True)
+    ok("视频在跑时：看门狗不去拉大脑（源码里那道门在）",
+       "_video_holds_vram()" in src and "_video_holds_vram" in src)
+    ok("视频在跑时：内部调用不装大脑", "显存正让给本地视频生成" in src)
+    va._jobs["g"] = {"state": "done", "ts": time.time()}
+    ok("视频做完：占用解除", va.video_busy() is False)
+    va._jobs.clear()
 
     print("\n通过 %d 项, 失败 %d 项" % (len(PASS), len(FAIL)))
     if FAIL:

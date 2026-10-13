@@ -4188,6 +4188,13 @@ def llm_chat(messages, temperature=None):
     if _brain_asleep():
         LOG.info("挂起中：拒绝调用大脑（chat）—— 它在睡，不推理、不占显存")
         return None
+    # 【显存正被本地视频占着的时候不装大脑（2026-10-14 实测）】
+    #   本地视频生成期间把聊天模型装回显存 → 8G 卡上两样打架 → 视频慢 3 倍（一段 81 帧 15 分钟变 50 分钟）。
+    #   本地视频本来就是"显存全让给它"，所以这期间内部调用一律不做（等同"它在忙别的"），
+    #   由上层如实告诉用户原因，而不是偷偷把模型装回去。
+    if _video_holds_vram():
+        LOG.info("显存正让给本地视频生成 → 这一轮不调用大脑（不抢显存）")
+        return None
     # 【第一次真要说话之前，先把"本地模型名"对一次账（2026-09-21）】
     #   放在这里是因为它**只试一次**、且必须在 `_llm_targets()` 取值**之前** ——
     #   否则配置里那个显示名（`xiaojiao1.0-4B`）会原样发出去，llama-swap 回
@@ -15517,11 +15524,35 @@ _BRAIN_WD_EVERY = 45.0         # 看门狗自己巡检的间隔（秒）
 _BRAIN_WD_LOCK = threading.Lock()
 
 
+def _video_holds_vram():
+    """本地视频正在生成吗（它占着显存，这期间不该把聊天模型装回去）。
+
+    【为什么要有这道门（2026-10-14 实测）】本地视频跑到第 1/3 段时，聊天模型被装回了显存 ——
+    8G 卡上两样同时在，Wan 只能大量往内存搬，**一段 81 帧从 15 分钟变成 50 分钟**（实测三次）。
+    本地视频这条路的设计本来就是"把显存让给它"（见 `docs/video.md` 的显存让位策略），
+    所以这期间：① 看门狗不重启大脑；② 内部模型调用直接跳过（返回 None，等同"它在忙别的"）。
+    读不到视频模块时返回 False —— 不许因为它坏了就把大脑也锁死。
+    """
+    try:
+        import sys as _sys
+        vdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "video_service")
+        if vdir not in _sys.path:
+            _sys.path.insert(0, vdir)
+        import video_api as _va
+        return bool(_va.video_busy())
+    except Exception as e:      # noqa: silent-ok — 读不到就当作"没有视频在跑"
+        LOG.debug("查视频占用失败（忽略）：%s", e)
+        return False
+
+
 def _brain_watchdog_round():
     """巡检一轮。返回**一句实话**（空串 = 不用报）。"""
     base = (CONTROL.get("brain", {}).get("api", {}).get("base_url", "") or "")
     if "9292" not in base:
         return ""                       # 现在的大脑不是这条线（比如切了云端）→ 不归它管
+    if _video_holds_vram():
+        # 本地视频正占着显存：这期间**不拉大脑**（拉起来就会把显存抢回去，视频慢好几倍）
+        return ""
     try:
         if requests.get("http://127.0.0.1:9292/v1/models", timeout=4).status_code == 200:
             return ""                   # 活着，什么都不做
