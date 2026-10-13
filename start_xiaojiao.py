@@ -149,10 +149,19 @@ def start_llama_brain():
         print(f"⚠️ 没找到大模型文件/服务，跳过自动启动（小焦将用自建模型兜底）。")
         return None
     ctx = BRAIN.get("llama", {}).get("ctx", 32768)
-    print(f"🧠 正在启动大脑 {MODEL_NAME} (~{os.path.getsize(gguf)/1e9:.1f}GB) ...")
-    proc = subprocess.Popen(
-        [server, "-m", gguf, "--port", str(port), "-c", str(ctx)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # 【2026-10-13 实测：这条直连命令原来**没带 -ngl**，于是推理全在 CPU 上】
+    #   用户的原话是「每次都思考好几分钟」；日志里「感知层」那一句跨了 **75 秒**（一次模型调用）。
+    #   实测同一句话：不带 -ngl 几十秒一次；带 `-ngl 99` 之后第 2 次 **0.2 秒**，显卡占用 7.9GB。
+    #   这条对**全新下载的副本**尤其要紧 —— 仓库里不含 `llama-swap/` 二进制，
+    #   所以新下载的副本只能走这条直连线，不带 -ngl 就是"每次几分钟"那种体验。
+    #   `-ngl 0` = 明确不用显卡（给显存不够的人留的开关，写在控制文件 `brain.llama.ngl`）。
+    ngl = int((BRAIN.get("llama", {}) or {}).get("ngl", 99) or 0)
+    print(f"🧠 正在启动大脑 {MODEL_NAME} (~{os.path.getsize(gguf)/1e9:.1f}GB)"
+          f"{'（放到显卡：-ngl %d）' % ngl if ngl else '（用 CPU）'} ...")
+    _cmd = [server, "-m", gguf, "--port", str(port), "-c", str(ctx)]
+    if ngl:
+        _cmd += ["-ngl", str(ngl)]
+    proc = subprocess.Popen(_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # 等待模型就绪
     for _ in range(120):
         try:
