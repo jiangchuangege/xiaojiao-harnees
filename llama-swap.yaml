@@ -11,7 +11,7 @@
 healthCheckTimeout: 300
 models:
   xiaojiao:
-    cmd: C:/llama/llama-server.exe --port ${PORT} --model C:/llama/xiaojiao1.0-4B.gguf -c 20000 --reasoning off
+    cmd: C:/llama/llama-server.exe --port ${PORT} --model C:/llama/xiaojiao1.0-4B.gguf -c 20000 -ngl 99 --reasoning off
     ttl: 0               # 不自动卸载(由小焦/视频切换时主动 unload)
     useModelName: xiaojiao1.0-4B
   coder:
@@ -19,7 +19,7 @@ models:
     #   实测那个文件**不存在**（模型被挪到了 `G:/moxing__xiaojiao/工具调用模型/`）。
     #   后果：路由键 `coder` 看着在配置里，实际一调就起不来 —— 而且它不会报错，只会一直等。
     #   现在按实测路径写上；换盘/挪目录时记得一起改这里（`tools/check_brain_paths.py` 可体检）。
-    cmd: "C:/llama/llama-server.exe --port ${PORT} --model G:/moxing__xiaojiao/工具调用模型/Qwen3-8B-Q4_K_M.gguf -c 20000 --reasoning off"
+    cmd: "C:/llama/llama-server.exe --port ${PORT} --model G:/moxing__xiaojiao/工具调用模型/Qwen3-8B-Q4_K_M.gguf -c 20000 -ngl 99 --reasoning off"
     ttl: 0
     useModelName: qwen3-8b
   # 未来可加更多大脑(填进 models 即可被调度):
@@ -27,7 +27,7 @@ models:
   #   cmd: ... --port ${PORT} --model <deepseek.gguf>
   #   ttl: 0
   deepseek-v4:
-    cmd: "C:/llama/llama-server.exe --port ${PORT} --model G:/moxing__xiaojiao/推理模型/DeepSeek-V4-Pro-Qwen3.5-4B-MTP-Q8_0.gguf -c 20000 --reasoning off"
+    cmd: "C:/llama/llama-server.exe --port ${PORT} --model G:/moxing__xiaojiao/推理模型/DeepSeek-V4-Pro-Qwen3.5-4B-MTP-Q8_0.gguf -c 20000 -ngl 99 --reasoning off"
     ttl: 0
     useModelName: deepseek-v4
   qwopus3.5-4b-coder-mtp-q5_k_m.gguf:
@@ -38,6 +38,6 @@ models:
     #   「unsupported error: upstream command exited prematurely」→ 页面显示 HTTP 500。
     #   实测复现：直接起一次 llama-server 拿到同一行 `invalid argument`，所以根因不是模型坏了、也不是显存。
     #   （`${PORT}` 是 llama-swap 的占位符，在**双引号**里才会被替换，所以外层用单引号、内层用双引号。）
-    cmd: 'C:/llama/llama-server.exe --port ${PORT} --model "C:/xiaojiao/xiaojiao harness/Qwopus3.5-4B-Coder-MTP-Q5_K_M.gguf" -c 20000 --reasoning off'
+    cmd: 'C:/llama/llama-server.exe --port ${PORT} --model "C:/xiaojiao/xiaojiao harness/Qwopus3.5-4B-Coder-MTP-Q5_K_M.gguf" -c 20000 -ngl 99 --reasoning off'
     ttl: 0
     useModelName: qwopus3.5-4b-coder-mtp-q5_k_m.gguf
