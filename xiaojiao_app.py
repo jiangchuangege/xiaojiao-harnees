@@ -4520,6 +4520,70 @@ def _continue_if_truncated(answer, user_input, max_rounds=2):
 _CARRIER_MACHINE = "【载体动作】"     # **机器专用标记**：给健康系统看，展示前剥掉（见下）
 
 
+_EMPH_RE = re.compile(r"(\*\*?)(\S(?:[^*]*?\S)?)\1", re.S)
+
+
+def _fix_cjk_emphasis(text):
+    """把**渲染不出来的加粗/斜体记号去掉**（中文旁边的星号会原样显示）。
+
+    【用户截图实测】它写：`*"给乖孙女，愿你永远快乐。"*`
+      —— 开记号**前面是汉字**、**后面紧跟着引号**，按 CommonMark 的侧翼规则**不成对**，
+      于是页面上原样显示出两个 `*`（用户看到的就是"格式不对、符号跑到外面")。
+    【判据】和仓库里那份 `tools/check_md_emphasis.py` 用的是同一套规则：
+      · 左翼成立 = 后面不是空白 且（后面不是标点 或 前面是空白/标点）；
+      · 右翼成立 = 前面不是空白 且（前面不是标点 或 后面是空白/标点）。
+      不成立的那一对 → **只去掉记号、文字一个字不动**（用户要的是字，不是星号）。
+    【作用范围】**只在它渲染不出来时**才动手：能正常渲染的 `**加粗**` 原样保留。
+    """
+    s = str(text or "")
+    if "*" not in s:
+        return s
+
+    def _repl(m):
+        mark, inner = m.group(1), m.group(2)
+        i = m.start()
+        before_open = s[i - 1] if i > 0 else ""
+        after_open = s[i + len(mark)] if i + len(mark) < len(s) else ""
+        end = m.end()
+        before_close = s[end - len(mark) - 1] if end - len(mark) - 1 >= 0 else ""
+        after_close = s[end] if end < len(s) else ""
+        # 【判据：**只要记号贴着中文（或中文标点）就去掉**】
+        #   为什么不再去算 CommonMark 那套侧翼：实测严格按侧翼算是"能渲染"的
+        #   （`：*"…"*` 前面是标点、后面是行尾 → 左右翼都成立），
+        #   可**用户界面上就是原样显示了两个星号**（他自己的截图）。
+        #   也就是说：页面上那套渲染器跟 CommonMark 不一致，再去抠规则只会继续对不上。
+        #   所以换一条**看得见效果**的判据：记号挨着中文/中文标点 → 去掉记号、只留文字；
+        #   完全被空白或 ASCII 词隔开的 `**bold**` 才保留（那种到处都能渲染）。
+        if _cjk_touch(before_open) or _cjk_touch(after_open) \
+                or _cjk_touch(before_close) or _cjk_touch(after_close):
+            LOG.debug("去掉贴中文的强调记号：%r → %r", m.group(0)[:24], inner[:24])
+            return inner
+        return m.group(0)
+
+    try:
+        return _EMPH_RE.sub(_repl, s)
+    except Exception as e:      # noqa: silent-ok — 改不动就原样返回，绝不因为"排版"丢内容
+        LOG.debug("强调记号清理失败（忽略）：%s", e)
+        return s
+
+
+def _cjk_touch(ch):
+    """这个字符是不是中文/中文标点（用来判"星号是不是贴着中文"）。"""
+    if not ch:
+        return False
+    o = ord(ch)
+    return (0x3400 <= o <= 0x9FFF) or (0x3000 <= o <= 0x303F) or (0xFF00 <= o <= 0xFFEF) \
+        or (0x2000 <= o <= 0x206F)
+
+
+def _is_ws(ch):
+    return ch == "" or str(ch).isspace()
+
+
+def _is_punct(ch):
+    return bool(ch) and (ch in "。，：；！？、（）「」『』《》〈〉【】…—·“”‘’,.;:!?()[]{}<>\"'")
+
+
 def _carrier_kind(result):
     """这段载体结果属于哪一类 —— 决定**给用户看的时候要不要那行告警横幅**。
 
@@ -12318,6 +12382,11 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             answer = _continue_if_truncated(answer, user_input_ctx)
         except Exception as e:      # noqa: silent-ok — 续写失败就用它原来那份
             LOG.debug("截断续写失败（忽略）：%s", e)
+        # ---- 排版：把**渲染不出来的**强调记号去掉（用户截图：`*"给乖孙女…"*` 原样带星号）----
+        try:
+            answer = _fix_cjk_emphasis(answer)
+        except Exception as e:      # noqa: silent-ok — 排版失败不许影响内容
+            LOG.debug("强调记号清理失败（忽略）：%s", e)
         # ---- 「我无法联网」这类**与事实相反的自我否认**：这一轮真检索了就得改正 ----
         # 【用户实测】工具轨迹里明明有 5 条检索结果，它却答「我目前无法实时联网搜索今天的新闻」——
         #   把自己刚做过的事说成做不到，比答错更伤信任。
