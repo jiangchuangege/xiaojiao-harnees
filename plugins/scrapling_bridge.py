@@ -2489,10 +2489,24 @@ class ScraplingBridge:
             _to = float(p.get("timeout") or 0)
         except Exception:
             _to = 0.0
+        # 【2026-10-13 实测：**NVD 在用户这条网络上连不通**】他的原话是「我让他抓取最新的 7 天漏洞他直接卡死」，
+        #   日志原话：`NVD 接口请求失败：请求超时：目标响应太慢`、`网络请求失败：(Connection…)`。
+        #   原来这里 timeout 没给就吃下游的默认值（几十秒），失败前**光等就等满**，
+        #   再叠上一轮里那几次模型调用（各 ~60 秒）→ 用户看到的就是"卡死"。
+        #   所以：**默认给一个短超时**（12 秒），失败就**立刻如实说**，不再让人干等。
+        #   显式传 timeout 仍然听调用方的（工具表里那个参数还能用）。
+        if _to <= 0:
+            _to = 12.0
         status, body, err = self._fetch_raw(first, timeout=_to)
         if err:
-            return fmt_result(0, first, "", "NVD 接口请求失败：%s（稍等几分钟再试，NVD 无密钥时限流较严）"
-                              % _humanize_error(err)[:120])
+            return fmt_result(0, first, "",
+                              "⚠️ NVD 官方接口这次没连上：%s\n\n"
+                              "这不是「模型不会」，是**这台机器到 NVD 的网络不通/太慢**"
+                              "（超时已限在 %.0f 秒，失败即止，不再干等）。"
+                              "可以：① 过几分钟再试（NVD 无密钥时限流严）；"
+                              "② 换成别的源（GitHub 安全公告 / CISA KEV / 阿里云漏洞库）；"
+                              "③ 直接给我 CVE 编号，我就那条查。"
+                              % (_humanize_error(err)[:120], _to))
         data = _loads_nvd(body)
         if data is None:
             return fmt_result(status, first, "",
