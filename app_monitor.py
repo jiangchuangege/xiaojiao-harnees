@@ -38,7 +38,7 @@ def _gpu_procs():
     import re
     try:
         r = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,used_memory,process_name", "--format=csv,noheader,nounits"],
-                           capture_output=True, text=True, timeout=6)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=6)
         if r.returncode != 0:
             return {}
         procs = {}
@@ -58,7 +58,7 @@ def _gpu_procs():
 
 def _nvidia():
     try:
-        r = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=6)
+        r = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=6)
         if r.returncode == 0:
             u, t = r.stdout.strip().split(",")[:2]
             return int(u), int(t)

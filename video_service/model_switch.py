@@ -44,7 +44,7 @@ def _llama_swap_url():
 def _pid_on_port(port):
     try:
         import subprocess as _sp
-        out = _sp.run(["netstat", "-ano"], capture_output=True, text=True, timeout=10).stdout
+        out = _sp.run(["netstat", "-ano"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10).stdout
         for line in out.splitlines():
             if ":%d " % port in line and "LISTENING" in line:
                 try:
@@ -115,7 +115,7 @@ def _set(phase, message="", progress=None, error=None):
 def _pid_on_port(port):
     """用 netstat 找到占用端口的 PID（Win）。"""
     try:
-        out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, timeout=15).stdout
+        out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15).stdout
         for line in out.splitlines():
             if ":%d" % port in line and "LISTENING" in line:
                 parts = line.split()
