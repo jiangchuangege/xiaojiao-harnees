@@ -1,7 +1,7 @@
 # video_service/video_api.py —— Web 扩展（Blueprint）：真·文生视频（ComfyUI + Wan2.1）
 # 模型按需切换：卸载大脑 → 起 ComfyUI → 生成 → 卸载 ComfyUI → 恢复大脑（对用户透明）
 # 任务状态用普通 dict 读写（GIL 安全），不持锁 —— 避免模型切换/任务线程把状态接口堵死。
-import os, json, threading, datetime, time
+import os, json, threading, datetime, time, math
 from flask import Blueprint, request, jsonify
 import config, model_switch as ms, comfy_client as cc
 import logging  # noqa: F401  （由 tools/fix_silent_except.py 注入）
@@ -68,6 +68,43 @@ def _keep_warm_flag():
         return False
 
 
+def _local_segments(want_sec, fps=16, max_frames=81):
+    """本地 Wan2.1 要凑够 want_sec 秒, 拆成几段、每段几帧。
+
+    Wan 只吃 4k+1 帧(9/33/81/...), 一次最多 81 帧。81 帧 @16fps ≈ 5.06 秒 → 15 秒 = 3 段。
+    返回 [(帧数, fps), ...], 最后一段按余数收尾。
+    """
+    clip_sec = float(max_frames) / float(fps)
+    n = max(1, int(math.ceil(float(want_sec) / clip_sec)))
+    out = []
+    for i in range(n):
+        seg_sec = min(clip_sec, want_sec - clip_sec * i)
+        frames = int(math.ceil(seg_sec * fps))
+        # 往**上**取到 4k+1, 宁可多一两帧也不要短于用户要的秒数
+        frames = max(9, min(max_frames, ((frames - 1 + 3) // 4) * 4 + 1))
+        out.append((frames, fps))
+    return out
+
+
+def _job_seconds(job_id):
+    """这一单要几秒。用户要的是「至少 15 秒」, 所以缺省目标就是 15 秒(而不是以前的 1.4 秒)。"""
+    try:
+        v = int(float(_jobs[job_id].get("seconds") or 0))
+    except Exception:
+        v = 0
+    if v <= 0:
+        try:
+            import json as _j, os as _o
+            root = _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__)))
+            d = _j.load(open(_o.path.join(root, "xiaojiao_control.json"), encoding="utf-8"))
+            v = int(d.get("video", {}).get("seconds") or 0)
+        except Exception:
+            v = 0
+    if v <= 0:
+        v = 15            # 用户 2026-10-13: 「秒数…至少15s」
+    return max(4, min(v, 120))
+
+
 def _persist():
     try:
         json.dump(_jobs, open(_JOBS_FILE, "w", encoding="utf-8"), ensure_ascii=False)
@@ -79,7 +116,9 @@ try:
 except Exception as e:
     LOG.debug("忽略异常(%s:%d): %s", __file__, 72, e)
 
-def _load_workflow(prompt, ckpt):
+def _load_workflow(prompt, ckpt, num_frames=None, fps=None, seed=None, width=None, height=None):
+    """装 Wan2.1 工作流。可覆盖帧数/fps/种子/分辨率 —— 帧数和 fps 决定**成片几秒**:
+    33 帧 @24fps 只有 1.4 秒, 用户要 15 秒就得 81 帧 @16fps ≈ 5.06 秒 × 3 段拼。"""
     wf = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "workflow_wan.json"), encoding="utf-8"))
     model_opt = os.environ.get("XIAOJIAO_WAN_MODEL", "wan2.6-t2v")
     for node in wf.values():
@@ -87,6 +126,18 @@ def _load_workflow(prompt, ckpt):
             if isinstance(v, str):
                 v = v.replace("__CKPT__", ckpt).replace("__POS__", prompt).replace("__MODEL__", model_opt)
                 node["inputs"][k] = v
+    # 按节点号精确覆盖, 不乱改其它节点的同名键
+    n4 = wf.get("4", {}).get("inputs", {})
+    if num_frames:
+        n4["num_frames"] = int(num_frames)
+    if width:
+        n4["width"] = int(width)
+    if height:
+        n4["height"] = int(height)
+    if fps:
+        wf.get("8", {}).get("inputs", {})["fps"] = int(fps)
+    if seed is not None:
+        wf.get("5", {}).get("inputs", {})["seed"] = int(seed)
     return wf
 
 
@@ -197,6 +248,8 @@ def _refine_prompt(raw, save=True):
 
 def _worker(job_id, prompt):
     confirmed = _jobs[job_id].get("confirmed_refined") or ""
+    want_sec = _job_seconds(job_id)
+    narrate = (_jobs[job_id].get("narrate") or "").strip()
     # === 模式判定: api(云端 Agnes) vs local(本地 ComfyUI) ===
     use_cloud = video_mode() == "api"
     if use_cloud:
@@ -216,10 +269,34 @@ def _worker(job_id, prompt):
         try:
             def _ap(v):
                 try:
+                    if v is not None and int(v) < 0:
+                        # 负数 = 云端队列满, 正在排队重试(免费档 1 RPM, 每次等 60 秒)
+                        _jobs[job_id]["message"] = "云端排队中(队列满, 每 60 秒再试一次)…"
+                        _persist()
+                        return
                     _jobs[job_id]["progress"] = {"value": v, "max": 100}
                 except Exception as e:
                     LOG.debug("忽略异常(%s:%d): %s", __file__, 213, e)
-            out, vurl = _cv.generate(refined, mode="ti2vid", progress_cb=_ap)
+            _jobs[job_id].update(state="generating",
+                                 message="正在生成视频…(云端 %s, 目标 %d 秒)" % (_cv.provider(), want_sec))
+            _persist()
+            try:
+                import agenes as _ag
+            except ImportError:
+                from video_service import agenes as _ag
+            have_agnes = _cv.provider() == "agnes"
+            if have_agnes and want_sec > 12:
+                # 云端一次最长 12 秒 → 15 秒要拆两条再拼(video_audio.concat)
+                out = _ag.generate_long(refined, seconds=want_sec, narrate=narrate or None,
+                                        progress_cb=_ap)
+                vurl = ""
+            else:
+                out, vurl = _cv.generate(refined, mode="text", seconds=str(min(want_sec, 12)),
+                                         progress_cb=_ap)
+                if narrate:
+                    # 视频本身没音轨时, 用系统中文语音把台词念进画面(载体配音, 不是模型自己说话)
+                    import video_audio as _va
+                    out = _va.add_audio(out, text=narrate)
             _jobs[job_id].update(state="done", message="完成(云端 %s)" % _cv.provider(),
                                  url="/videos/" + os.path.basename(out), video_url=vurl)
             _persist()
@@ -241,19 +318,38 @@ def _worker(job_id, prompt):
         import brain_manager as _bm
         _bm.switch_to("video")
         prompt = refined
-        _jobs[job_id].update(state="generating", message="正在生成视频…(Wan2.1 FP8)")
         ckpt = config.find_checkpoint() or "dit_fp8.safetensors"
-        wf = _load_workflow(prompt, ckpt)
-        pid = cc.submit_workflow(wf)
-        def _prog(value, maxv):
-            try:
-                _jobs[job_id]["progress"] = {"value": value, "max": maxv}
-            except Exception as e:
-                LOG.debug("忽略异常(%s:%d): %s", __file__, 244, e)
-        fn, sub, ftype = cc.wait_output(pid, progress_cb=_prog)
-        name = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + "_wan"
-        out = os.path.join(config.OUT_DIR, name + (os.path.splitext(fn)[1] or ".mp4"))
-        cc.download_video(fn, sub, ftype, out)
+        # 本地 Wan2.1 一次最多 81 帧; 16fps × 81 帧 ≈ 5.06 秒。要 15 秒就生成 3 段再拼。
+        # (以前固定 33 帧 @24fps = 1.4 秒, 这就是用户说的「秒数…至少15s」的由来)
+        plan = _local_segments(want_sec)
+        segs = len(plan)
+        outs = []
+        for i, (frames, seg_fps) in enumerate(plan):
+            _jobs[job_id].update(state="generating",
+                                 message="正在生成视频…(Wan2.1 FP8, 第 %d/%d 段, %d 帧)" % (i + 1, segs, frames))
+            _persist()
+            seg_prompt = prompt if segs == 1 else "%s(第%d/%d段, 同一场景同一主体, 镜头连贯)" % (prompt, i + 1, segs)
+            wf = _load_workflow(seg_prompt, ckpt, num_frames=frames, fps=seg_fps, seed=42 + i)
+            pid = cc.submit_workflow(wf)
+            def _prog(value, maxv):
+                try:
+                    _jobs[job_id]["progress"] = {"value": value, "max": maxv}
+                except Exception as e:
+                    LOG.debug("忽略异常(%s:%d): %s", __file__, 244, e)
+            fn, sub, ftype = cc.wait_output(pid, progress_cb=_prog)
+            name = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f") + "_wan%d" % i
+            seg_out = os.path.join(config.OUT_DIR, name + (os.path.splitext(fn)[1] or ".mp4"))
+            cc.download_video(fn, sub, ftype, seg_out)
+            outs.append(seg_out)
+        if len(outs) > 1:
+            import video_audio as _va
+            out = _va.concat(outs, out=os.path.join(config.OUT_DIR,
+                                                    datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + "_wan_long.mp4"))
+        else:
+            out = outs[0]
+        if narrate:
+            import video_audio as _va2
+            out = _va2.add_audio(out, text=narrate)
         _jobs[job_id].update(state="switching", message="卸载视频模型…")
         import brain_manager as _bm2
         _bm2.switch_to("chat")
@@ -325,10 +421,15 @@ def api_video():
         if j.get("state") in ("switching", "generating"):
             return jsonify({"ok": False, "busy": True, "error": "正在生成/切换模型中，请稍候"}), 200
     job_id = datetime.datetime.now().strftime("%H%M%S%f")
-    _jobs[job_id] = {"state": "queued", "prompt": prompt, "message": "排队中", "ts": time.time()}
+    try:
+        secs = int(float(d.get("seconds") or 0))
+    except Exception:
+        secs = 0
+    _jobs[job_id] = {"state": "queued", "prompt": prompt, "message": "排队中", "ts": time.time(),
+                     "seconds": secs, "narrate": (d.get("narrate") or "").strip()[:200]}
     _persist()
     threading.Thread(target=_worker, args=(job_id, prompt), daemon=True).start()
-    return jsonify({"ok": True, "job": job_id})
+    return jsonify({"ok": True, "job": job_id, "seconds": _job_seconds(job_id)})
 
 @bp.route("/api/video/status")
 def api_video_status():

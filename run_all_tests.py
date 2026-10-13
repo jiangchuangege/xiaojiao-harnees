@@ -39,7 +39,7 @@ NEED_BRAIN = ("test_event_what_retrieval", "test_last_jump", "test_closed_loop",
               "test_profile_recall_integration", "test_impression_usage",
               "test_module_integration", "test_mind_stream_live", "test_tool_infinity_live",
               "test_perception_infinity", "test_stream_render", "test_single_request_limit")
-NEED_NET = ("test_scrape_retry", "test_bug2_dedup", "test_network")
+NEED_NET = ("test_scrape_retry", "test_bug2_dedup", "test_network", "test_agnes_live")
 SKIP_BY_NAME = NEED_BRAIN + NEED_NET
 
 # 只提醒、不判失败的项 —— **每条都要能在「为什么不是代码问题」上站得住**，否则不许往这里放：
