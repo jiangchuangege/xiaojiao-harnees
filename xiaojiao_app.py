@@ -12160,7 +12160,24 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         # ---- 闭环第三、四步：**模型判断该不该记 → 载体执行存储** ----
         # 放在回答之后：要让它看得见自己刚说了什么再判断（"你挺关注 NBA 啊"这句
         # 是它自己说的，判断依据就在里面）。**载体不参与判断。**
-        _profile_judge(user_input, answer)
+        # 【2026-10-13 挪到后台线程：它跟"回答给你看"无关，却要 4~8 秒】
+        #   实测日志：这一步（「用户画像判断」）单独花了 4~5 秒，而且**最多问两次模型**。
+        #   它判断的依据是"刚生成的回答"—— 也就是说**回答早就可以给你了**，没必要等它。
+        #   所以：**丢到后台 daemon 线程**（写画像库、记闭环流量），主线程立刻返回回答。
+        #   ⚠️ 它不参与回答内容，返回值这个调用点也没用（原来是直接丢弃的），所以挪走是安全的。
+        def _profile_judge_bg(_u=user_input, _a=answer):
+            try:
+                _profile_judge(_u, _a)
+            except Exception as _e:      # noqa: silent-ok — 后台失败不影响已回答的内容
+                LOG.debug("后台画像判断失败（忽略）：%s", _e)
+
+        try:
+            import threading as _th
+            _th.Thread(target=_profile_judge_bg, daemon=True, name="xj-profile-judge").start()
+            LOG.info("用户画像判断：已挪到后台线程（不再挡住回答）")
+        except Exception as _e:      # noqa: silent-ok — 起不了线程就退回原来的同步调用
+            LOG.debug("后台画像判断起不了线程，退回同步：%s", _e)
+            _profile_judge(user_input, answer)
         if _MEMORY_LAST.get("rid"):
             _mu, _mhit = _memory_used(_MEMORY_LAST.get("text", ""), user_input, answer)
             try:
