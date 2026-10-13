@@ -99,6 +99,15 @@ def main():
        'id="s_m_vapi"' in src and "checkVideoApi()" in src and "loadVideoApi()" in src)
     ok("界面会拦住非法 JSON（不许把坏 JSON 存进去）", "不是合法 JSON" in src)
 
+    # ---- 弹窗排版：引擎与时长不许再挤在一行（2026-10-14 截图里被挤到弹窗外面那件事）----
+    blk = src[src.index('id="videoBg"'): src.index('id="addLocalBg"')]
+    head = blk.split('id="vq"')[0]
+    ok("视频弹窗上半部分不再用横向 flex（挤爆的根因）", "display:flex" not in head)
+    ok("引擎与时长各自成行、宽度撑满", head.count("width:100%") >= 2 and
+       'id="vengine"' in head and 'id="vsecs"' in head)
+    ok("状态说明放在它自己那一行（可换行，不再被压成竖字）",
+       'id="vmodeH"' in head and "word-break:break-word" in head)
+
     # ---- 显存让位：本地视频在跑时，不许把聊天模型装回显存（2026-10-14 实测慢 3 倍的那个坑）----
     va._jobs.clear()
     ok("没有视频任务时：不算占用", va.video_busy() is False)

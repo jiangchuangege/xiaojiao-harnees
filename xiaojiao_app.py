@@ -16399,25 +16399,32 @@ HTML = r"""<!DOCTYPE html>
 <div id="videoBg" class="modal-bg" style="display:none">
   <div class="modal modal-video">
     <h3>🎬 生成视频</h3>
-    <div style="display:flex;align-items:center;gap:10px;margin:0 0 10px">
-      <span style="font-size:12px;color:#8b93a3">生成引擎：</span>
-      <select id="vengine" onchange="setVideoMode(this.value)" style="width:auto;padding:6px 10px;border-radius:8px;border:1px solid #2a3140;background:#0e1116;color:#e8ebf3">
+    <!-- 【为什么竖着排、不用一行横排（2026-10-14 实测截图）】
+         原来这一行是 flex 横排（引擎 + 时长 + 状态说明），而弹窗宽度是 min(420px,90vw) ——
+         两个下拉框加两段标签加说明文字**超宽**，flex 又不换行，于是第二个下拉框和说明
+         直接被挤到弹窗外面去（截图里就是那样：时长跑到右侧浮在背景上、说明被压成一列竖字）。
+         现在每样各占一行、说明放它自己那行（可换行），宽度就再也撑不破。 -->
+    <div class="field" style="margin:0 0 10px">
+      <label style="margin:0 0 6px">生成引擎</label>
+      <select id="vengine" onchange="setVideoMode(this.value)" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid #2a3140;background:#0e1116;color:#e8ebf3">
         <option value="api">☁️ 云端视频 API（任意厂商，不占显存）</option>
         <option value="local">💻 本地 ComfyUI+Wan2.1</option>
       </select>
-      <span style="font-size:12px;color:#8b93a3;margin-left:6px">时长：</span>
-      <select id="vsecs" style="width:auto;padding:6px 10px;border-radius:8px;border:1px solid #2a3140;background:#0e1116;color:#e8ebf3">
+      <div id="vmodeH" style="font-size:11px;color:#7a8290;margin-top:6px;line-height:1.5;word-break:break-word"></div>
+    </div>
+    <div class="field" style="margin:0 0 10px">
+      <label style="margin:0 0 6px">时长</label>
+      <select id="vsecs" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid #2a3140;background:#0e1116;color:#e8ebf3">
         <option value="5">5 秒</option>
         <option value="12">12 秒（云端单条上限）</option>
         <option value="15" selected>15 秒</option>
         <option value="30">30 秒（本地要跑很久）</option>
       </select>
-      <span id="vmodeH" style="font-size:11px;color:#7a8290"></span>
     </div>
     <p style="color:#8b93a3;font-size:13px;margin:0 0 10px">输入场景，小焦生成真视频。云端 API 快且不占显存（一次最长 12 秒，要更久会拆几条再拼）；本地用 ComfyUI+Wan2.1（8G 显卡上每 5 秒约 15 分钟）。</p>
     <textarea id="vq" placeholder="例如：樱花飘落的海边、一只猫在阳光下打盹…" rows="3" style="width:100%;resize:vertical"></textarea>
     <input id="vline" placeholder="（可选）让载体念一句台词，填了就配成有声视频" style="width:100%;margin-top:8px;padding:8px 10px;border-radius:8px;border:1px solid #2a3140;background:#0e1116;color:#e8ebf3">
-    <p id="vaudioH" style="color:#7a8290;font-size:11px;margin:6px 0 0">声音是**载体替他配音**（用自己的声音念台词），本地 Wan2.1 本身没有音频通道。</p>
+    <p id="vaudioH" style="color:#7a8290;font-size:11px;margin:6px 0 0;line-height:1.5">声音是<b>载体替他配音</b>（用自己的声音念台词），本地 Wan2.1 本身没有音频通道。</p>
     <div id="vpv" class="vpv" style="display:none"></div>
     <div id="vconfirm" class="m-actions" style="display:none"><button onclick="openVideo()">重输</button><button class="primary" onclick="confirmVideo()">✅ 确认并生成</button></div>
     <div class="m-actions"><button onclick="closeVideo()">取消</button><button class="primary" onclick="startVideo()">✨ 精炼提示词</button></div>
