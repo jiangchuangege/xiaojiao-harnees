@@ -16314,13 +16314,22 @@ HTML = r"""<!DOCTYPE html>
     <div style="display:flex;align-items:center;gap:10px;margin:0 0 10px">
       <span style="font-size:12px;color:#8b93a3">生成引擎：</span>
       <select id="vengine" onchange="setVideoMode(this.value)" style="width:auto;padding:6px 10px;border-radius:8px;border:1px solid #2a3140;background:#0e1116;color:#e8ebf3">
-        <option value="api">☁️ 云端 Agnes API（免费，不占显存）</option>
+        <option value="api">☁️ 云端视频 API（任意厂商，不占显存）</option>
         <option value="local">💻 本地 ComfyUI+Wan2.1</option>
+      </select>
+      <span style="font-size:12px;color:#8b93a3;margin-left:6px">时长：</span>
+      <select id="vsecs" style="width:auto;padding:6px 10px;border-radius:8px;border:1px solid #2a3140;background:#0e1116;color:#e8ebf3">
+        <option value="5">5 秒</option>
+        <option value="12">12 秒（云端单条上限）</option>
+        <option value="15" selected>15 秒</option>
+        <option value="30">30 秒（本地要跑很久）</option>
       </select>
       <span id="vmodeH" style="font-size:11px;color:#7a8290"></span>
     </div>
-    <p style="color:#8b93a3;font-size:13px;margin:0 0 10px">输入场景，小焦生成真视频。云端 API 快且不占显存，本地用 ComfyUI+Wan2.1。</p>
+    <p style="color:#8b93a3;font-size:13px;margin:0 0 10px">输入场景，小焦生成真视频。云端 API 快且不占显存（一次最长 12 秒，要更久会拆几条再拼）；本地用 ComfyUI+Wan2.1（8G 显卡上每 5 秒约 15 分钟）。</p>
     <textarea id="vq" placeholder="例如：樱花飘落的海边、一只猫在阳光下打盹…" rows="3" style="width:100%;resize:vertical"></textarea>
+    <input id="vline" placeholder="（可选）让载体念一句台词，填了就配成有声视频" style="width:100%;margin-top:8px;padding:8px 10px;border-radius:8px;border:1px solid #2a3140;background:#0e1116;color:#e8ebf3">
+    <p id="vaudioH" style="color:#7a8290;font-size:11px;margin:6px 0 0">声音是**载体替他配音**（用自己的声音念台词），本地 Wan2.1 本身没有音频通道。</p>
     <div id="vpv" class="vpv" style="display:none"></div>
     <div id="vconfirm" class="m-actions" style="display:none"><button onclick="openVideo()">重输</button><button class="primary" onclick="confirmVideo()">✅ 确认并生成</button></div>
     <div class="m-actions"><button onclick="closeVideo()">取消</button><button class="primary" onclick="startVideo()">✨ 精炼提示词</button></div>
@@ -16580,10 +16589,18 @@ async function openWsFile(name){try{const d=await (await fetch("/api/ws/open",{m
   cur.innerHTML="<div class=\"modal modal-wide\"><h3>📄 "+esc(d.name)+"</h3><pre class=\"wspre\">"+esc(d.content)+"</pre><div class=\"m-actions\"><button onclick=\"closeSearch()\">关闭</button></div></div>";
 }catch(e){alert("读取失败");}}
 
-async function loadVideoMode(){try{const d=await (await fetch('/api/video/mode')).json();if(d.ok){const sel=document.getElementById('vengine');sel.value=d.mode||'api';updateVmodeH();}}catch(e){}}
+async function loadVideoMode(){try{const d=await (await fetch('/api/video/mode')).json();if(d.ok){const sel=document.getElementById('vengine');sel.value=d.mode||'api';window._vcloud=d.cloud||null;updateVmodeH();}}catch(e){}}
 function updateVmodeH(){const sel=document.getElementById('vengine');const h=document.getElementById('vmodeH');if(!h)return;
-  if(sel.value==='api'){h.textContent='（云端，约1-2分钟，省显存）';}
-  else{h.textContent='（本地，需显存切换）';}}
+  const c=window._vcloud||null;
+  // 云端这一栏**如实说清接的是谁、能不能用**（2026-10-14 起云端不再只认一家，不能再写死"Agnes"）
+  if(sel.value==='api'){
+    if(!c){h.textContent='（云端 · 状态未知）';return;}
+    if(!c.available){h.textContent='（云端 · 还没配视频模型，会回落到本地）';}
+    else if(!c.runnable){h.textContent='（云端 · 现在跑不了：'+(c.why||'').slice(0,40)+'）';}
+    else{const tested=((c.describe||'').indexOf('已实测')>=0)?'已实测':'未实测';
+         h.textContent='（云端 · '+(c.provider||'?')+' · '+(c.model||'')+' · '+tested+'）';}
+  }
+  else{h.textContent='（本地 · 8G 显卡每 5 秒约 15 分钟）';}}
 async function setVideoMode(v){try{const d=await (await fetch('/api/video/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:v})})).json();if(d.ok)updateVmodeH();}catch(e){}}
 async function openVideo(){document.getElementById('videoBg').style.display='flex';const i=document.getElementById('vq');i.value='';i.focus();document.getElementById('vpv').style.display='none';document.getElementById('vconfirm').style.display='none';loadVideoMode();}
 function closeVideo(){document.getElementById('videoBg').style.display='none';}
@@ -16596,12 +16613,17 @@ async function startVideo(){const q=document.getElementById('vq').value.trim();i
   }catch(e){pv.innerHTML='⚠️ '+esc(e.message);}}
 async function confirmVideo(){const q=window._vq||'', rf=window._vr||'';
   const sel=document.getElementById('vengine');const isApi=sel&&sel.value==='api';
+  // 时长与台词：2026-10-14 起界面上能选、能填（以前只发 prompt+refined →
+  // 从界面生成的视频**永远是默认时长、而且没有声音**，用户问的「至少15s / 没有声音」就是从这来的）
+  const secsEl=document.getElementById('vsecs');
+  const secs=parseInt((secsEl&&secsEl.value)||'15',10)||15;
+  const line=(document.getElementById('vline')||{}).value||'';
   // api 模式用原话(云端直接生成, 不绕本地精炼); local 模式用精炼后的英文提示词
   const usePrompt=isApi?q:(rf||q);
   closeVideo();
-  const m=document.createElement('div');m.className='m bot';m.innerHTML='<div class="b">🎬 小焦'+(isApi?'已发起云端视频生成…':'已学习，正在切换视频模型…')+'</div>';feed.appendChild(m);feed.scrollTop=feed.scrollHeight;
+  const m=document.createElement('div');m.className='m bot';m.innerHTML='<div class="b">🎬 小焦'+(isApi?'已发起云端视频生成…':'已学习，正在切换视频模型…')+'（目标 '+secs+' 秒'+(line.trim()?'，并配一句台词':'')+'）</div>';feed.appendChild(m);feed.scrollTop=feed.scrollHeight;
   const b=m.querySelector('.b');
-  try{const d=await (await fetch('/api/video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:q,refined:usePrompt})})).json();
+  try{const d=await (await fetch('/api/video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:q,refined:usePrompt,seconds:secs,narrate:line})})).json();
    if(d.busy){b.innerHTML='⏳ 正在生成/切换模型中，请稍候…';return;}
    if(!d.ok){b.innerHTML='⚠️ '+esc(d.error||'启动失败');return;}
    try{localStorage.setItem('xj_video_job',d.job);}catch(e){}

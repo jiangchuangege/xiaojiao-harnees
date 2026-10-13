@@ -291,7 +291,7 @@ def _worker(job_id, prompt):
     confirmed = _jobs[job_id].get("confirmed_refined") or ""
     want_sec = _job_seconds(job_id)
     narrate = (_jobs[job_id].get("narrate") or "").strip()
-    # === 模式判定: api(云端 Agnes) vs local(本地 ComfyUI) ===
+    # === 模式判定: api(云端任意厂商) vs local(本地 ComfyUI) ===
     use_cloud = video_mode() == "api"
     if use_cloud:
         try:
@@ -443,9 +443,29 @@ def api_video_refine():
     return jsonify({"ok": True, "refined": refined, "zh": zh})
 
 
+def cloud_info():
+    """云端这一家的实况（给界面看）：能不能用、跑不跑得了、走的是什么协议。
+
+    【为什么要它】2026-10-14 起云端不再只认一家（见 `video_api_spec.py`），
+    界面就不能再写死「云端 Agnes API」—— 得如实显示**当前接的是谁、什么协议、实没实测过**。
+    """
+    try:
+        import cloud_video as _cv
+        ok_run, why = _cv.runnable()
+        return {"available": bool(_cv.available()), "model": _cv.model(),
+                "provider": _cv.provider(), "runnable": bool(ok_run), "why": why,
+                "describe": _cv.describe()}
+    except Exception as e:
+        return {"available": False, "runnable": False, "why": "%s: %s" % (type(e).__name__, str(e)[:120]),
+                "describe": "云端模块读不出来"}
+
+
 @bp.route("/api/video/mode", methods=["GET", "POST"])
 def api_video_mode():
-    """读/切视频大脑模式: api(云端 Agnes) / local(本地 ComfyUI)。写入 brain.video_mode。"""
+    """读/切视频大脑模式: api(云端任意厂商) / local(本地 ComfyUI)。写入 brain.video_mode。
+
+    GET 时顺带回报云端实况（`cloud_info()`），界面据此显示"现在接的是谁、能不能用"。
+    """
     if request.method == "POST":
         d = request.get_json(silent=True) or {}
         m = (d.get("mode") or "").strip().lower()
@@ -460,8 +480,9 @@ def api_video_mode():
             _j.dump(cfg, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
-        return jsonify({"ok": True, "mode": m})
-    return jsonify({"ok": True, "mode": video_mode()})
+        return jsonify({"ok": True, "mode": m, "cloud": cloud_info()})
+    return jsonify({"ok": True, "mode": video_mode(), "cloud": cloud_info(),
+                    "default_seconds": _job_seconds("__none__")})
 
 
 @bp.route("/api/video", methods=["POST"])
