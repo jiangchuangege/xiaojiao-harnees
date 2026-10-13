@@ -9130,6 +9130,30 @@ def _rule_selfrate(question):
     return None
 
 
+def _is_social_turn(text):
+    """寒暄/纯应酬的一轮（很短、没有要查的事实）——这类**免掉模型自评那一次调用**。
+
+    判据（窄，宁可不命中）：长度 ≤ 12 且**去掉标点后整句都由问候/应酬词组成**。
+    举例命中：「你好」「在吗」「早」「晚安」「谢谢」「你好呀」；
+    不命中：「你好，帮我查个东西」（有别的词）、「今天天气怎么样」（要查事实）。
+    """
+    q = str(text or "").strip()
+    if not q or len(q) > 12:
+        return False
+    _WORDS = ("你好", "您好", "哈喽", "哈啰", "嗨", "在吗", "在么", "早", "早上好", "中午好",
+              "下午好", "晚上好", "晚安", "再见", "拜拜", "谢谢", "多谢", "多谢了", "辛苦了",
+              "好久不见", "我回来了", "哈哈", "嘿嘿", "嗯嗯", "好的", "收到", "你是谁", "hello",
+              "hi", "hey")
+    # 把标点/空白/表情去掉，剩下的必须**能被问候词完全吃掉**
+    _s = re.sub(r"[\s，。！？!?,.;:~～、\"'“”‘’（）()\[\]]", "", q).lower()
+    if not _s:
+        return False
+    _left = _s
+    for w in sorted(_WORDS, key=len, reverse=True):
+        _left = _left.replace(w, "")
+    return _left == ""
+
+
 def _switch_hint(question):
     """C 档时给模型的**手段链指令**：不许直接认输，按顺序换手段。
 
@@ -11133,13 +11157,19 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             LOG.info("元认知自评：**载体规则**判为 %s ｜ %s", _rating, _sr_why)
         else:
             # ---- 第二级：规则判不出来，才让 4B 给自己打档 ----
-            # 【注入位置：元认知层】规格要求放在这里，而不是 system 末尾 ——
-            #   元认知是模型"自评自己"的入口（我会不会/知不知道）。把"我正在经历什么"
-            #   放在这里，它更容易被当成**自己的当前状态**处理，而不是外部资料。
-            _sr_out = _sr.self_rate(user_input_ctx, llm_fn=_selfrate_llm,
-                                    context=_eyc_now())
-            LOG.info("元认知自评：规则判不出，交模型自评 rating=%s ｜ %s",
-                     _sr_out.get("rating"), str(_sr_out.get("why"))[:60])
+            # 【2026-10-13 加一道"寒暄免自评"】用户实测的体感是「'你好'也要想好几秒」——
+            #   寒暄轮（很短、全是问候/应酬词）**答案里没有任何要查的事实**，问模型自评纯属白花一次调用
+            #   （实测这一步 ~1 秒）。所以这类**不问模型**。
+            #   ⚠️ 这里**不是**替它声称"有把握"（`_rule_selfrate` 的自律是"规则绝不确认有把握"）——
+            #   我们只是**不做自评这一步**：不注入 C 档的手段链、也不加"没把握"的标注。
+            if _is_social_turn(user_input_ctx):
+                _sr_out = {"rating": "A", "why": "寒暄轮：答案里没有要查的事实，免自评"}
+                LOG.info("元认知自评：**寒暄轮免问模型**（省一次调用）")
+            else:
+                _sr_out = _sr.self_rate(user_input_ctx, llm_fn=_selfrate_llm,
+                                        context=_eyc_now())
+                LOG.info("元认知自评：规则判不出，交模型自评 rating=%s ｜ %s",
+                         _sr_out.get("rating"), str(_sr_out.get("why"))[:60])
         _meta_route = _sr.route(_sr_out.get("rating"))
         LOG.info("元认知自评：rating=%s → 走 %s", _sr_out.get("rating"), _meta_route)
         # ---- C 档：不是"认输"，是"换手段" ----
