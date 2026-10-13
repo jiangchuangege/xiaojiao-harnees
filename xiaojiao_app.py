@@ -15629,15 +15629,40 @@ def _brain_status():
 
 @app.route("/api/model/add", methods=["POST"])
 def api_model_add():
-    """添加一个模型（对接本地模型/外接 API）。同名的覆盖。"""
+    """添加一个模型（对接本地模型/外接 API）。同名的**合并**（不是整条替换）。
+
+    【2026-10-14 改：同名不再整条覆盖】原来的写法只认 5 个字段
+    （name/engine/base_url/api_key/model），然后**整条替换**掉同名的那条 ——
+    于是**手工写进配置的东西会被界面悄悄抹掉**：云视频那家的 `video_api`（协议适配规格）
+    就是这样，用户在界面上点一下保存，接好的厂商就没了，报错还看不出为什么。
+    现在的规矩：请求里给了的字段就更新，**没给的字段原样留着**。
+    """
     data = request.get_json(force=True, silent=True) or {}
-    entry = {"name": (data.get("name") or "").strip(), "engine": data.get("engine", "api"),
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"ok": False, "error": "模型名字不能为空"}), 400
+    entry = {"name": name, "engine": data.get("engine", "api"),
              "base_url": data.get("base_url", ""), "api_key": data.get("api_key", ""),
              "model": data.get("model", "")}
-    if not entry["name"]:
-        return jsonify({"ok": False, "error": "模型名字不能为空"}), 400
-    models = [m for m in _get_models() if m.get("name") != entry["name"]]
-    models.append(entry)
+    # 界面上没有的字段（如 video_api）也允许直接带过来存
+    for k, v in data.items():
+        if k not in entry:
+            entry[k] = v
+    models = []
+    merged = False
+    for m in _get_models():
+        if m.get("name") != name:
+            models.append(m)
+            continue
+        kept = dict(m)                       # 同名：先留住原有的全部字段
+        kept.update({k: v for k, v in entry.items() if v not in (None, "")})
+        for k, v in entry.items():           # 显式传空串/None 的字段也照改（用户就是要清掉它）
+            if v in (None, "") and k in data:
+                kept[k] = v
+        models.append(kept)
+        merged = True
+    if not merged:
+        models.append(entry)
     _save_control(models=models)
     return jsonify({"ok": True, "models": models})
 
