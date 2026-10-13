@@ -2441,6 +2441,64 @@ class ScraplingBridge:
             return str(r.status_code), "", "响应体过大（%.1f MB），已放弃解析" % (len(body) / 1048576.0)
         return str(r.status_code), body, ""
 
+    def _ghsa_windows(self, days: int, keep: Callable[[str], bool], limit: int,
+                      sev_label: str) -> str:
+        """**备用源：GitHub 安全公告**（NVD 不通时用它顶上）。
+
+        为什么选它：实测这台机器上 `api.github.com/advisories` **1.9 秒**就返回 200
+        （同一时刻 NVD 连 TLS 握手都过不去）。它有发布时间窗 + 严重度 + CVE/GHSA 号 +
+        受影响包，正好够"最近 N 天的高危漏洞"这件事，而且**免 Key**。
+
+        参数沿用 `collect_vulnerabilities` 的语义：`days` 时间窗、`keep` 等级判据、`limit` 条数。
+        拿不到就返回空串（调用方继续走"两条源都没成"的如实说明），**不编数据**。
+        """
+        try:
+            since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - days * 86400.0))
+            today = time.strftime("%Y-%m-%d", time.gmtime(time.time()))
+            # ⚠️ **必须是闭合区间**：`published=2026-10-06..`（开口）GitHub 直接回 422
+            #    （实测踩到，备用源因此静默失效过一次）。
+            url = ("https://api.github.com/advisories?per_page=100&published=%s..%s"
+                   "&sort=published&direction=desc" % (since, today))
+            _s, body, _e = self._fetch_raw(url, timeout=15)
+            if _e:
+                logger.debug("备用源 GitHub 安全公告失败：%s", _humanize_error(_e)[:120])
+                return ""
+            data = json.loads(body) if isinstance(body, str) else body
+            if not isinstance(data, list):
+                return ""
+            rows, seen = [], set()
+            for a in data:
+                if not isinstance(a, dict):
+                    continue
+                sev = str(a.get("severity") or "").upper()
+                if not keep(sev):
+                    continue
+                cve = str(a.get("cve_id") or a.get("ghsa_id") or "").strip()
+                if not cve or cve in seen:
+                    continue
+                seen.add(cve)
+                pkgs = ", ".join(sorted({str((v or {}).get("package", {}).get("name") or "")
+                                         for v in (a.get("vulnerabilities") or [])} - {""}))[:60]
+                score = ((a.get("cvss") or {}).get("score")) or ""
+                rows.append("| %s | %s | %s | %s | %s | %s |"
+                            % (cve, sev or "—", score or "—", pkgs or "—",
+                               str(a.get("published_at") or "")[:10],
+                               str(a.get("summary") or "").replace("|", "/")[:70]))
+                if len(rows) >= limit:
+                    break
+            if not rows:
+                return ""
+            head = ("> ⚠️ **数据源：GitHub 安全公告**（NVD 官方接口从这台机器连不上 —— TLS 握手超时，"
+                    "DNS 能解析但 HTTPS 过不去；已自动换源）\n"
+                    "> 时间窗：最近 %d 天 ｜ 等级：%s ｜ 共 %d 条\n\n"
+                    % (days, sev_label, len(rows)))
+            return (head + "| CVE / GHSA | 等级 | 评分 | 受影响 | 发布时间 | 摘要 |\n"
+                    "| --- | --- | --- | --- | --- | --- |\n" + "\n".join(rows)
+                    + "\n\n> 想换条件：`collect_vulnerabilities(days=30, severity=\"CRITICAL\", limit=10)`")
+        except Exception as e:      # noqa: silent-ok — 备用源失败就如实返回空串，绝不编
+            logger.debug("备用源 GitHub 安全公告异常（忽略）：%s", e)
+            return ""
+
     def _do_collect_vulnerabilities(self, p: Dict[str, Any]) -> str:
         """抓 NVD 最近漏洞，并在插件层压平成 Markdown 表格。
 
@@ -2499,13 +2557,18 @@ class ScraplingBridge:
             _to = 12.0
         status, body, err = self._fetch_raw(first, timeout=_to)
         if err:
+            # 【2026-10-13 实测：这台机器**根本连不上 NVD**】不是"限流"、不是"模型不会"：
+            #   `services.nvd.nist.gov` / `nvd.nist.gov` **TLS 握手直接超时**（DNS 能解析到 172.65.90.24，
+            #   但 HTTPS 12 秒握手不过；官网页要 38 秒也过不去）。同一时刻
+            #   `api.github.com/advisories` 1.9 秒 200、CISA KEV 1.5 秒 200 —— 所以换源是**能用的**。
+            #   这里的顺序：NVD 试一次（12 秒上限）→ 不通就**立刻换 GitHub 安全公告**并把这事说清。
+            _alt = self._ghsa_windows(days, keep, limit, sev_label)
+            if _alt:
+                return _alt
             return fmt_result(0, first, "",
                               "⚠️ NVD 官方接口这次没连上：%s\n\n"
-                              "这不是「模型不会」，是**这台机器到 NVD 的网络不通/太慢**"
-                              "（超时已限在 %.0f 秒，失败即止，不再干等）。"
-                              "可以：① 过几分钟再试（NVD 无密钥时限流严）；"
-                              "② 换成别的源（GitHub 安全公告 / CISA KEV / 阿里云漏洞库）；"
-                              "③ 直接给我 CVE 编号，我就那条查。"
+                              "这不是「模型不会」：**这台机器到 NVD 的网络不通**"
+                              "（TLS 握手上限已压在 %.0f 秒，失败即止，不再干等；备用源 GitHub 安全公告这次也没成）。"
                               % (_humanize_error(err)[:120], _to))
         data = _loads_nvd(body)
         if data is None:
