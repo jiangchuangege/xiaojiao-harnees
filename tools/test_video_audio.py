@@ -113,6 +113,34 @@ def main():
            sorted(sent[0].keys()) if sent else "没发出请求")
         ok("发出去的参数就是官方那几个",
            bool(sent) and set(sent[0]) == {"model", "prompt", "mode", "size", "aspect_ratio", "seconds"})
+        # 断线也属于"再试一次"(踩过: 第 12 次排队时直接抛 ConnectionResetError 把循环打断)
+        state = {"n": 0}
+
+        class _R2:
+            status_code = 200
+
+            def json(self):
+                return {"video_id": "x", "status": "pending"}
+        _post2 = ag.requests.post
+
+        def _flaky(url, headers=None, json=None, timeout=None):
+            state["n"] += 1
+            if state["n"] < 3:
+                raise OSError(10054, "远程主机强迫关闭了一个现有的连接")
+            return _R2()
+        _sleep = ag.time.sleep
+        try:
+            ag.requests.post = _flaky
+            ag.time.sleep = lambda s: None
+            ag.requests.post = _flaky
+            try:
+                ag.generate("测试", mode="text", seconds="5", create_retry=3, poll_interval=0, timeout=0)
+            except Exception:
+                pass          # 后面轮询超时无所谓, 这里只看有没有把断线接住
+        finally:
+            ag.requests.post = _post2
+            ag.time.sleep = _sleep
+        ok("断线不会被当成配置错(会继续重试)", state["n"] >= 3, "请求次数 %d" % state["n"])
     except Exception as e:
         ok("能自查发给云端的请求体", False, "%s: %s" % (type(e).__name__, e))
 
@@ -132,6 +160,13 @@ def main():
            and wf["5"]["inputs"]["seed"] == 9)
         ok("工作流占位符替换正常",
            wf["3"]["inputs"]["positive_prompt"] == "提示词" and wf["1"]["inputs"]["model"] == "ckpt")
+        # "要猫给人脸"的根因: 编码坏掉的描述被学进库, 又用 0.35 的松阈值顶掉了新描述
+        ok("坏掉的描述不进库也不顶别人", vapi._prompt_is_plausible("???????????, ???") is False
+           and vapi._prompt_is_plausible("一只橘猫坐在窗台上看雨") is True
+           and vapi._prompt_is_plausible("A girl runs on the beach") is True)
+        import inspect
+        src = inspect.getsource(vapi._refine_prompt)
+        ok("库命中阈值收紧到 0.6 以上(0.35 太松会认错)", "0.62" in src, "默认阈值在源码里")
     except Exception as e:
         ok("video_api 可导入并检查拆段计划", False, "%s: %s" % (type(e).__name__, e))
 

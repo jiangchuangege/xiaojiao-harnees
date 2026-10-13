@@ -143,7 +143,16 @@ def generate(prompt, mode="text", poll_interval=3, timeout=1800, progress_cb=Non
     data, last = None, ""
     _throttle()   # 1 RPM 节流(≤1次/分钟)
     for attempt in range(1, max(1, attempts) + 1):
-        r = requests.post(BASE + "/v1/videos", headers=headers, json=body, timeout=60)
+        # ⚠️ 2026-10-13 实测: 第 12 次排队时直接抛 ConnectionResetError(10054),
+        #    旧代码没接住, 整个重试循环当场崩掉 —— 断线也是"再试一次", 不是"配置错"。
+        try:
+            r = requests.post(BASE + "/v1/videos", headers=headers, json=body, timeout=60)
+        except Exception as e:
+            last = "网络断了(%s: %s)" % (type(e).__name__, str(e)[:120])
+            if progress_cb:
+                progress_cb(-attempt)
+            time.sleep(_RPM_INTERVAL)
+            continue
         if r.status_code == 200:
             data = r.json()
             break

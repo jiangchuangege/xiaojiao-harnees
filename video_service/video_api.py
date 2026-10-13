@@ -2,6 +2,7 @@
 # 模型按需切换：卸载大脑 → 起 ComfyUI → 生成 → 卸载 ComfyUI → 恢复大脑（对用户透明）
 # 任务状态用普通 dict 读写（GIL 安全），不持锁 —— 避免模型切换/任务线程把状态接口堵死。
 import os, json, threading, datetime, time, math
+import re as _re      # 判"这句描述像不像人写的"(见 _prompt_is_plausible)
 from flask import Blueprint, request, jsonify
 import config, model_switch as ms, comfy_client as cc
 import logging  # noqa: F401  （由 tools/fix_silent_except.py 注入）
@@ -114,7 +115,16 @@ def _persist():
 try:
     _jobs.update(json.load(open(_JOBS_FILE, encoding="utf-8")))
 except Exception as e:
-    LOG.debug("忽略异常(%s:%d): %s", __file__, 72, e)
+    LOG.debug("忽略异常(%s:%d): %s", __file__, 79, e)
+
+# ⚠️ 2026-10-13: 任务是存盘续跑的, 但**执行它的线程**跟着进程一起没了。
+#    重开程序后那些"正在生成"的旧记录会永远停在那儿, /api/video 也会一直回"正在生成，请稍候"——
+#    用户看到的就是"点了没反应"。启动时把上一次没跑完的如实标成中断。
+for _j in _jobs.values():
+    if _j.get("state") in ("queued", "switching", "generating"):
+        _j["state"] = "error"
+        _j["error"] = "上次运行时中断(程序重启了)"
+        _j["message"] = "上次这一单被中断了(程序重启过)，请重新生成一次"
 
 def _load_workflow(prompt, ckpt, num_frames=None, fps=None, seed=None, width=None, height=None):
     """装 Wan2.1 工作流。可覆盖帧数/fps/种子/分辨率 —— 帧数和 fps 决定**成片几秒**:
@@ -193,14 +203,45 @@ def _kb():
         return None
 
 
+def _prompt_is_plausible(raw):
+    """这句描述像不像"人写的场景"? 不像就不许学进库、也不许拿库里的东西顶替。
+
+    ⚠️ 2026-10-13 真事: 我用 PowerShell 发 JSON 时中文被编成了 `???????????, ...`,
+    这种垃圾被当成"用户描述"学进了提示词库; 之后用户写「一只橘猫坐在窗台上看雨」
+    在库里按 0.35 的相似度命中了那条垃圾, 于是**生成出来的是一个男人的脸** ——
+    用户问的就是"我让它做 A 它给我 B"。判据: 至少要有中文或拉丁字母;
+    连着三个问号基本就是编码坏了的痕迹。
+    """
+    s = (raw or "").strip()
+    if len(s) < 2:
+        return False
+    if "???" in s:
+        return False
+    return bool(_re.search(r"[\u4e00-\u9fff]", s) or _re.search(r"[A-Za-z]{2,}", s))
+
+
 def _refine_prompt(raw, save=True):
-    """用小焦大脑精炼出电影级提示词。①先查小脑学习库(向量库命中=用学过的) ②大脑精炼并学进库 ③模板兜底。绝不给用户看思考过程。"""
+    """用小焦大脑精炼出电影级提示词。①先查小脑学习库(向量库命中=用学过的) ②大脑精炼并学进库 ③模板兜底。绝不给用户看思考过程。
+
+    ⚠️ 2026-10-13 改两处(实测踩到"要猫给人脸"):
+      · 库命中要求**像**才用: 阈值 0.35 → 0.62。0.35 太松, 一条坏掉的样本能顶掉任何新描述;
+      · 描述不像人写的就不学(见 _prompt_is_plausible), 免得垃圾进库以后一直往外冒。
+      阈值可以用 xiaojiao_control.json 的 video.kb_threshold 调。
+    """
     raw = (raw or "").strip()
     if not raw: return raw
     V = _kb()
-    if V:
+    if V and _prompt_is_plausible(raw):
         try:
-            r = V.search("用户: " + raw, k=1, threshold=0.35)
+            thr = 0.62
+            try:
+                import json as _jj, os as _oo
+                _root = _oo.path.dirname(_oo.path.dirname(_oo.path.abspath(__file__)))
+                _c = _jj.load(open(_oo.path.join(_root, "xiaojiao_control.json"), encoding="utf-8"))
+                thr = float((_c.get("video") or {}).get("kb_threshold") or thr)
+            except Exception as e:
+                LOG.debug("忽略异常(%s:%d): %s", __file__, 203, e)
+            r = V.search("用户: " + raw, k=1, threshold=thr)
             if r["hit"] and r["best"][1]:
                 best = r["best"][1]
                 if "-> 精炼: " in best:
@@ -232,7 +273,7 @@ def _refine_prompt(raw, save=True):
                     out = lines[-1] if lines else ""
             if out:
                 if len(out) > 300: out = out[-300:]
-                if save:
+                if save and _prompt_is_plausible(raw):
                     V = _kb()
                     if V:
                         try:
