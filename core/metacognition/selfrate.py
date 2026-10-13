@@ -109,6 +109,21 @@ _PHRASE_RULES = (
 )
 
 
+def rate_rules():
+    """三档的含义那几句（**措辞只在这里写一份**）。
+
+    单独抽出来的原因：2026-10-13 的「感知 + 自评 合并成一次调用」需要这几句，
+    但**不需要** `rate_prompt()` 开头那句"只做一件事"（合并那条路本来就是要做两件事）。
+    复制一份措辞就等于埋了"以后改了这边没跟着改"的坑，所以给的是同一个来源。
+    """
+    return [
+        "三档的含义（只能选一个）：",
+        "A = 我有把握，答案是确定的；",
+        "B = 我有点印象、大概知道，但细节不敢保证；",
+        "C = 我没把握，再往下说就要靠猜了。",
+    ]
+
+
 def rate_prompt(question, context=""):
     """生成"让模型自己打分"的提示词（要求它只回 A/B/C 之一）。
 
@@ -127,12 +142,7 @@ def rate_prompt(question, context=""):
     ]
     if ctx:
         lines += ["", "你可以参考的已知信息：%s" % ctx]
-    lines += [
-        "",
-        "三档的含义（只能选一个）：",
-        "A = 我有把握，答案是确定的；",
-        "B = 我有点印象、大概知道，但细节不敢保证；",
-        "C = 我没把握，再往下说就要靠猜了。",
+    lines += [""] + rate_rules() + [
         "",
         "只回一个字母：A 或 B 或 C。不要解释，不要回答原问题。",
     ]
@@ -216,6 +226,30 @@ def route(rating):
     return ROUTES.get(key, "use_tool")
 
 
+def from_raw(raw, question=""):
+    """把**已经拿到的那段模型回答**变成一个自评结果（不再调用模型）。
+
+    【为什么单独抽出来】2026-10-13 做「感知 + 自评 合并成一次调用」时要有这个入口：
+        一次请求的回答里同时有感知那几行和档位那一行 —— 这里只负责按**和 `self_rate()`
+        完全同一套规则**读档位（归一化 → parse_rating → ok/why），
+        免得合并那条路自己另写一套解析、跟单独的这条路慢慢走岔。
+    """
+    text = _normalize(raw)[:_RAW_MAX]
+    rating = parse_rating(text)
+    ok = rating in RATINGS
+    if not text.strip():
+        why = "模型没给出任何内容 → 按没把握处理（不猜 A）"
+    elif ok:
+        why = "自评 %s（%s）→ 走 %s" % (rating, RATING_CN.get(rating, rating), route(rating))
+    else:
+        why = "解析不出档位（原话：%s）→ 按没把握处理，走 %s" % (text.strip()[:40], route(rating))
+    try:
+        log_line("selfrate", "rating=%s ok=%s q=%s" % (rating, ok, (question or "")[:40]))
+    except Exception:      # noqa: silent-ok — 记日志失败绝不能影响自评结果本身
+        pass
+    return {"rating": rating, "raw": text, "ok": ok, "why": why}
+
+
 def self_rate(question, llm_fn=None, context=""):
     """让模型自评一次，返回 `{"rating", "raw", "ok", "why"}`。
 
@@ -237,20 +271,7 @@ def self_rate(question, llm_fn=None, context=""):
     except Exception as e:      # noqa: silent-ok — 模型调用失败等同于"没把握"，绝不往上抛
         return {"rating": RATING_UNKNOWN, "raw": "", "ok": False,
                 "why": "模型调用失败：%s: %s" % (type(e).__name__, str(e)[:120])}
-    text = _normalize(raw)[:_RAW_MAX]
-    rating = parse_rating(text)
-    ok = rating in RATINGS
-    if not text.strip():
-        why = "模型没给出任何内容 → 按没把握处理（不猜 A）"
-    elif ok:
-        why = "自评 %s（%s）→ 走 %s" % (rating, RATING_CN.get(rating, rating), route(rating))
-    else:
-        why = "解析不出档位（原话：%s）→ 按没把握处理，走 %s" % (text.strip()[:40], route(rating))
-    try:
-        log_line("selfrate", "rating=%s ok=%s q=%s" % (rating, ok, (question or "")[:40]))
-    except Exception:      # noqa: silent-ok — 记日志失败绝不能影响自评结果本身
-        pass
-    return {"rating": rating, "raw": text, "ok": ok, "why": why}
+    return from_raw(raw, question=question)
 
 
 def apply_route(text, rating, caveat=CAVEAT):

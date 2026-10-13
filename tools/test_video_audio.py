@@ -42,9 +42,18 @@ def main():
     ok("probe 认出没音轨(裸视频)", p.get("ok") and p.get("有音轨") is False)
     ok("probe 认不出文件时不炸", va.probe(os.path.join(tmp, "没有这个.mp4")).get("ok") is False)
 
-    wav = va.tts_wav("小焦测试一句中文台词。", os.path.join(tmp, "t.wav"))
+    wav = va.tts_wav("小焦测试一句中文台词。", os.path.join(tmp, "t.wav"), prefer="sapi")
     ok("系统语音念出台词(wav)", os.path.exists(wav) and os.path.getsize(wav) > 1000,
        os.path.getsize(wav) if os.path.exists(wav) else 0)
+    # 配音这条链的"谁在念"必须能如实说清(载体自己的声音 / 系统语音), 不许含糊
+    try:
+        va.tts_wav("再念一句, 这次看它报的是谁。", os.path.join(tmp, "t2.wav"))
+        eng, why = va.tts_engine()
+        ok("能报出这次台词是谁念的", eng in ("载体自己的声音", "系统语音"), "%s ｜ %s" % (eng, why[:40]))
+        ok("拿不到载体声音时给得出原因(不装死)", (eng == "载体自己的声音") or bool(why),
+           why[:60] or "用的就是载体自己的声音")
+    except Exception as e:
+        ok("载体自己的声音这条路可走", False, "%s: %s" % (type(e).__name__, e))
 
     out = va.add_audio(a, wav=wav, out=os.path.join(tmp, "a_sound.mp4"))
     pa = va.probe(out)

@@ -50,13 +50,57 @@ def probe(path):
             "文件": os.path.basename(path), "字节": os.path.getsize(path)}
 
 
-def tts_wav(text, out_wav=None, rate=0, voice=None):
-    """用 Windows 自带中文语音把 text 念成 wav。返回 wav 路径。
+def tts_app(text, out=None, timeout=300):
+    """用**载体自己的声音**念台词（走主程序的 `/api/tts`，后端是 Chatterbox，本机已装）。
 
-    rate: -10~10(0 正常, 负数更慢)。voice 缺省挑第一个 zh-CN 声音(Huihui)。
+    【为什么要先试这一条】2026-10-13 查明：仓里本来就有神经网络语音（`/api/tts` → Chatterbox，
+    播客那条链在用，`torch 2.6.0+cu118`、CUDA 可用），比 Windows 自带的朗读声音自然得多。
+    之前给视频配音直接用了系统语音，等于把**已有的好东西**丢在一边。
+    拿不到（主程序没开 / 没装 chatterbox / 显存不够）就返回 None，由调用方退回系统语音 —— 不装死。
+    """
+    base = os.environ.get("XIAOJIAO_APP_URL", "http://127.0.0.1:5000").rstrip("/")
+    if not out:
+        out = os.path.join(OUT_DIR, "tts_app_%s.wav" % __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S"))
+    try:
+        import requests
+        r = requests.post(base + "/api/tts", json={"text": text}, timeout=timeout)
+        d = r.json() if r.status_code == 200 else {}
+        if not (r.status_code == 200 and d.get("ok") and d.get("url")):
+            raise RuntimeError("主程序没给音频（%s）：%s" % (r.status_code, str(d.get("error") or r.text[:120])))
+        a = requests.get(base + d["url"], timeout=120)
+        a.raise_for_status()
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with open(out, "wb") as f:
+            f.write(a.content)
+        return out
+    except Exception as e:
+        _LAST_TTS["why"] = "载体自己的声音没用上：%s: %s" % (type(e).__name__, str(e)[:120])
+        return None
+
+
+_LAST_TTS = {"engine": "", "why": ""}
+
+
+def tts_engine():
+    """上一次台词是谁念的（「载体自己的声音」/「系统语音」）—— 给界面和日志如实标注用。"""
+    return _LAST_TTS["engine"], _LAST_TTS["why"]
+
+
+def tts_wav(text, out_wav=None, rate=0, voice=None, prefer="auto"):
+    """把台词念成 wav。返回 wav 路径。
+
+    顺序：**先试载体自己的声音（`/api/tts` + Chatterbox）**，拿不到再用 Windows 自带语音。
+    两种都是「载体替他配音」，**不是**模型自己在说话 —— 这一点必须标清楚。
+    `prefer="sapi"` 强制走系统语音（自测用，免得为了念一句话去加载神经网络模型）。
+    rate: -10~10（0 正常）。voice 只对系统语音有效，缺省第一个 zh-CN 声音（Huihui）。
     """
     if not out_wav:
         out_wav = os.path.join(OUT_DIR, "tts_%s.wav" % __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S"))
+    if prefer != "sapi":
+        _p = tts_app(text, out=out_wav)
+        if _p:
+            _LAST_TTS["engine"], _LAST_TTS["why"] = "载体自己的声音", ""
+            return _p
     os.makedirs(os.path.dirname(out_wav), exist_ok=True)
     ps = r'''
 Add-Type -AssemblyName System.Speech

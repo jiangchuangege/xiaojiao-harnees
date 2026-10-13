@@ -117,6 +117,33 @@ _TASK = (
 RELATION_KINDS = ("伤", "哄", "无")
 
 
+def from_raw(raw, consume=True):
+    """把**已经拿到的那段模型回答**变成一次感知结果（不再调用模型）。
+
+    【为什么单独抽出来】2026-10-13 做「感知 + 自评 合并成一次调用」时需要一个入口：
+        那次调用是**一次**模型请求，回答里同时有感知那几行和档位那一行 ——
+        这里负责按**和 `perceive()` 完全同一套规则**（回声判定 → parse → ok）读感知那半，
+        免得合并那条路自己另写一套解析、跟这条慢慢走岔。
+    `consume=True` 时照旧记一笔精力消耗（合并调用也是真做了一次感知，不能假装没花）。
+    """
+    res = {"meaning": "", "touches_life": [], "direction": "", "raw": "",
+           "parsed_by": "无", "ok": False, "event_what": ""}
+    if consume:
+        try:
+            from core import energy as _EN
+            _EN.consume(_EN.COST_PERCEPTION, why="感知一次")
+        except Exception:      # noqa: silent-ok — 精力模块不在也不该影响感知
+            pass
+    text = str(raw or "").strip()
+    res["raw"] = text[:600]
+    if not text or looks_like_echo(text):
+        res["parsed_by"] = "回声（当没感知出来）"
+        return res
+    res.update(parse(text))
+    res["ok"] = bool(res["meaning"])
+    return res
+
+
 def perceive(event, llm_fn, doing="", extra=""):
     """**感知**：这件事对它意味着什么。返回结构化感知，不抛异常。
 
@@ -131,31 +158,22 @@ def perceive(event, llm_fn, doing="", extra=""):
     `extra` 是它自己身上的一个**事实**（如精力数值）—— 见 `self_background`。
     """
     ev = str(event or "").strip()
-    res = {"meaning": "", "touches_life": [], "direction": "", "raw": "",
-           "parsed_by": "无", "ok": False, "event_what": ""}
     if not ev:
-        return res
+        return {"meaning": "", "touches_life": [], "direction": "", "raw": "",
+                "parsed_by": "无", "ok": False, "event_what": ""}
     prompt = "%s\n\n%s\n\n事：%s" % (self_background(doing, extra), "\n".join(_TASK), ev[:400])
-    # 感知本身也是"它在跑" —— 记一笔消耗（规格：每次感知 → 精力降一点）。
-    try:
-        from core import energy as _EN
-        _EN.consume(_EN.COST_PERCEPTION, why="感知一次")
-    except Exception:      # noqa: silent-ok — 精力模块不在也不该影响感知
-        pass
     try:
         raw = str(llm_fn(prompt) or "").strip()
     except Exception:      # noqa: silent-ok — 感知不出来就不起心，由调用方决定
-        return res
-    res["raw"] = raw[:600]
-    if not raw or looks_like_echo(raw):
-        # 模型把提示词原样吐回来了（4B 上真发生过）——把它当"没感知出来"，
-        # **绝不**从这里硬抠一句当感知：那等于载体自己编一个感受。
-        res["parsed_by"] = "回声（当没感知出来）"
-        return res
-    p = parse(raw)
-    res.update(p)
-    res["ok"] = bool(res["meaning"])
-    return res
+        # 模型都没答上，但这次感知的**精力消耗照记**（与旧行为一致：consume 在调用前）
+        try:
+            from core import energy as _EN
+            _EN.consume(_EN.COST_PERCEPTION, why="感知一次")
+        except Exception:      # noqa: silent-ok
+            pass
+        return {"meaning": "", "touches_life": [], "direction": "", "raw": "",
+                "parsed_by": "无", "ok": False, "event_what": ""}
+    return from_raw(raw)
 
 
 def parse(raw):

@@ -10411,6 +10411,53 @@ def _perceive_llm(prompt):
         return ""
 
 
+def _selfrate_now(question):
+    """元认知自评的**那一次模型调用**（不含规则判定）。
+
+    【为什么单独抽出来】2026-10-13 的"并发 / 合并"两条路都要复用它：
+      · 并发路把它丢进后台线程，和感知同时在飞；
+      · 合并路不调它（感知那次请求里一起问了），只在合并失败时退回它。
+    规则判定（`_rule_selfrate` / `_is_social_turn`）留在**调用方**：那两步不花模型算力，
+    放在这里就会变成"并发起飞时也把规则跑一遍"，既没必要，也容易被误读成"两次判定"。
+    """
+    from core.metacognition import selfrate as _sr
+    return _sr.self_rate(question, llm_fn=_selfrate_llm, context=_eyc_now())
+
+
+def _perceive_inputs(text):
+    """感知那一次调用**喂进去的原话**，以及它此刻"正在做什么"。
+
+    【为什么要单独抽出来】"感知 + 自评 合并成一次调用"（`core/inner_joint.py`）拼提示词时，
+    必须用**和单独那条完全一样的输入** —— 包括"事实 + 用户的话一起送感知层"这条规格
+    （2026-09-18 用户定的）。复制一遍拼法早晚走岔：一处改了另一处没改，
+    合并那条路就会拿一份**不一样的输入**去问，读出来的东西不再可比。
+    """
+    _doing = ""
+    try:
+        _lv = _eyc_state_now()
+        _doing = str(((_lv.get("happening") or {}).get("doing")) or "")
+    except Exception:      # noqa: silent-ok — 拿不到"正在做什么"就少一行背景
+        _doing = ""
+    # ---- 事实 + 用户的话，**一起送感知层**（用户 2026-09-18 定的标准）----
+    #   原来只把"用户的话"送进感知，而它自己此刻的**事实**（多久没人说话 / 空闲多久 /
+    #   各刻度的原始字段值）是单独摆在 system 里当资料 —— 那是"给它看一条信息"。
+    #   现在按规格：**事实与用户的话一起送进感知**，让模型自己感知
+    #   「这些事实 + 这句话，对我意味着什么」。感知层不查表，载体不列情绪词表、
+    #   不替它挑一个词 —— 它感知出什么就是什么（可以是它自己造的说法）。
+    #   （这一步的输出照旧**一个字都不进对话上下文**，只用来让心起。）
+    _p_in = text
+    try:
+        _im = _inner_mod()
+        _facts = _im.render() if _im is not None else ""
+        if _facts and text:
+            _p_in = _facts + "\n" + text
+        elif _facts:
+            _p_in = _facts
+    except Exception:      # noqa: silent-ok — 事实读不到就不加，不硬凑
+        _p_in = text
+    return _p_in, _doing
+
+
 def _perceive_event(text):
     """**感知**：这件事对它意味着什么 —— **在任务判断之前**走的第一步。
 
@@ -10427,29 +10474,7 @@ def _perceive_event(text):
     """
     try:
         from core import perception as _PC
-        _doing = ""
-        try:
-            _lv = _eyc_state_now()
-            _doing = str(((_lv.get("happening") or {}).get("doing")) or "")
-        except Exception:      # noqa: silent-ok — 拿不到"正在做什么"就少一行背景
-            _doing = ""
-        # ---- 事实 + 用户的话，**一起送感知层**（用户 2026-09-18 定的标准）----
-        #   原来只把"用户的话"送进感知，而它自己此刻的**事实**（多久没人说话 / 空闲多久 /
-        #   各刻度的原始字段值）是单独摆在 system 里当资料 —— 那是"给它看一条信息"。
-        #   现在按规格：**事实与用户的话一起送进感知**，让模型自己感知
-        #   「这些事实 + 这句话，对我意味着什么」。感知层不查表，载体不列情绪词表、
-        #   不替它挑一个词 —— 它感知出什么就是什么（可以是它自己造的说法）。
-        #   （这一步的输出照旧**一个字都不进对话上下文**，只用来让心起。）
-        _p_in = text
-        try:
-            _im = _inner_mod()
-            _facts = _im.render() if _im is not None else ""
-            if _facts and text:
-                _p_in = _facts + "\n" + text
-            elif _facts:
-                _p_in = _facts
-        except Exception:      # noqa: silent-ok — 事实读不到就不加，不硬凑
-            _p_in = text
+        _p_in, _doing = _perceive_inputs(text)
         return _PC.perceive(_p_in, llm_fn=_perceive_llm, doing=_doing)
     except Exception as e:      # noqa: silent-ok — 感知失败就不起心（不查表兜底）
         LOG.debug("感知层失败（忽略，不起心）：%s", e)
@@ -10960,6 +10985,13 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     # 【心随真实事件跳，不随模型输出跳】这里只看"用户输入了什么"；
     #   另外两处真实来源（载体检索到的内容、世界变化）在各自的调用点。
     #   **不看模型吐出来的字。**
+    # ⚠️ 下面这几个**必须在这里先起好**：感知那个 `try` 万一在中途就抛了（比如心起不来），
+    #   跳到它的 except 之后，元认知那一段照样会读这几个名字 —— 不先起好就是 NameError，
+    #   而那是**整轮对话挂掉**，不是"少走一条优化路"。
+    _need_sr_model = False        # 自评这一步要不要问模型（规则能判就不问）
+    _joint_res = None             # 合并调用的结果（None = 没走/没成）
+    _sr_box = None                # 并发起飞的自评句柄
+    _sr_out_early = None          # 合并成功后带回的自评结果
     try:
         from core import psyche as _PS, thinking_loop as _TL2
         _PS.start(why="agent_run 开始")
@@ -10974,7 +11006,50 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 pass
         # 感知的对象是「这件事对它意味着什么」，不是「这是什么任务」。
         # 带着自我背景（我是谁、我的命是什么）去感知 —— 见 `core/perception.py`。
-        _per = _perceive_event(user_input_ctx)
+        # ================== 感知 + 自评：**合并成一次 / 至少同时在飞**（2026-10-13）==================
+        # 【为什么要动这里】用户体感「他回复好慢」。一轮里串行的内部模型调用有 4~6 次，
+        #   其中「感知」和「元认知自评」吃的是**同一句话、同一个上下文**，两边互不看对方的输出
+        #   —— 串着跑纯粹是历史顺序。实测（本机 llama-swap，3 请求）串行 0.82 秒 → 并发 0.56 秒。
+        # 【两条路，按开关走】
+        #   ① 合并（`capabilities.inner_merge`，默认**关**）：一次请求问两件事，
+        #      两边都解读出来才算成功，否则**明确失败**→ 退回下面的原路（只慢，不会读错）。
+        #      默认关的理由：它省下的是一个完整来回，但"档位"是模型在**多任务**下给的判断，
+        #      质量得先量过再默认开 —— 没量过就默认开，等于把没验过的东西塞给用户。
+        #   ② 并发（`capabilities.inner_parallel`，默认**开**）：还是两次请求、提示词一个字不改，
+        #      只是同时在飞。语义与原来完全一致，没有质量风险。
+        try:
+            _need_sr_model = (not _rule_selfrate(user_input_ctx)) and (not _is_social_turn(user_input_ctx))
+        except Exception as e:      # noqa: silent-ok — 判不出来就当"要问"，与原行为一致
+            LOG.debug("忽略异常(%s:%d): %s", __file__, 10989, e)
+            _need_sr_model = True
+        if _need_sr_model and CAP.get("inner_merge", False):
+            try:
+                from core import inner_joint as _IJ, perception as _PC
+                _p_in0, _doing0 = _perceive_inputs(user_input_ctx)
+                _joint_res = _IJ.joint(_perceive_llm,
+                                       background=_PC.self_background(_doing0),
+                                       perception_task="\n".join(_PC._TASK),
+                                       event=_p_in0, question=user_input_ctx,
+                                       doing=_doing0)
+                LOG.info("感知+自评 合并调用：%s", _joint_res.get("why"))
+            except Exception as e:      # noqa: silent-ok — 合并这条路出错就退回原路
+                LOG.debug("合并调用失败（退回两次调用）：%s", e)
+                _joint_res = None
+        _per = None
+        if _joint_res and _joint_res.get("ok"):
+            _per = _joint_res["perception"]
+            _sr_out_early = _joint_res["selfrate"]
+        else:
+            if _need_sr_model and CAP.get("inner_parallel", True):
+                # 自评先起飞，感知在主线程上走 —— 两边同时在飞，谁也不用等谁
+                try:
+                    from core import inner_joint as _IJ2
+                    _sr_box = _IJ2.start("selfrate", lambda: _selfrate_now(user_input_ctx))
+                    LOG.info("元认知自评：**已并发起飞**（与感知同时在飞）")
+                except Exception as e:      # noqa: silent-ok — 起不了就退回串行
+                    LOG.debug("并发起飞失败（退回串行自评）：%s", e)
+                    _sr_box = None
+            _per = _perceive_event(user_input_ctx)
         LOG.info("感知层：说「%s」→ 意味着「%s」", str(user_input_ctx)[:40],
                  str(_per.get("meaning") or "（没感知出来）")[:60])
         # 「事」也记一行 —— 2026-09-18 起检索用它（`thinking_loop` 的 query），
@@ -11165,9 +11240,30 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             if _is_social_turn(user_input_ctx):
                 _sr_out = {"rating": "A", "why": "寒暄轮：答案里没有要查的事实，免自评"}
                 LOG.info("元认知自评：**寒暄轮免问模型**（省一次调用）")
+            elif _sr_out_early:
+                # 合并那条路已经把它一起问回来了（就没有第二次调用）
+                _sr_out = _sr_out_early
+                LOG.info("元认知自评：**与感知同一次调用**拿回 rating=%s ｜ %s",
+                         _sr_out.get("rating"), str(_sr_out.get("why"))[:60])
+            elif _sr_box is not None:
+                # 并发那条路：这里只等它，不再发第二次请求
+                try:
+                    from core import inner_joint as _IJ3
+                    _val, _err = _IJ3.finish(_sr_box, timeout=float(CAP.get("inner_wait_s", 90) or 90))
+                except Exception as e:      # noqa: silent-ok — 等不到就退回串行
+                    _val, _err = None, "%s: %s" % (type(e).__name__, str(e)[:80])
+                if _val is not None:
+                    _sr_out = _val
+                    LOG.info("元认知自评：**并发那次已回来** rating=%s ｜ %s",
+                             _sr_out.get("rating"), str(_sr_out.get("why"))[:60])
+                else:
+                    # 并发那次没回来 —— 如实退回串行（慢，但结果与原来一模一样）
+                    LOG.warning("元认知自评：并发那次没拿到（%s）→ 退回串行问一次", _err)
+                    _sr_out = _selfrate_now(user_input_ctx)
+                    LOG.info("元认知自评：规则判不出，交模型自评 rating=%s ｜ %s",
+                             _sr_out.get("rating"), str(_sr_out.get("why"))[:60])
             else:
-                _sr_out = _sr.self_rate(user_input_ctx, llm_fn=_selfrate_llm,
-                                        context=_eyc_now())
+                _sr_out = _selfrate_now(user_input_ctx)
                 LOG.info("元认知自评：规则判不出，交模型自评 rating=%s ｜ %s",
                          _sr_out.get("rating"), str(_sr_out.get("why"))[:60])
         _meta_route = _sr.route(_sr_out.get("rating"))
