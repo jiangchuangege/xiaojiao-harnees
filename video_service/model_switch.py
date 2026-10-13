@@ -56,14 +56,44 @@ def _pid_on_port(port):
     return None
 
 
-def _llama_swap_unload(model_id="xiaojiao"):
-    """让 llama-swap 卸载一个模型(释放显存,进程常驻)。"""
+def _llama_swap_loaded_ids():
+    """llama-swap 现在**哪些模型真的占着显存**（status=loaded）。"""
     import requests as _r
     try:
-        r = _r.post(_llama_swap_url() + "/api/models/unload/" + model_id, timeout=15)
-        return r.status_code == 200
-    except Exception:
-        return False
+        r = _r.get(_llama_swap_url() + "/v1/models", timeout=8)
+        if r.status_code != 200:
+            return []
+        return [m.get("id") for m in (r.json().get("data") or [])
+                if str(((m.get("status") or {}).get("value")) or "").lower() == "loaded" and m.get("id")]
+    except Exception:      # noqa: silent-ok — 问不到就当作"没有可卸的"
+        return []
+
+
+def _llama_swap_unload(model_id="xiaojiao"):
+    """让 llama-swap 卸载一个模型(释放显存,进程常驻)。
+
+    【2026-10-13 实测补的兜底：**按名字卸不掉时，就把所有加载着的都卸掉**】
+      用户反馈"生成视频时卸不掉当前聊天模型"。查下来：卸载接口本身没问题
+      （实测 `POST /api/models/unload/xiaojiao` → 200，显存 5930 MiB → 856 MiB），
+      问题出在**名字对不上**：如果控制文件里的模型名不是 llama-swap 的路由键
+      （实测踩到过 `C:/llama/xiaojiao1.0-4B.gguf` 这种**文件路径当模型名**的配置），
+      卸载请求就打到一个不存在的路由上 → 静默失败 → 显存没腾出来 → 视频起不来。
+      所以这里**卸不掉就退一步**：问 `/v1/models`，把 status=loaded 的全卸掉。
+      （视频生成本来就要独占显存，卸干净是对的；生成完 `start_brain()` 会把聊天模型拉回来。）
+    """
+    import requests as _r
+    ok = False
+    for mid in ([model_id] + [i for i in _llama_swap_loaded_ids() if i != model_id]):
+        try:
+            r = _r.post(_llama_swap_url() + "/api/models/unload/" + str(mid), timeout=15)
+            if r.status_code == 200:
+                LOG.info("视频切换：已卸载 llama-swap 模型 %s（腾显存）", mid)
+                ok = True
+            else:
+                LOG.warning("视频切换：卸载 %s 失败（HTTP %s）", mid, r.status_code)
+        except Exception as e:
+            LOG.warning("视频切换：卸载 %s 出异常：%s", mid, e)
+    return ok
 
 
 def get_state():
