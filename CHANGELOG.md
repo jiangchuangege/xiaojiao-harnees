@@ -7,6 +7,57 @@
 
 ## [v1.0] - 2026-09-13
 
+### 云端视频：不再只认 Agnes，接**任意厂商**都只需写配置（2026-10-14）
+
+用户的原话：**「云端 Agnes 这个不一定是 agnes 要兼容任意的」**。
+
+改之前是什么样：`cloud_video.py` 按 `base_url` / 模型名**猜**协议 —— 认得出 Agnes 就走 Agnes
+那一套写死的参数，认不出就回一句「暂未支持的视频 API 协议」。这等于**把某一家的规矩写进了载体**：
+换一家（可灵、海螺、万相、Veo、Replicate…）就得改代码。这不是载体的做法。
+
+新增 `video_service/video_api_spec.py`：**配置驱动的通用适配引擎**（只做三件通用的事 ——
+按模板发建任务请求、按 JSON 路径轮询状态、取回成片）。接一家新厂商 =
+
+```json
+{"name": "某家云视频", "base_url": "https://api.vendor.example", "api_key": "sk-...",
+ "model": "vendor-video-3",
+ "video_api": {"kind": "custom", "create_path": "/v1/videos", "query_path": "/v1/jobs/{id}",
+               "auth": {"style": "x-api-key", "header": "X-Api-Key"},
+               "id_paths": ["data.job.uuid"], "status_paths": ["data.job.state"],
+               "url_paths": ["data.job.file.mp4"], "progress_paths": ["data.job.pct"],
+               "done": ["ok"], "failed": ["dead"], "pending": ["queued", "running"]}}
+```
+
+**不用改一行代码**。引擎认的字段：路径模板（`{id}` `{model}` 占位）、认证方式（Bearer /
+x-api-key / query / 自定义头 / 不认证）、额外 body 与 headers、五组 JSON 路径候选
+（含 `data.0.task.id` 这种嵌套与数组下标）、状态值字面量（中文也认）、`url` 或 `base64` 结果、
+轮询间隔与队列重试次数。
+
+**三条硬规矩**（写进代码与文档，不是口号）：
+
+1. **未实测的协议默认拒绝执行** —— 拿没验过的协议去跑，用户花的是自己的钱和时间，
+   报错时还看不出是"协议不对"还是"服务不行"。要跑得显式放行（`video.allow_unverified`）。
+2. **状态认不出来一律当"还没好"**，绝不把半成品当成品交出去。
+3. **队列满/限流/断线 = 再试一次；参数错(400/401) 当场报出来**；取不到任务 id 或成片地址时，
+   错误信息直接告诉用户改 `id_paths` / `url_paths` 里的哪个字段。
+
+**顺带修掉两个真错**（都是接任意厂商时必然撞上的）：
+
+* base_url 带 `/v1`、预设里又写 `/v1/videos` → 拼成 `/v1/v1/videos`（404）。现在整段去重；
+* Agnes 的**查询端点在根上**（`/agnesapi`，不带 `/v1`）—— 预设里加 `query_base: "origin"`。
+  实测：建任务 = `https://apihub.agnes-ai.com/v1/videos`，查询 = `https://apihub.agnes-ai.com/agnesapi`
+  （带 `video_id` + `model_name`，与官方文档一致）。
+
+**诚实边界**：内置预设只有 `agnes` 标了"已实测"（2026-10-13 照官方文档真调通）；
+`openai-video` 按官方文档形状写但本机没 key，标"未实测"、默认拒绝；其它厂商**一律不编预设** ——
+不知道字段名就不猜，谁接谁按字段单子填。Agnes 免费档队列一直满（连续 30 次 `503 video_queue_full`），
+所以"云端成片有没有音轨"**至今没测到**，不替它下结论。
+
+自测（离线，共 67 项）：
+`tools/test_cloud_video_spec.py`（57 项，含真起一个本机 HTTP 服务扮演"形状很怪"的陌生厂商，
+只写配置跑完整条链路）、`tools/test_cloud_video_worker.py`（10 项，走主程序自己的
+`_worker()` 云端分支，证明程序里这条接线也认配置）。
+
 ### 一轮里的两次内部调用不再串着跑：感知 + 自评 合并成一次 / 至少在飞（2026-10-13）
 
 用户的原话（体感）：**「他回复好慢」**、**「每次思考好几分钟」**。

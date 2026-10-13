@@ -76,8 +76,10 @@
 | `model_switch.py` | 显存切换协调器：卸载/恢复聊天大脑，启动/停止 ComfyUI，对外提供切换阶段状态 |
 | `comfy_client.py` | ComfyUI HTTP 客户端：提交工作流、轮询进度与历史、下载成片 |
 | `video_api.py` | Flask Blueprint：全部 HTTP 接口、后台任务线程、任务状态持久化、提示词精炼 |
-| `cloud_video.py` | 通用云端视频适配器：按 `base_url` / 模型名特征识别协议并分发 |
-| `agenes.py` | Agnes 云端文生视频的独立实现（当前无调用方，见 [11.6](#116-无调用方的模块)） |
+| `cloud_video.py` | 云端视频入口：挑出带密钥的视频模型、给出它**能不能跑**与"走的是什么协议"，然后交给通用引擎 |
+| `video_api_spec.py` | **配置驱动的通用适配引擎**：任何厂商都靠它跑 —— 建任务 / 轮询 / 取回成片全按模型自己声明的 `video_api`（见 [第 10 节](第10节) 与 `docs/video.md`） |
+| `video_audio.py` | 成片之后的"接声音 / 接长"：`probe` 看真实秒数与音轨、`tts_wav` 用**载体自己的声音**（`/api/tts` → Chatterbox，拿不到才退回系统语音）念台词、`concat` 多段拼接、`add_audio` 混进画面 |
+| `agenes.py` | Agnes 这一家的参数规矩（`build_body` / `query_params` / `generate`）—— 通用引擎的 `agnes` 预设会调它，**规矩只有这一份** |
 | `workflow_wan.json` | 本地路径的 ComfyUI 工作流模板，含 `__CKPT__` 与 `__POS__` 两个占位符 |
 | `_jobs.json` | 运行态产物：任务状态表落盘，进程重启后自动读回（已被 .gitignore 忽略） |
 
@@ -438,16 +440,22 @@ curl -s -X POST http://127.0.0.1:5000/api/video/mode \
 
 ### 10.2 云端路径
 
-需要额外配置一个带密钥的视频模型（写进 `xiaojiao_control.json` 的 `models` 列表，名称或地址里含 `video`）。`cloud_video.py` 按地址特征识别协议：
+配置一个带密钥的视频模型（写进 `xiaojiao_control.json` 的 `models` 列表）。
+**协议由这个模型自己声明**：在条目里写一块 `video_api`，引擎就按它说话 ——
+接任意厂商都只需写配置，不用改代码（引擎在 `video_api_spec.py`，字段单子见 `docs/video.md` 第 10 节）。
 
-| 协议 | 识别特征 | 状态 |
+没写 `video_api` 时的兜底：
+
+| 情形 | 引擎怎么处理 | 状态 |
 | --- | --- | --- |
-| Agnes | 地址或模型名含 `agnes` | 已实现 |
-| OpenAI 兼容视频 | 地址以 `/v1` 结尾，或含 `openai`、`videos` | 已实现，按多个候选端点依次尝试 |
-| Gemini | 地址含 `generativelanguage` 或 `gemini` | 未实现，调用即抛出「暂未完整实现」 |
-| 其他 | — | 抛出「暂未支持的视频 API 协议」 |
+| 地址或模型名含 `agnes` | 用内置 `agnes` 预设（参数规矩来自 `agenes.py`） | **已实测**（2026-10-13 按官方文档调通） |
+| 其他 | 按 OpenAI 兼容视频形状试，并如实标注"这是猜的、未实测" | 预设存在但**未实测**，默认拒绝执行（除非 `allow_unverified`） |
+| 看上去像 Gemini/Veo | **不编字段**：给骨架 + 明确提示按文档填 `video_api` | 未实测 |
+| 自己写了 `video_api` | 以它为准 | 按你填的字段运行 |
 
-云端路径另外做了每分钟一次请求的节流，用于避开免费额度的限流。
+三条硬规矩：**未实测的协议默认拒绝执行**；**状态认不出来一律当"还没好"**（绝不把半成品当成品）；
+**队列满/限流/断线重试，参数错当场报出来**。取不到任务 id 或成片地址时，错误信息会直接指出
+该改 `id_paths` / `url_paths` 里的哪个字段。云端路径另外做了每分钟一次请求的节流，用于避开免费额度的限流。
 
 ### 10.3 本地路径
 
@@ -525,9 +533,11 @@ curl -s -X POST http://127.0.0.1:5000/api/video/mode \
 
 `_load_workflow()` 会把 `__MODEL__` 替换为 `XIAOJIAO_WAN_MODEL`（默认 `wan2.6-t2v`），但 `workflow_wan.json` 里没有 `__MODEL__` 占位符，替换没有任何效果。
 
-### 11.6 无调用方的模块
+### 11.6 各文件的调用关系（2026-10-14 更新）
 
-`agenes.py` 是 Agnes 云端视频的独立实现，全仓库没有任何文件导入它；云端路径实际走的是 `cloud_video.py` 里的通用适配器。该文件属备用实现，改动它不会影响线上的云端路径。
+`agenes.py` 不再是"无调用方的模块"：**通用引擎 `video_api_spec.py` 的 `agnes` 预设会调它**
+（`build_body` / `query_params`），所以 Agnes 那一家的参数规矩只存在一份。
+`cloud_video.py` 是入口（挑模型、判能不能跑、给协议说明），真正发请求的是 `video_api_spec.py`。
 
 ### 11.7 工作流与 ComfyUI 版本绑定
 
@@ -537,9 +547,13 @@ curl -s -X POST http://127.0.0.1:5000/api/video/mode \
 
 本文的实测覆盖配置探测、Blueprint 注册、全部 HTTP 接口的请求响应、以及历史产物核对。以下内容未在本次核对中实际触发：
 
-- 端到端重新生成一次视频（需要显存与 4 分钟量级的模型加载时间）。
-- 云端路径的实际出片。
+- 云端路径的**实际出片**：Agnes 免费档的队列从 2026-10-13 深夜起一直满（连续 30 次 `503 video_queue_full`，
+  约 30 分钟），所以"云端成片有没有音轨"这件事**至今没测到**，不敢替它下结论。
+- `openai-video` 预设：字段是按 OpenAI 官方文档形状写的，本机没有对应 key，**未实测**（默认拒绝执行）。
 - ComfyUI 未安装时 `start_comfy()` 的报错路径。
+
+本地路径 2026-10-14 已实测出片：81 帧 @16fps = 5.06 秒/段，三段拼接 **15.19 秒**，
+接上载体配音后 `{"秒": 15.19, "有音轨": true}`；单段约 15 分钟（8G 显卡）。
 
 ---
 

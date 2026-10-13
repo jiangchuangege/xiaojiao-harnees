@@ -102,6 +102,33 @@ def _cfg_retry():
         return 5
 
 
+def build_body(prompt, mode="text", seconds=5, **extra):
+    """拼 Agnes 的建任务请求体（**这一家的参数规矩只写在这里一份**）。
+
+    通用适配器（`video_api_spec.py` 的 agnes 预设）也调这个函数 ——
+    所以"官方那几个规矩"（mode 只认三种、seconds 是 4~12 的字符串、size 固定 720P）
+    只有一份实现，不会这边改完那边没改。
+    """
+    _mode = str(mode or "text")
+    if _mode not in ("text", "keyframe", "reference"):
+        _mode = "text"                      # 老配置里的 ti2vid 之类一律归到 text，免得又 400
+    body = {"model": model(), "prompt": prompt, "mode": _mode,
+            "size": "720P", "aspect_ratio": "16:9"}
+    try:                                    # seconds 必须是字符串，且只允许 4~12
+        _sec = int(str(seconds or 5))
+    except Exception:
+        _sec = 5
+    body["seconds"] = str(max(4, min(_sec, 12)))
+    if extra:
+        body.update(extra)
+    return body
+
+
+def query_params(video_id):
+    """查任务要带的参数（文档：`video_id` + `model_name`；keyframe/reference 必须带后者）。"""
+    return {"video_id": video_id, "model_name": model()}
+
+
 def generate(prompt, mode="text", poll_interval=3, timeout=1800, progress_cb=None, **extra):
     """提交 Agnes 文生视频任务并轮询到完成, 返回 (本地视频路径, 远程URL)。
 
@@ -119,23 +146,13 @@ def generate(prompt, mode="text", poll_interval=3, timeout=1800, progress_cb=Non
     if not key:
         raise RuntimeError("未配置 Agnes key(设 XIAOJIAO_AGNES_KEY 或 xiaojiao_control.json 的 brain.agnese.key)")
     headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
-    _mode = str(mode or "text")
-    if _mode not in ("text", "keyframe", "reference"):
-        _mode = "text"                      # 老配置里的 ti2vid 之类一律归到 text，免得又 400
-    body = {"model": model(), "prompt": prompt, "mode": _mode,
-            "size": "720P", "aspect_ratio": "16:9"}
-    try:                                    # seconds 必须是字符串，且只允许 4~12
-        _sec = int(str(extra.pop("seconds", 5) or 5))
-    except Exception:
-        _sec = 5
-    body["seconds"] = str(max(4, min(_sec, 12)))
     # ⚠️ 2026-10-13 踩过: 我们自己的内部开关(重试次数)混在 extra 里一起发给了服务器,
     #    服务器回 400 create_retry is not an allowed request field —— 先摘干净再发。
     try:
         attempts = int(extra.pop("create_retry", 0) or _cfg_retry())
     except Exception:
         attempts = _cfg_retry()
-    body.update(extra)
+    body = build_body(prompt, mode=mode, seconds=extra.pop("seconds", 5), **extra)
     # 1. 创建任务
     #    ⚠️ 2026-10-13 实测: 免费档服务器队列经常满, 会返回
     #       503 {"code":"video_queue_full","message":"video queue is full, please retry later"}
@@ -173,7 +190,7 @@ def generate(prompt, mode="text", poll_interval=3, timeout=1800, progress_cb=Non
     while time.time() - start < timeout:
         try:
             st = requests.get(BASE + "/agnesapi", headers=headers,
-                              params={"video_id": vid, "model_name": model()},
+                              params=query_params(vid),
                               timeout=30).json()
         except Exception as e:
             st = {"status": "pending", "error": str(e)}

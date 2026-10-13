@@ -297,7 +297,20 @@ def _worker(job_id, prompt):
         try:
             import cloud_video as _cv
             use_cloud = _cv.available()   # api 模式下还得有配置好的视频模型(带key)才走云端
-        except Exception:
+            if use_cloud:
+                _ok_run, _why_run = _cv.runnable()
+                try:
+                    LOG.info("云端视频：%s", _cv.describe())
+                except Exception as e:      # noqa: silent-ok — 只是记一行说明
+                    LOG.debug("忽略异常(%s:%d): %s", __file__, 297, e)
+                if not _ok_run:
+                    # 配了模型但跑不了（没实测过的协议 / 缺 base_url 等）—— 如实说清再回落本地
+                    LOG.warning("云端视频这家**现在跑不了**：%s → 这一单走本地", _why_run)
+                    print("[video] 云端跑不了：%s → 回落本地" % _why_run, flush=True)
+                    _jobs[job_id]["cloud_note"] = _why_run
+                    use_cloud = False
+        except Exception as e:
+            LOG.debug("忽略异常(%s:%d): %s", __file__, 300, e)
             use_cloud = False
     if use_cloud:
         # api 模式: 不卸载大脑/不占显存/不本地精炼, 直接透传给云端(通用适配器自动识别协议)

@@ -3,18 +3,22 @@
 | 项目 | 内容 |
 |---|---|
 | 适用版本 | v1.0 |
-| 最后更新 | 2026-09-14 |
+| 最后更新 | 2026-10-14 |
 | 维护者 | 小焦项目 |
 | 文档状态 | 稳定 |
-| 代码位置 | `video_service/video_api.py`、`video_service/model_switch.py`、`video_service/config.py`、`video_service/workflow_wan.json`、`video_service/cloud_video.py`、`video_service/agenes.py` |
+| 代码位置 | `video_service/video_api.py`、`video_service/model_switch.py`、`video_service/config.py`、`video_service/workflow_wan.json`、`video_service/cloud_video.py`、`video_service/video_api_spec.py`、`video_service/video_audio.py`、`video_service/agenes.py` |
 | 产物目录 | `videos/`，通过 `/videos/<文件名>` 访问 |
 
 ## 摘要
 
 小焦内置文生视频能力，有两条并列链路：本地链路用 ComfyUI 加载 Wan2.1 权重，在显卡上真正做扩散采样；
-云端链路把提示词交给 Agnes 等兼容接口。两条链路共用同一组接口与同一个任务队列，
+云端链路把提示词交给**任意一家**视频 API（Agnes 只是其中一家，见第 10 节：写一块 `video_api` 就能接）。
+两条链路共用同一组接口与同一个任务队列，
 由 `brain.video_mode` 或 `XIAOJIAO_VIDEO_MODE` 选择。本文说明两种模式、模型与目录要求、
 接口、显存让位策略与限制。
+
+另外：本地 Wan2.1 **没有音频通道**（出不来声音）；要"有声音"由 `video_audio.py` 在成片之后
+用载体自己的声音（`/api/tts` → Chatterbox）念台词混进去 —— 那是**载体替他配音**，不是模型自己在说话。
 
 ## 1. 背景与问题
 
@@ -37,9 +41,13 @@
 | 本地 | `local` | 卸载大脑、启动 ComfyUI、跑 Wan2.1 工作流 | 是 |
 
 模式解析顺序：环境变量 `XIAOJIAO_VIDEO_MODE`，其次控制文件的 `brain.video_mode`，
-都没有时返回默认值 `api`。即使解析为 `api`，若控制文件 `models` 列表里没有
-"地址或名称含 video 且填了 api_key"的条目，`cloud_video.available()` 返回假，
-任务会自动回落到本地链路。也就是说：**没配置云端视频模型时，默认路径就是本地 ComfyUI。**
+都没有时返回默认值 `api`。即使解析为 `api`，若控制文件 `models` 列表里没有可用的云端视频模型
+（判据见第 10.1 节：**自己声明了 `video_api`**，或地址/名称里带 video/agnes 且填了 `api_key`），
+`cloud_video.available()` 返回假，任务会自动回落到本地链路。也就是说：
+**没配置云端视频模型时，默认路径就是本地 ComfyUI。**
+
+还有一种情况：配了模型但**跑不了**（协议没实测过、缺 `base_url`、缺 `api_key`）——
+`cloud_video.runnable()` 会返回具体原因，日志与任务里都会如实写出这句话，然后同样回落本地。
 
 切换模式：
 
@@ -198,20 +206,80 @@ curl -X POST http://127.0.0.1:5000/api/video \
 `--lowvram` 只在 `keep_warm` 为真或设置了 `XIAOJIAO_KEEP_COMFY=1` 时附加。
 两种策略的取舍是：常驻换取连续生成的秒级启动，代价是内存与显存长期被占。
 
-## 10. 云端链路
+## 10. 云端链路（兼容任意厂商，不是只认某一家）
 
-`cloud_video.py` 是通用适配器，按 `base_url` 与模型名特征识别协议：
+`cloud_video.py` 是入口，真正干活的是 **`video_api_spec.py`：一套配置驱动的通用适配引擎**。
 
-| 特征 | 识别结果 |
+### 10.1 它按「你自己的声明」说话，不按域名猜
+
+2026-10-14 之前这里是"按 `base_url` / 模型名特征猜协议"：认得出 Agnes 就走 Agnes 那一套写死的
+参数，认不出就回一句"暂未支持的协议"。这等于**把某一家的规矩写进了载体** ——
+换一家（可灵、海螺、万相、Veo、Replicate…）就得改代码。
+
+现在改成：**接一家新厂商 = 在控制文件里给那个模型写一块 `video_api`，不用改任何代码**。
+引擎只做三件通用的事：按模板发建任务请求 → 按 JSON 路径轮询状态 → 取回成片。
+
+| 情形 | 引擎怎么处理 |
 |---|---|
-| 地址或名称含 `agnes` | Agnes 协议 |
-| 地址含 `generativelanguage` 或 `gemini` | Gemini 协议 |
-| 地址含 `openai`，或以 `/v1` 结尾，或含 `videos` | OpenAI 兼容视频协议 |
-| 其他 | `unknown`，给出明确的接入提示 |
+| 条目里写了 `video_api` | **以它为准**（这是接任意厂商的正路） |
+| 没写，但域名/名字像 Agnes | 用内置 `agnes` 预设（**已实测**） |
+| 没写，其它 | 按 OpenAI 兼容视频形状试，并**如实标出"这是猜的、未实测"** |
+| 像 Gemini/Veo | **不编字段**：给骨架 + 明确提示"按它的文档填 `video_api`" |
 
-云端模型的配置方式是在控制文件 `models` 列表里加一条，`base_url` 含 `videos` 或 `/video`，
-或 `name` 含 `video`，并且填写 `api_key`。免费档位有每分钟 1 次的请求限制，
-适配器用一个进程内锁加时间戳做节流，两次请求之间至少间隔 60 秒，避免触发限流。
+### 10.2 `video_api` 可以写哪些字段（全部可选）
+
+| 字段 | 作用 |
+|---|---|
+| `kind` | 预设名：`agnes` / `openai-video` / `custom` |
+| `create_path` / `query_path` | 建任务 / 查任务路径，可带 `{id}` `{model}` 占位 |
+| `create_body` | 建任务请求体里**额外**的固定字段（如 `{"resolution":"1080p"}`） |
+| `auth` | `{style: bearer x-api-key query header none, header, scheme, param}` |
+| `headers` | 额外的固定请求头 |
+| `id_paths` / `status_paths` / `url_paths` / `progress_paths` / `error_paths` | 从响应里取值的 JSON 路径候选（支持 `data.0.task.id` 这种嵌套与数组下标） |
+| `done` / `failed` / `pending` | 状态值字面量（不区分大小写，中文也认） |
+| `result_kind` | `url`（默认）或 `base64`（有的厂商直接回一段 base64） |
+| `poll_interval` / `queue_retry` | 轮询间隔、队列满时的重试次数 |
+| `verified` | 自己声明"这套字段我实测过"。为假时**默认拒绝执行**，要显式 `allow_unverified` 才跑 |
+
+实例（一家形状很怪的厂商，全靠配置接上）：
+
+```json
+{
+  "name": "某家云视频", "base_url": "https://api.vendor.example",
+  "api_key": "sk-...", "model": "vendor-video-3",
+  "video_api": {
+    "kind": "custom",
+    "create_path": "/v1/videos",
+    "query_path": "/v1/jobs/{id}",
+    "auth": {"style": "x-api-key", "header": "X-Api-Key"},
+    "id_paths": ["data.job.uuid"],
+    "status_paths": ["data.job.state"],
+    "url_paths": ["data.job.file.mp4"],
+    "progress_paths": ["data.job.pct"],
+    "done": ["ok"], "failed": ["dead"], "pending": ["queued", "running"]
+  }
+}
+```
+
+### 10.3 三条硬规矩
+
+1. **未实测的协议默认拒绝执行**（除非显式放行）。拿没验过的协议去跑，用户花的是自己的钱和时间，
+   报错时还看不出是"协议不对"还是"服务不行"。
+2. **状态认不出来一律当"还没好"**，绝不把半成品当成品交出去。
+3. **队列满 / 限流 / 断线 = 再试一次；参数错（400/401）当场报出来** —— 两种代价不对等。
+   取不到任务 id 或成片地址时，错误信息会直接告诉用户改 `id_paths` / `url_paths` 里的哪个字段。
+
+### 10.4 自测怎么跑
+
+```bash
+python tools/test_cloud_video_spec.py
+```
+
+这套自测（57 项）里有一段会**真起一个本机 HTTP 服务**，用它扮演一家"从没听说过、形状很怪"的厂商
+（任务字段叫 `uuid`、状态叫 `queued/running/ok`、进度叫 `pct`、成片地址埋在 `file.mp4` 里），
+然后只写配置把它接上并跑完整条链路 —— 证明"接任意厂商只需写配置"不是一句口号。
+
+免费档位有每分钟 1 次的请求限制时，适配器用一个进程内锁加时间戳做节流，两次请求之间至少间隔 60 秒。
 
 ## 11. 效果演示
 

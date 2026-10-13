@@ -27,18 +27,20 @@ def _load_control():
         return {}
 
 def _video_models():
-    """从控制文件 models 里挑出所有视频模型(base_url 含 videos/video/agnes 或 name 含 video)。
+    """从控制文件 models 里挑出所有视频模型。
 
-    ⚠️ 2026-10-13 实测教训: Agnes 的视频端点就在 `https://apihub.agnes-ai.com/v1`(和其它
-    Agnes 对话模型共用域名), 靠 base_url/name 里有没有 "video" 是认不出来的 —— 必须把
-    base_url 含 `agnes` 也算数, 否则云端通了也永远 `available()=False`, 一直悄悄回落到本地。
+    判据（任一命中即算，2026-10-14 起）：
+      · 条目里**自己声明了 `video_api`** —— 这是接任意厂商的正路（见 `video_api_spec.py`）；
+      · base_url 含 videos / /video，或 name 含 video；
+      · base_url / name 含 agnes —— Agnes 的视频端点和它的对话模型共用域名，靠 video 字样认不出来
+        （2026-10-13 真踩过：认不出来就永远 available()=False，一直悄悄回落到本地）。
     """
     out = []
     for m in _load_control().get("models", []):
         name = (m.get("name") or "")
         url = (m.get("base_url") or "")
         low_url, low_name = url.lower(), name.lower()
-        if ("videos" in low_url or "/video" in low_url or "video" in low_name
+        if (m.get("video_api") or "videos" in low_url or "/video" in low_url or "video" in low_name
                 or "agnes" in low_url or "agnes" in low_name):
             out.append(m)
     return out
@@ -58,23 +60,83 @@ def _detect_provider(base_url, model_name):
     return "unknown"
 
 def _pick_video_model():
-    """返回 (provider, model_name, api_key, base_url)。有多个视频模型取第一个可用(有key的)。"""
-    for m in _video_models():
-        key = m.get("api_key") or ""
-        if not key:
-            continue
-        base = m.get("base_url") or ""
-        model = m.get("model") or m.get("name")
-        return _detect_provider(base, model), model, key, base
-    return None
+    """兼容老调用方：返回 (协议 kind, 模型名, api_key, base_url)；没有可用模型返回 None。
+
+    ⚠️ 协议那一栏现在取自 `video_api_spec.spec_for()`（配置里声明的 video_api 说了算），
+    不再是"按域名猜出来的厂商名"。新代码请直接用 `provider()` / `model()` / `spec()`。
+    """
+    m = _pick_video_model_entry()
+    if not m:
+        return None
+    try:
+        import sys as _sys
+        if os.path.dirname(os.path.abspath(__file__)) not in _sys.path:
+            _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        return (_spec_mod().spec_for(m).get("kind"), model(), m.get("api_key") or "",
+                (m.get("base_url") or "").rstrip("/"))
+    except Exception:
+        return (_detect_provider(m.get("base_url"), m.get("model") or m.get("name")),
+                model(), m.get("api_key") or "", (m.get("base_url") or "").rstrip("/"))
 
 def available():
     """是否配置了任意视频模型(有 key)。"""
-    return _pick_video_model() is not None
+    return _pick_video_model_entry() is not None
+
+def runnable():
+    """这家现在**真能跑吗**：返回 (能不能, 为什么不能)。
+
+    和 `available()` 的区别：`available()` 只说"配了个带 key 的模型"，
+    这里连"协议实没实测过、base_url/key 齐不齐"一起判 —— 免得点了生成才发现跑不了。
+    放行未实测预设的开关：控制文件 `video.allow_unverified: true`（默认不放过）。
+    """
+    m = _pick_video_model_entry()
+    if not m:
+        return False, "没有带 key 的云端视频模型"
+    try:
+        V = _spec_mod()
+        sp = V.spec_for(m)
+        allow = False
+        try:
+            import json as _j, os as _o
+            root = _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__)))
+            d = _j.load(open(_o.path.join(root, "xiaojiao_control.json"), encoding="utf-8"))
+            allow = bool((d.get("video") or {}).get("allow_unverified"))
+        except Exception as e:      # noqa: silent-ok — 读不到就当不放行
+            LOG_ = None
+        return V.check_runnable(sp, allow_unverified=allow)
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, str(e)[:120])
 
 def provider():
-    p = _pick_video_model()
-    return p[0] if p else None
+    """这家走的是什么协议（agnes / openai-video / custom …）。
+
+    ⚠️ 2026-10-14 起这里返回的是**适配规格里那个 kind**，不再是"猜出来的厂商名"：
+    用户那句「云端 Agnes 这个不一定是 agnes 要兼容任意的」就是冲这里来的 ——
+    载体不该按域名判断"你是不是 Agnes"，而应该按**这个模型自己声明的协议**去说话。
+    """
+    m = _pick_video_model_entry()
+    if not m:
+        return None
+    try:
+        return _spec_mod().spec_for(m).get("kind")
+    except Exception:
+        return None
+
+def _spec_mod():
+    """拿到 video_api_spec.py（app 里是直接 import，包内自查是相对导入）。"""
+    try:
+        import video_api_spec as _v
+        return _v
+    except ImportError:
+        from video_service import video_api_spec as _v
+        return _v
+
+def _pick_video_model_entry():
+    """挑出第一个**带 key 的**视频模型条目（原样返回配置，不加工）。"""
+    for m in _video_models():
+        if m.get("api_key"):
+            return m
+    return None
 
 def _agenes_mod():
     """拿到 agenes.py 模块。app 跑的时候 video_service 在 sys.path 里(直接 import agenes),
@@ -87,39 +149,55 @@ def _agenes_mod():
         return _ag
 
 def model():
-    picked = _pick_video_model()
-    if not picked:
+    """这个视频模型**对外叫什么**（发给服务器的 model 字段）。
+
+    Agnes 那条以 `agenes.py` 为准（默认 `agnes-video-2.5-flash`）—— 配置里那条
+    `agnes-2.5-flash` 是**对话模型**的名字，拿它去 /v1/videos 会 400（2026-10-13 真踩过）。
+    """
+    m = _pick_video_model_entry()
+    if not m:
         return None
-    if picked[0] == "agnes":
-        try:                      # Agnes 的真实视频模型名以 agenes.py 为准(默认 agnes-video-2.5-flash)
-            return _agenes_mod().model()
-        except Exception:
-            pass
-    return picked[1]
+    try:
+        spec = _spec_mod().spec_for(m)
+        return spec.get("model") or m.get("name")
+    except Exception:
+        return m.get("model") or m.get("name")
+
+def spec():
+    """当前这套云端视频的适配规格（给界面/日志看：协议、实没实测过、哪儿不确定）。"""
+    m = _pick_video_model_entry()
+    if not m:
+        return None
+    try:
+        return _spec_mod().spec_for(m)
+    except Exception:
+        return None
+
+def describe():
+    """一句话说清"现在云端走的是谁、什么协议、靠不靠得住"。"""
+    sp = spec()
+    if not sp:
+        return "没有可用的云端视频模型（模型管理里加一个带 key 的）"
+    return _spec_mod().describe(sp)
 
 def generate(prompt, mode=None, poll_interval=20, timeout=1800, progress_cb=None, **extra):
-    """通用文生视频入口。按 provider 分发到对应实现, 返回 (本地路径, 远程URL)。"""
-    picked = _pick_video_model()
-    if not picked:
-        raise RuntimeError("未配置可用的视频模型(需要在模型管理里添加一个带 key 的视频模型)")
-    provider_name, model_name, key, base_url = picked
-    if provider_name == "agnes":
-        # Agnes 只有 agenes.py 那一份实现是照官方文档校准过的(2026-10-13):
-        # mode 只认 text/keyframe/reference, seconds 是 4~12 的字符串, size 固定 720P,
-        # 轮询要带 model_name, 队列满(503)要重试。这里直接复用, 免得两份实现又走岔。
-        _ag = _agenes_mod()
-        if not _ag.available():
-            raise RuntimeError("Agnes key 没读到(xiaojiao_control.json 的 models[] 里 agnes 那条要填 api_key)")
-        kw = dict(extra)
-        kw.pop("mode", None)
-        return _ag.generate(prompt, mode=(mode or "text"), poll_interval=min(poll_interval, 5),
-                            timeout=timeout, progress_cb=progress_cb, **kw)
-    elif provider_name == "gemini":
-        return _gen_gemini(prompt, key, base_url, model_name, poll_interval, timeout, progress_cb, **extra)
-    elif provider_name == "openai":
-        return _gen_openai(prompt, key, base_url, model_name, poll_interval, timeout, progress_cb, **extra)
-    else:
-        raise RuntimeError("暂未支持的视频 API 协议(%s)，请告诉我它的接口文档我来接入" % provider_name)
+    """通用云端文生视频入口 —— **任何厂商都走同一套引擎**，返回 (本地路径, 远程URL)。
+
+    这家叫什么名字、字段叫什么，全由它自己的 `video_api` 声明（见 `video_api_spec.py` 顶部）。
+    `mode` 是历史参数（老代码传 ti2vid）：新引擎不认识就原样交给厂商的 param_builder，
+    Agnes 那条会把它归一成 text（`agenes.build_body` 的规矩）。
+    """
+    m = _pick_video_model_entry()
+    if not m:
+        raise RuntimeError("未配置可用的视频模型（需要在模型管理里添加一个带 key 的视频模型）")
+    V = _spec_mod()
+    sp = V.spec_for(m)
+    kw = dict(extra)
+    if mode is not None:
+        kw.setdefault("mode", mode)
+    if poll_interval:
+        kw.setdefault("poll_interval", min(float(poll_interval), float(sp.get("poll_interval") or 5)))
+    return V.generate(sp, prompt, timeout=timeout, progress_cb=progress_cb, **kw)
 
 # ---------- Agnes(⚠️ 已被上面的 agenes.py 委托取代, 保留只为对照旧参数, 不要再调用) ----------
 def _gen_agnes(prompt, key, base, model, poll, timeout, cb, **extra):
