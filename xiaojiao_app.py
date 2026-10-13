@@ -15667,6 +15667,63 @@ def api_model_add():
     return jsonify({"ok": True, "models": models})
 
 
+@app.route("/api/model/videoapi")
+def api_model_videoapi():
+    """读某个模型**已保存**的视频协议（界面里"载入已保存的"用）。
+
+    没有就如实回 null —— 不编一份默认的糊弄界面。
+    """
+    name = (request.args.get("name") or "").strip()
+    if not name:
+        return jsonify({"ok": False, "error": "缺少 name", "video_api": None}), 400
+    for m in _get_models():
+        if m.get("name") == name:
+            return jsonify({"ok": True, "name": name, "video_api": m.get("video_api") or None,
+                            "base_url": m.get("base_url") or "", "model": m.get("model") or ""})
+    return jsonify({"ok": False, "error": "没有这个模型：" + name, "video_api": None}), 404
+
+
+@app.route("/api/video/provider/test", methods=["POST"])
+def api_video_provider_test():
+    """**按给定的一份视频协议试着拼请求**，告诉用户这家能不能跑、请求会发到哪。
+
+    【为什么不真的发一条】这里只做"拼得出来吗、字段对得上吗"的自检：
+    真发一条要花用户的钱和时间（而且队列满的时候要等一分钟一次），
+    自检能挡住的是最常见的错——路径占位符写错、JSON 路径取不到、认证方式没写。
+    """
+    d = request.get_json(force=True, silent=True) or {}
+    entry = {"name": (d.get("name") or "").strip(), "base_url": (d.get("base_url") or "").strip(),
+             "api_key": (d.get("api_key") or "").strip(), "model": (d.get("model") or "").strip()}
+    if not entry["base_url"] or not isinstance(d.get("video_api"), dict):
+        # 界面上没填 base_url、或编辑框里没给协议时，拿已保存的那个模型补齐
+        # （用户在自检"已保存的那一条"，不该因为我没带全字段就当成"没声明协议"）
+        for m in _get_models():
+            if m.get("name") == entry["name"]:
+                entry["base_url"] = entry["base_url"] or (m.get("base_url") or "")
+                entry["api_key"] = entry["api_key"] or (m.get("api_key") or "")
+                entry["model"] = entry["model"] or (m.get("model") or "")
+                if not isinstance(d.get("video_api"), dict) and isinstance(m.get("video_api"), dict):
+                    entry["video_api"] = m["video_api"]
+                break
+    if isinstance(d.get("video_api"), dict):
+        entry["video_api"] = d["video_api"]
+    try:
+        import sys as _sys
+        vdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "video_service")
+        if vdir not in _sys.path:
+            _sys.path.insert(0, vdir)
+        import video_api_spec as _V
+        spec = _V.spec_for(entry)
+        ok_run, why = _V.check_runnable(spec, allow_unverified=True)   # 自检不受"未实测"拦
+        create_url, _body, _p = _V.build_create(spec, "（提示词占位）", seconds=5)
+        query_url, _qp = _V.build_query(spec, "（任务号占位）")
+        return jsonify({"ok": bool(ok_run), "why": why, "describe": _V.describe(spec),
+                        "create_url": create_url, "query_url": query_url,
+                        "kind": spec.get("kind"), "model": spec.get("model")})
+    except Exception as e:
+        return jsonify({"ok": False, "why": "%s: %s" % (type(e).__name__, str(e)[:180])}), 200
+
+
 @app.route("/api/model/delete", methods=["POST"])
 def api_model_delete():
     data = request.get_json(force=True, silent=True) or {}
@@ -16423,6 +16480,25 @@ HTML = r"""<!DOCTYPE html>
             <div class="field"><label>模型名</label><input id="s_m_model" placeholder="如 deepseek-chat"/></div>
             <div class="field" style="display:flex;align-items:flex-end;gap:10px"><button class="btn-sec" onclick="addModel()">＋ 添加模型(API/外接)</button><button class="btn-sec" style="margin-left:8px" onclick="addLocalModel()">🗄️ 一键加本地GGUF</button></div>
           </div>
+          <div class="field" style="margin-top:8px">
+            <label style="cursor:pointer" onclick="toggleVideoApi()">🎬 视频协议（可选 · 接任意厂商用）<span id="s_m_vapi_h" style="color:#7a8290;font-weight:400">点击展开</span></label>
+            <div id="s_m_vapi_box" style="display:none;margin-top:8px">
+              <div class="think" style="margin-bottom:6px">
+                云端视频不认厂商、只认协议：把这家接口的字段填进下面这块 JSON，**不用改代码**。<br>
+                至少要写四个：<code>create_path</code>（建任务路径）、<code>query_path</code>（查任务路径，用 <code>{id}</code> 占位）、
+                <code>id_paths</code> 与 <code>status_paths</code>（从它的返回里取任务号与状态）；成片地址用 <code>url_paths</code>。<br>
+                认证方式写 <code>auth</code>；状态词写 <code>done</code>/<code>failed</code>。填完点「查这家能不能跑」验一下再说。
+                例子：<code>{"kind":"custom","create_path":"/v1/videos","query_path":"/v1/jobs/{id}","auth":{"style":"x-api-key","header":"X-Api-Key"},"id_paths":["data.job.uuid"],"status_paths":["data.job.state"],"url_paths":["data.job.file.mp4"],"done":["ok"],"failed":["dead"]}</code>
+              </div>
+              <textarea id="s_m_vapi" rows="4" style="width:100%;font-family:Consolas,monospace;font-size:12px" placeholder='{"kind":"custom","create_path":"/v1/videos","query_path":"/v1/jobs/{id}","id_paths":["data.job.uuid"],"status_paths":["data.job.state"],"url_paths":["data.job.file.mp4"]}'></textarea>
+              <div class="row" style="margin-top:6px">
+                <button class="btn-sec" onclick="checkVideoApi()">🔍 查这家能不能跑</button>
+                <button class="btn-sec" style="margin-left:8px" onclick="loadVideoApi()">⬇️ 载入已保存的</button>
+                <button class="btn-sec" style="margin-left:8px" onclick="clearVideoApi()">🧹 清空编辑框</button>
+              </div>
+              <div class="think" id="s_m_vapi_msg" style="margin-top:6px"></div>
+            </div>
+          </div>
           <div class="think" id="s_model_msg"></div>
           <div class="think" id="s_brain_status" style="margin-top:8px"></div>
         </div>
@@ -17148,8 +17224,32 @@ function saveAddLocal(){
 }
 async function addModel(){const name=document.getElementById('s_m_name').value.trim();if(!name){document.getElementById('s_model_msg').textContent='❌ 名字必填';return;}
   const entry={name:name,engine:document.getElementById('s_m_engine').value,base_url:document.getElementById('s_m_base').value.trim(),api_key:document.getElementById('s_m_key').value.trim(),model:document.getElementById('s_m_model').value.trim()};
+  // 视频协议（可选）：填了就一起存进这个模型的 video_api —— 接任意厂商靠它（见 docs/video.md 第 10 节）
+  const vtxt=(document.getElementById('s_m_vapi')||{}).value||'';
+  if(vtxt.trim()){
+    try{entry.video_api=JSON.parse(vtxt);}
+    catch(e){document.getElementById('s_model_msg').textContent='❌ 视频协议那段不是合法 JSON：'+e.message;return;}
+  }
   const r=await fetch('/api/model/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(entry)});const d=await r.json();
-  if(d.ok){document.getElementById('s_model_msg').textContent='✅ 已添加：'+name;loadModelList();loadModels();}else{document.getElementById('s_model_msg').textContent='❌ '+(d.error||'失败');}}
+  if(d.ok){document.getElementById('s_model_msg').textContent='✅ 已添加：'+name+(entry.video_api?'（含视频协议）':'');loadModelList();loadModels();checkVideoApi();}else{document.getElementById('s_model_msg').textContent='❌ '+(d.error||'失败');}}
+function toggleVideoApi(){const b=document.getElementById('s_m_vapi_box');const h=document.getElementById('s_m_vapi_h');if(!b)return;
+  const show=b.style.display==='none';b.style.display=show?'block':'none';if(h)h.textContent=show?'（点一下收起）':'点击展开';if(show)loadVideoApi();}
+function clearVideoApi(){const t=document.getElementById('s_m_vapi');if(t)t.value='';const m=document.getElementById('s_m_vapi_msg');if(m)m.textContent='';}
+async function loadVideoApi(){const t=document.getElementById('s_m_vapi');const m=document.getElementById('s_m_vapi_msg');if(!t)return;
+  const name=document.getElementById('s_m_name').value.trim();if(!name){if(m)m.textContent='先在「名字」里填要载入的模型名';return;}
+  try{const d=await (await fetch('/api/model/videoapi?name='+encodeURIComponent(name))).json();
+    if(d.ok&&d.video_api){t.value=JSON.stringify(d.video_api,null,1);if(m)m.textContent='已载入「'+name+'」现在用的视频协议';}
+    else if(m){m.textContent=(d.video_api===null)?'「'+name+'」还没有视频协议（它不是视频模型，或还没填过）':('载入失败：'+(d.error||''));}
+  }catch(e){if(m)m.textContent='载入出错：'+e.message;}}
+async function checkVideoApi(){const t=document.getElementById('s_m_vapi');const m=document.getElementById('s_m_vapi_msg');if(!m)return;
+  const name=document.getElementById('s_m_name').value.trim();
+  let body={name:name};
+  if(t&&t.value.trim()){try{body.video_api=JSON.parse(t.value);}catch(e){m.textContent='❌ 不是合法 JSON：'+e.message;return;}}
+  m.textContent='⏳ 正在按这份协议试着拼请求…';
+  try{const d=await (await fetch('/api/video/provider/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    m.innerHTML=d.ok?('✅ 能跑：'+esc(d.describe||'')+(d.create_url?('<br>建任务会发到：<code>'+esc(d.create_url)+'</code>'):'')+(d.query_url?('<br>查任务会发到：<code>'+esc(d.query_url)+'</code>'):''))
+                    :('⚠️ 跑不了：'+esc(d.why||'未知原因'));
+  }catch(e){m.textContent='检查出错：'+e.message;}}
 async function delModel(name){const r=await fetch('/api/model/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})});const d=await r.json();if(d.ok){loadModelList();loadModels();}}
 function closeSettings(){S.classList.remove('show');}
 function setSec(el,name){document.querySelectorAll('.sec').forEach(s=>s.classList.toggle('show',s.id==='sec-'+name));

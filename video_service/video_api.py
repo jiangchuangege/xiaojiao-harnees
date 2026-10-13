@@ -401,12 +401,17 @@ def _worker(job_id, prompt):
                                                     datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + "_wan_long.mp4"))
         else:
             out = outs[0]
-        if narrate:
-            import video_audio as _va2
-            out = _va2.add_audio(out, text=narrate)
+        # ⚠️ 先卸载视频模型**再**配音：配音要加载载体自己的声音（Chatterbox，也要显存），
+        #    而下载步之后 Wan 还压在显存里 —— 8G 卡上这两样同时在，配音那一步会 OOM。
+        #    （2026-10-14 实测顺序：显存里同时放 Wan + Chatterbox 是行不通的。）
         _jobs[job_id].update(state="switching", message="卸载视频模型…")
         import brain_manager as _bm2
         _bm2.switch_to("chat")
+        if narrate:
+            _jobs[job_id].update(state="generating", message="正在配台词（载体自己的声音）…")
+            _persist()
+            import video_audio as _va2
+            out = _va2.add_audio(out, text=narrate)
         _jobs[job_id].update(state="done", message="完成", url="/videos/" + os.path.basename(out))
         if not _keep_warm_flag():
             _schedule_warm_idle(job_id)  # 温存15分钟,超时自动释放内存

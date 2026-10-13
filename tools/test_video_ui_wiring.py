@@ -72,6 +72,33 @@ def main():
     ok("界面不再写死「云端 Agnes API」", "云端 Agnes API（免费" not in src)
     ok("界面会显示接的是谁/实没实测", "window._vcloud" in src and "未实测" in src)
 
+    # ---- 界面里能填/能验视频协议（2026-10-14 加）----
+    import xiaojiao_app as X
+    c2 = X.app.test_client()
+    X._get_models = lambda: [{"name": "某家云视频", "base_url": "https://api.vendor.example",
+                              "api_key": "sk-1", "model": "v3",
+                              "video_api": {"kind": "custom", "create_path": "/v1/videos",
+                                            "query_path": "/v1/jobs/{id}", "id_paths": ["data.job.uuid"]}}]
+    r5 = c2.get("/api/model/videoapi?name=某家云视频").get_json()
+    ok("能读回已保存的视频协议", r5.get("ok") and isinstance(r5.get("video_api"), dict), str(r5)[:70])
+    r6 = c2.get("/api/model/videoapi?name=不存在的").get_json()
+    ok("没有这个模型时如实回 null（不编默认值）", r6.get("video_api") is None and r6.get("ok") is False)
+    r7 = c2.post("/api/video/provider/test", json={"name": "某家云视频"}).get_json()
+    ok("自检：拿已保存的协议拼出请求", r7.get("ok") is True and r7.get("kind") == "custom", str(r7)[:70])
+    ok("自检：告诉用户请求会发到哪",
+       str(r7.get("create_url") or "").startswith("https://api.vendor.example"), r7.get("create_url"))
+    ok("自检：查任务 URL 也拼得出来", "jobs/" in str(r7.get("query_url") or ""), r7.get("query_url"))
+    r8 = c2.post("/api/video/provider/test",
+                 json={"name": "手填的", "base_url": "https://api.x.com/v1", "api_key": "k", "model": "m",
+                       "video_api": {"kind": "custom", "create_path": "/v1/videos",
+                                     "query_path": "/v1/tasks/{id}"}}).get_json()
+    ok("自检：手填的协议也能验（不受未实测拦截）", r8.get("ok") is True, str(r8)[:60])
+    r9 = c2.post("/api/video/provider/test", json={"name": "没配的", "video_api": {"kind": "custom"}}).get_json()
+    ok("自检：缺 base_url 时明确说跑不了", r9.get("ok") is False and "base_url" in str(r9.get("why")), r9.get("why"))
+    ok("界面上有协议折叠框与三个按钮",
+       'id="s_m_vapi"' in src and "checkVideoApi()" in src and "loadVideoApi()" in src)
+    ok("界面会拦住非法 JSON（不许把坏 JSON 存进去）", "不是合法 JSON" in src)
+
     print("\n通过 %d 项, 失败 %d 项" % (len(PASS), len(FAIL)))
     if FAIL:
         print("失败清单:", "、".join(FAIL))
