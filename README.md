@@ -194,6 +194,7 @@ flowchart TB
 | 媒体素材 | [`docs/press-kit.md`](docs/press-kit.md) |
 | 安装与配置 | [`docs/install.md`](docs/install.md)、[`docs/quickstart.md`](docs/quickstart.md) |
 | 插件与扩展 | [`docs/PLUGINS.md`](docs/PLUGINS.md)、[`docs/extend.md`](docs/extend.md) |
+| **因果记忆集成（教训层 · 外部引擎怎么接进来）** | [`docs/causal-memory.md`](docs/causal-memory.md) |
 | 已知限制 | 本文件「[已知限制](#️-已知限制如实说不藏)」一节 |
 
 ---
