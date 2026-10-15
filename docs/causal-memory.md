@@ -156,6 +156,10 @@ flowchart TB
 想自己搭的话，照上面四件事写就行 —— 只读小焦的文件（学习库、会话 JSON），
 写只写因果库和它自己的 `reports/` 目录。
 
+**这一半已经单独开源**：[jiangchuangege/xiaojiao-causal-memory-sidecar](https://github.com/jiangchuangege/xiaojiao-causal-memory-sidecar)
+（MIT）。单独一个仓库是有意的：它耦合的是引擎、不是小焦本体，
+放进主仓库会变臃肿，引擎升级换目录时还得跟着改 —— 那不叫解耦。
+
 ## 7. 实测数据
 
 * 只接插件、没导历史时：库里 6 条边，`causal_warn` 基本回 `UNKNOWN`（**等于没有预警**）；
