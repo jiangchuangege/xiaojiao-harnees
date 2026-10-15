@@ -4761,8 +4761,29 @@ def run_tool(name, args, force=False):
                  name, _summarize_args_for_log(name, args))
         return ("（本轮 `%s` 对同一目标已经调用过一次，这里直接复用上次的结果，没有重复执行）\n%s"
                 % (name, _dup))
+    # ---- 因果记忆：动手前先问一句「以前这么干出过事吗」（最多等 2 秒，问不到就不说）----
+    # 【为什么挂在这里】run_tool 是工具的**唯一入口**（见本函数开头那段说明）——
+    #   只有挂在唯一入口上，"三类关键动作前后都问过"这句话才成立，而不是靠每个工具自己记得。
+    # 【为什么只做三类】改配置 / 删改文件 / 动显存（显存那类不走这里，见 core/causal_hooks 的说明）：
+    #   埋点要少而准，把每个工具调用都记一遍只会把因果库刷成噪声。
+    _cw = ""
+    try:
+        from core import causal_hooks as _CHK
+        _cw = _CHK.before(name, args)
+    except Exception as _e:      # noqa: silent-ok — 这一层坏了绝不许影响任何工具
+        LOG.debug("因果记忆预警层不可用（忽略）：%s", _e)
     _res = _run_tool_impl(name, args, force=force)
     _res = _weather_fallback(name, args, _res)
+    # ---- 因果记忆：动作做完了，把「决策 → 结果」记一笔（丢后台线程，不让用户等）----
+    try:
+        from core import causal_hooks as _CHK2
+        _CHK2.after(name, args, _res, ok=not _tool_failed(_res))
+    except Exception as _e:      # noqa: silent-ok
+        LOG.debug("因果记忆埋点失败（忽略）：%s", _e)
+    if _cw and isinstance(_res, str):
+        # 预警**附在结果后面**，不插在前面：有些校验是按结果开头判的（比如"失败"标记），
+        # 插在前面会改变既有判据的行为 —— 这是"只加不改"的具体落法。
+        _res = _res + _cw
     _round_remember(name, args, _res)
     return _res
 

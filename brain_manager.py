@@ -328,7 +328,15 @@ def switch_to(target):
             sleep(k)
         # 3) 目标 -> 活动(显存)
         ok = wake(target)
-        return {"switched": target, "from": [k for k, v in BRAINS.items() if v["state"] == "RUN" and k != target], "ok": ok}
+        info = {"switched": target, "from": [k for k, v in BRAINS.items() if v["state"] == "RUN" and k != target], "ok": ok}
+    # 【因果记忆·显存那一类埋点（2026-10-15）】换模型 = 显存里谁进谁出，正是"抢显存"这类事故的因果原料。
+    #   放在 `with _lock` **外面**：记账要起子进程调用，不能占着切换锁。失败一律忽略。
+    try:
+        from core import causal_hooks as _CH
+        _CH.note_vram(target, info)
+    except Exception as _e:      # noqa: silent-ok — 记账失败绝不许影响切换本身
+        LOG.debug("因果记忆显存埋点失败（忽略）：%s", _e)
+    return info
 
 
 # ================== 显存归属策略（谁可以顶谁） ==================

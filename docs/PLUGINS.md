@@ -272,7 +272,7 @@ python -c "import xiaojiao_app as x; print(list(x.PLUGINS.keys()))"
 }
 ```
 
-二进制从该项目的 Releases 下载 `windows-x86_64` 包解压即可（本机实测 v0.9.3）；
+二进制从该项目的 Releases 下载 `windows-x86_64` 包解压即可（本机实测的是 0.9.3 版）；
 **找不到二进制时 `get_tool_descriptions()` 返回空** —— 一个工具都不会注册，
 宁可不出现，也不给模型一个点不动的工具；真去调它会给一句中文说明，告诉你缺什么、去哪下。
 
@@ -281,6 +281,49 @@ python -c "import xiaojiao_app as x; print(list(x.PLUGINS.keys()))"
 
 自测：`tools/test_causal_memory_plugin.py`（离线段用假 MCP server 验客户端这条链，
 真机段用真二进制 + 临时库跑「记一条 → 搜回来 → 动手前预警」）。
+
+### 6.2 关键动作自动埋点（`core/causal_hooks.py`，2026-10-15）
+
+光接上没用——它记的是「决策 → 结果」，**不埋点就是空库**。所以在三类最有价值的动作上自动埋：
+
+| 类别 | 认什么 | 挂点 |
+| --- | --- | --- |
+| 配置类（config） | 写/改配置文件（`xiaojiao_control.json`、`llama-swap.y*ml`、`*.yaml|yml|toml|ini|conf|env`、`presets/*.json`）；命令里出现配置文件路径也算 | `run_tool()`（工具的唯一入口） |
+| 文件类（file） | 写文件（`write_file`／`edit_file`／`append_file`／`save_to`）；命令里含删除/覆盖/移动（`Remove-Item`／`rm`／`del`／`Set-Content`／`>` 等） | 同上 |
+| 显存类（vram） | 大脑切换（卸载/加载模型 = 显存里谁进谁出） | `brain_manager.switch_to()` |
+
+只读类、搜索类一律不埋（埋点要少而准）。动作**之前**问一句、**之后**记一笔，两条硬规矩：
+
+1. **绝不挡路**：之前的查询最多等 2 秒（等不到就不说），之后的记账丢后台线程——
+   用户这一轮不因为"记一笔账"多等一毫秒；
+2. **宁可不说，不许吓唬人**：只有对面明确给 `WARNING` / `DANGER` 才提示；
+   `UNKNOWN`／空／超时不会说成危险，最多挂一句**如实标注的参考**
+   （「有相关历史记录（引擎未给安全档位，仅供参考、不是结论）」）。
+
+开关都写在 `causal_memory` 那一块里：
+
+```json
+"causal_memory": {
+  "auto": true,                       // 总开关，false 就完全不埋点
+  "auto_kinds": ["config", "file", "vram"],
+  "auto_min_interval_s": 600,         // 同一个动作多久内只记一次（不刷库）
+  "auto_max_per_hour": 30,            // 每小时上限
+  "auto_show_related": true,          // 引擎没给档位时要不要挂那句"有相关记录"的参考
+  "env": { "CAUSAL_MEMORY_LLM_API": "http://127.0.0.1:9292/v1" }
+}
+```
+
+`env` 里可以给引擎自己的 LLM / 嵌入配置（`CAUSAL_MEMORY_LLM_*` 判极性用、
+`CAUSAL_MEMORY_EMBED_*` 语义检索用；都不配就是纯 BM25）。
+
+⚠️ **实测到的现状（写下来免得误会）**：直接用 `record_decision` 写进去的边，
+引擎当前的极性判定给的是 `other`／`mixed`，所以 `intervention_query` 基本都回 `UNKNOWN` ——
+也就是「高危预警」这一档现在很少亮，你会先看到"有相关记录"那句参考。
+想让预警真正分档，得靠它的提炼链路（`extract`／`judge`／`distill`）或攒够样本后的 `sleep` 巩固。
+
+自测：`tools/test_causal_hooks.py`（37 项：分类只认三类、UNKNOWN 不当危险、
+查询最多等 2 秒就放弃、记账后台返回、同动作节流、每小时上限、`auto=false` 全静默、
+插件没加载时整层安静）。
 
 ## 7. 相关文档
 

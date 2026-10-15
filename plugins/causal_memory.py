@@ -262,6 +262,12 @@ class CausalMemoryPlugin:
                 env_extra = {}
                 if self.cfg.get("db"):
                     env_extra["CAUSAL_MEMORY_DB"] = self.cfg["db"]
+                # 引擎自己的可选配置（都走环境变量）：
+                #   CAUSAL_MEMORY_LLM_API / _KEY / _MODEL   —— 判极性、提炼用的 LLM
+                #   CAUSAL_MEMORY_EMBED_API / _KEY / _MODEL —— 语义检索用的嵌入（不配就只有 BM25）
+                env = self.cfg.get("env")
+                if isinstance(env, dict):
+                    env_extra.update({str(k): str(v) for k, v in env.items() if v})
                 self._client = _McpStdio(self._cmd(), env_extra=env_extra)
             if self._client.proc is None or self._client.proc.poll() is not None:
                 if not self._client.start():
