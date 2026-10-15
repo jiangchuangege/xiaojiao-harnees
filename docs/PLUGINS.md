@@ -241,8 +241,46 @@ python -c "import xiaojiao_app as x; print(list(x.PLUGINS.keys()))"
 | `plugins/workspace_search.py` | 3 | 限定工作区范围的文件检索 |
 | `plugins/netdoctor.js` | 3 | JS 插件写法：网络诊断类工具 |
 | `plugins/ip.json` | 2 | JSON API 插件写法：声明式接入第三方 HTTP 接口 |
+| `plugins/causal_memory.py` | 6 | **常驻子进程 + MCP（JSON-RPC over stdio）**：把外部 MCP 服务当工具用；找不到二进制时一个工具都不注册 |
 
 `asset_intel` 的数据源接入说明见 [资产测绘插件](asset-intel.md)。
+
+### 6.1 `causal_memory`：接一个外部 MCP 服务当工具（2026-10-15）
+
+小焦自己已经有事实/画像记忆（`memory_vec`）和经验记录（`self_learn` 里几百条工具成败与反思），
+所以这个插件**只接小焦缺的那部分**：类型化的因果教训。它把
+[causal-memory](https://github.com/JingxuanC/causal-memory)（Rust 单二进制，Apache-2.0）
+当常驻子进程拉起来，通过 MCP 的 JSON-RPC 说话，提供 6 个工具：
+
+| 工具 | 对应用途 |
+| --- | --- |
+| `causal_warn` | 动手前预警（抑制侧）：这个动作以前造成过什么后果 |
+| `causal_search` | 查以前的教训：同类事情上什么做法导致了什么结果 |
+| `causal_record` | 记一条「决策 → 结果」（`relation` 取 caused / enabled / prevented / co_occurrence） |
+| `causal_trace` | 故障多跳溯源：从一个坏结果往回追出因果链 |
+| `causal_counterfactual` | 两个候选方案各自过去的结果分布 |
+| `causal_report` | 预测账本：以前的判断押对了多少 |
+
+配置写在 `xiaojiao_control.json`（环境变量 `CAUSAL_MEMORY_EXE` / `CAUSAL_MEMORY_DB` /
+`CAUSAL_MEMORY_TASK_TAG` 可覆盖）：
+
+```json
+"causal_memory": {
+  "exe": "C:/xiaojiao/causal-memory/causal-memory.exe",
+  "db":  "C:/xiaojiao/causal-memory/xiaojiao.db",
+  "task_tag": "小焦运维"
+}
+```
+
+二进制从该项目的 Releases 下载 `windows-x86_64` 包解压即可（本机实测 v0.9.3）；
+**找不到二进制时 `get_tool_descriptions()` 返回空** —— 一个工具都不会注册，
+宁可不出现，也不给模型一个点不动的工具；真去调它会给一句中文说明，告诉你缺什么、去哪下。
+
+两条使用提醒：一是它记的是「决策 → 结果」，**不主动埋点就是空库**，要靠 `causal_record` 攒；
+二是攒到一定量后跑一次 `causal-memory sleep`（离线巩固），它的预警档位才会更准。
+
+自测：`tools/test_causal_memory_plugin.py`（离线段用假 MCP server 验客户端这条链，
+真机段用真二进制 + 临时库跑「记一条 → 搜回来 → 动手前预警」）。
 
 ## 7. 相关文档
 
