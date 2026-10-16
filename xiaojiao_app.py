@@ -2131,6 +2131,84 @@ _MEMORY_INSTRUCTION = (
     "**也不许把「小焦说过的」「自己记下的」说成「你说过的」**。\n")
 _MEMORY_LAST = {"rid": "", "text": "", "tokens": 0}      # 供写回"模型是否使用"
 
+# ---------------- 记忆口径闸门（2026-10-15：把「绝假记忆」接到主链路上） ----------------
+# 【接的是什么】`core/memory_deep.py` 里那套 precise / fuzzy / none 判断，
+#   在此之前**只有自测在调**（`docs/modules/03-memory-depth.md` 7.1 那张表里写着「设计，未落地」）。
+#   现在把它接到检索出口：`_retrieve_memory()` 拿到命中后立刻判一次口径，
+#   `_rag_concurrent()` 决定"素材"怎么注入时，把口径那句话一起写进 system。
+# 【为什么带 query 和时间戳】`_MEM_GATE` 是模块级的，而 Flask 是多线程的：
+#   不带 query 就没有归属，A 那一轮的口径可能被 B 那一轮读到（那是"拿旧话管新事"）。
+#   所以读的时候必须**认领**：query 必须一模一样、且不超过 `_MEM_GATE_TTL` 秒。
+#   （这跟 `_MEMORY_LAST` / `_EVENT_WHAT` 是同一类处理，见 `_EVENT_WHAT_TTL` 那段注释。）
+_MEM_GATE = {"query": "", "verdict": "", "note": "", "reason": "", "at": 0.0}
+_MEM_GATE_TTL = 120.0
+
+
+def _memory_gate_set(query, hits):
+    """判这一轮的口径并记下来（**只判、不检索**：复用 `_retrieve_memory` 已有命中）。"""
+    _MEM_GATE.update({"query": "", "verdict": "", "note": "", "reason": "", "at": 0.0})
+    try:
+        from core import memory_gate as _MG
+        q = str(query or "")
+        if not _MG.is_memory_question(q):
+            return
+        # 别的记忆源是不是已经知道答案：知道就让闸门闭嘴（否则会出现
+        # "用户原话直答说有、闸门说没说过"的自相矛盾 —— 那比不接还糟）。
+        other = False
+        try:
+            other = bool(_find_user_fact(q))
+        except Exception as e:      # noqa: silent-ok — 查不了就当"不知道"，闸门照常工作
+            LOG.debug("口径闸门：查用户原话失败（忽略）：%s", e)
+        if not other:
+            other = _profile_maybe_knows(q)
+        _cfg = {"on": bool(CAP.get("memory_gate", True)),
+                "overlap": CAP.get("memory_precise_overlap")}
+        r = _MG.judge(q, hits, cfg=_cfg, other_knows=other)
+        _MEM_GATE.update({"query": q, "verdict": r["verdict"], "note": r["note"],
+                          "reason": r["reason"], "at": time.time()})
+        LOG.info("记忆口径闸门：口径=%s ｜ %s%s", r["verdict"] or "（未判）", r["reason"],
+                 "｜已注入一句口径约束" if r["applied"] else "｜未介入（行为与接之前一致）")
+    except Exception as e:      # noqa: silent-ok — 闸门不可用就当作没有它
+        LOG.debug("记忆口径闸门接入失败（忽略）：%s", e)
+
+
+def _profile_maybe_knows(query):
+    """画像库里有没有跟这句话沾边的记录（**只为了"别唱反调"，不用于回答**）。
+
+    判据故意粗：任何一条画像记录的 content 与查询有 2-gram 交集就算"可能知道"。
+    宁可多算（=闸门不说话），也不许少算 —— 少算的后果是自相矛盾。
+    """
+    try:
+        from core import user_profile as _UPr
+        from core import memory_deep as _MD
+        qa = _MD._features(query, drop_common=False)
+        if not qa:
+            return False
+        for p in (_UPr.all_records() or []):
+            txt = str(p.get("content") or p.get("text") or "")
+            if not txt:
+                continue
+            if qa & _MD._features(txt, drop_common=False):
+                return True
+        return False
+    except Exception as e:      # noqa: silent-ok — 画像读不到就当不知道
+        LOG.debug("口径闸门：读画像失败（忽略）：%s", e)
+        return False
+
+
+def _memory_gate_note(query):
+    """取**属于这一轮**的口径那句话（query 对不上或过期 → 返回空串）。"""
+    try:
+        if not _MEM_GATE["note"]:
+            return ""
+        if _MEM_GATE["query"] != str(query or ""):
+            return ""
+        if (time.time() - float(_MEM_GATE["at"] or 0)) > _MEM_GATE_TTL:
+            return ""
+        return str(_MEM_GATE["note"])
+    except Exception:      # noqa: silent-ok
+        return ""
+
 
 def _memory_cfg():
     """记忆检索参数（操控文件 capabilities 可覆盖，全部有默认值）。"""
@@ -2183,6 +2261,8 @@ def _timeline_memory(query, n=6):
 
 def _retrieve_memory(query):
     """从对话向量库检索相关历史；返回注入文本（失败一律返回空串，绝不拖垮对话）。"""
+    # 口径闸门**每轮先清零**：这一轮不判（寒暄/时间线/联网类问题）就绝不能留下上一轮那句话
+    _MEM_GATE.update({"query": "", "verdict": "", "note": "", "reason": "", "at": 0.0})
     if not CAP.get("memory", True) or not (query or "").strip():
         return ""
     # ★ **要联网才能答的那些问题，不注入"过去聊过什么"**（用户实测的最后一处污染源） ★
@@ -2234,6 +2314,10 @@ def _retrieve_memory(query):
             LOG.info("记忆检索：命中 %d 条 / 注入 %d 条 · %d token · %.1fms（后端 %s）",
                      len(res["hits"]), len(res["used"]), res["tokens"],
                      res["latency_ms"], res["backend"])
+        # ---- 记忆口径闸门：拿到命中后立刻判一次"我记得 / 只记得大概 / 没记过" ----
+        # 放在这里的原因：命中就在手边，**不用再检索一遍**（再调一次 recall 是同一轮里
+        # 检索两遍，含精排实测 0.5 秒级）。判完的结果由 `_rag_concurrent` 决定怎么用。
+        _memory_gate_set(query, res.get("hits") or [])
         # 协同网络：把"本轮检索到了什么"广播出去 ——
         # 订阅者（`app.memory_state`）会把它写进中央状态，推理/元认知/健康都能读到。
         # 这是"模块 A 发布 → 模块 B 收到"在真实运行里的落点（事件同时落盘可复盘）。
@@ -9645,10 +9729,13 @@ def _rag_concurrent(query, realtime=False):
         cands, lat, total = _rag_three_sources(query)
     except Exception as e:      # noqa: silent-ok — 并发整体失败就退回"不注入"
         LOG.debug("RAG 并发失败（忽略）：%s", e)
-        return ""
+        return _memory_gate_note(query)
     if not cands:
         LOG.info("RAG 三源同时查：全空（记忆库/向量库/联网都没给东西）")
-        return ""
+        # 全空**不等于"不注入"就完事**：如果这一轮用户问的是"我记忆里有没有这件事"，
+        # 载体必须把"没记过"这个口径**说出来** —— 否则模型只能自己决定怎么答，
+        # 而它的默认行为是顺着问句编一个（编造用户的经历）。
+        return _memory_gate_note(query)
     # ---- 思考圈 ①：心理 → 大脑（**改"往哪想"**）----
     #   只**重排**候选，不增删、不改写任何文本 —— 这是"改方向"而非"传消息"的硬证据：
     #   上下文里一个字都不多，变的是"先冒哪一类"。
@@ -9703,7 +9790,8 @@ def _rag_concurrent(query, realtime=False):
     LOG.info("RAG 优率：%.2f【%s】来源=%s%s ｜ %s", best["q"], g["grade"], best["source"],
              "（时效性事实：联网可直接用）" if g.get("realtime_used") else "", best["why"])
     if g["grade"] == "不注入":
-        return ""
+        # 同上：素材不够格不注入，但"口径"该说还得说（它是一句约束，不是素材）
+        return _memory_gate_note(query)
     if g["grade"] == "交元认知与健康医生":
         _rag_handoff_review(query, best, g)
     # 注入的是**素材**：明确要求模型自己组织措辞，不许原文回吐
@@ -9741,6 +9829,12 @@ def _rag_concurrent(query, realtime=False):
     if g["grade"] == "交元认知与健康医生":
         head += ("注意：这些素材的优率都没达到可直接采信的门槛（最高 %.0f%%），"
                  "用的时候要留出被证伪的余地。\n" % (best["q"] * 100))
+    # ---- 记忆口径闸门：把这一轮"我记得 / 只记得大概 / 没记过"写死 ----
+    # 放在素材**前面**：它是约束（决定"能不能当事实说"），不是背景资料；
+    # 压在最前面比跟在素材后面更难被忽略（与 C 档手段链指令同一条理由）。
+    _gate_note = _memory_gate_note(query)
+    if _gate_note:
+        head = _gate_note + "\n" + head
     return head + body + "\n"
 
 

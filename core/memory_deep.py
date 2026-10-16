@@ -707,25 +707,67 @@ def associations(memory_id, limit=5, now=None):
 #   precise（敢当事实说）: 余弦 ≥ SIM_STRONG **且** 表面特征有重合
 #   fuzzy （只承认"记得"、绝不补细节）: 余弦 ≥ SIM_WEAK，但没有表面重合
 #   低于 SIM_WEAK → "你之前没跟我说过这事"
+#
+# 【2026-10-15 收紧"有重合"这一条 —— 实测抓到一次真误判】
+#   7.2 记录的现场：问「我的车牌号是多少」，`verdict` 给的是 `precise`，
+#   命中内容却是一条与查询无关的数学题回答（余弦 0.6871、表面重合 0.333）。
+#   根因：「有重合」当初写成 `overlap > 0`，**任意一个 2-gram 撞上就算数**；
+#   而中文短句里总有一些"到处都出现的 2-gram"（虚词表没盖住的那批），
+#   6 个查询特征里撞上 2 个就能把 0.333 送过闸门 —— 闸门等于形同虚设。
+#   改法两条（都不引入新依赖、都是确定性的）：
+#     ① 阈值：precise 要求 `overlap >= OVERLAP_PRECISE`（实测原文命中 1.00、
+#        同义改写 0.00、上面那例误判 0.333 —— 0.5 正好把误判挡在外面）；
+#     ② 去掉"通用片段"：库里的**文档频率**过滤（`_common_grams()`），
+#        一个 2-gram 若在 ≥8% 且有 ≥4 条记忆里都出现，它就不能作为"同一件事"的证据。
+#   为什么不是简单调高 SIM_STRONG：余弦在这台嵌入模型上根本没有区分度（见上面的实测），
+#   调它只会把"真记得的"也一起打成 fuzzy，而那并不能修掉误判。
 SIM_WEAK = 0.55
 SIM_STRONG = 0.66
+# precise 的表面重合门槛（分母是查询侧）。**这个数是量出来的，不是拍的**（2026-10-15 实测 512 条真库）：
+#   真命中：我住在哪 0.667 ｜ 我养的猫叫什么 0.600 ｜ 我的生日是什么时候 0.400
+#   不相关：我在哪家公司上班 0.167 ｜ 我的车牌号是多少 0.000 ｜ 7.2 那次误判 0.333
+# 取 0.4：真命中最小的那条（生日 0.400）刚好过得去，而误判那条（0.333）被挡在外面。
+# ⚠️ 为什么不是 0.5：0.5 会把「我的生日是什么时候」这种**真记得**的也打成 fuzzy，
+#    那就成了"为了不编造，干脆说记不清" —— 把一个好用的功能砸了，不是修复。
+# ⚠️ 为什么也不靠调高 SIM_STRONG：余弦在这台嵌入模型上没有区分度，
+#    真命中 0.40 与不相关 0.73 是**重叠**的（车牌号那条余弦 0.7286 比真命中还高）。
+OVERLAP_PRECISE = 0.4
+# 结构词 2-gram：它们只标记"这是一句问话"，不携带任何话题信息。
+# 【为什么必须单独列一张表】虚词表（`_STOP_CHARS`）是按**单字**过滤的，
+#   而"多少""是什么"这种**整段就是问法**的 2-gram 活了下来 ——
+#   7.2 那次误判（问车牌号，命中一道数学题回答）命中的正是这类片段：
+#   数学题里必然有"多少"，于是 6 个查询特征里撞上 2 个就骗过了闸门。
+_STRUCT_GRAMS = frozenset((
+    "多少", "什么", "怎么", "怎样", "咋样", "哪个", "哪些", "哪儿", "哪里", "几点", "几号",
+    "几个", "几次", "是谁", "是不是", "有没有", "能不能", "可不可以", "为什么", "什么样",
+    "时候", "什么时", "哪一个", "多长", "多久",
+    # 「是多 / 是几 / 是哪」：纯问句构件的 2-gram 窗口（"是多少""是几点""是在哪"）。
+    # 实测补的这一批：问「我的车牌号是多少」时，"是多少"这三个字让查询多出 `是多` 这个特征，
+    # 而**任何一道数学题回答里都有"是多少"** —— 一次真重合就是这么来的（test_memory_gate 钉住）。
+    "是多", "是几", "是哪", "是什",
+))
 # 中文虚词单字：它们凑出的 2-gram（"我的"/"是不"）没有信息量，必须过滤，
 # 否则任何两句中文都会"假重合"，闸门直接失效。
 _STOP_CHARS = set("的了是我你他她它们在有和与也就都还不没很呢吧啊呀哦这那什么怎么请"
                   "问一下帮我个说记之前跟曾经经过于把被给对于从到会要能可以真想那第")
 
 
-def _features(text):
+def _features(text, drop_common=False):
     """抽"表面特征"：中文 2-gram（滤虚词）+ 数字串 + 长度≥2 的拉丁词。
 
     为什么用 2-gram 而不是分词：项目里没有中文分词器，也不该为一个判断加依赖；
     2-gram 对"这两句是不是在说同一件事"已经足够可分（实测 1.00 vs 0.00）。
+
+    `drop_common=True` 时再扣掉"库里到处都出现"的通用 2-gram（见 `_common_grams()`）——
+    只用在**记忆那一侧**：查询那侧是分母，扣掉它会把比例算歪。
     """
     t = re.sub(r"[^\w\u4e00-\u9fff]+", "", text or "")
     out = set()
     for i in range(len(t) - 1):
         bg = t[i:i + 2]
         if bg[0] in _STOP_CHARS and bg[1] in _STOP_CHARS:
+            continue
+        if bg in _STRUCT_GRAMS:          # 问法片段："多少/是什么" —— 撞上不代表在说同一件事
             continue
         out.add(bg)
     if len(t) == 1 and t not in _STOP_CHARS:
@@ -734,12 +776,67 @@ def _features(text):
         out.add(w.lower())
     for num in re.findall(r"\d{2,}", text or ""):
         out.add(num)
+    if drop_common and out:
+        out -= _common_grams()
     return out
 
 
+_DF_MIN_N = 8            # 库小于这个条数就不做通用词过滤：样本太少，统计没有意义
+_DF_MIN_COUNT = 4        # 至少在这么多条记忆里出现过
+_DF_RATIO = 0.10         # 且占比不低于这个比例
+_DF_CACHE = {"fp": None, "grams": frozenset(), "n": 0, "scanned_at": 0.0}
+
+
+def _memory_fp():
+    """记忆库文件的指纹（路径+大小+修改时间）；拿不到就返回 None（= 不过滤）。"""
+    try:
+        p = memory_vec.path()
+        st = os.stat(p)
+        return (str(p), int(st.st_size), int(st.st_mtime_ns))
+    except Exception:      # noqa: silent-ok — 库读不到时"不过滤"，不要让判断因此崩掉
+        return None
+
+
+def _common_grams():
+    """**通用 2-gram**：在库里出现得太普遍的片段，重合了也证明不了"在说同一件事"。
+
+    为什么必须有这条：虚词表（`_STOP_CHARS`）只能挡住"我的/是不"这种**单字组合**，
+    但库里还飘着一层更高频的通用片段 —— 它们让两个毫不相干的短句也能"撞上 2 个 2-gram"，
+    而那 2 个就足够骗过旧判据（7.2 那次误判正是这么发生的）。
+    判据用**文档频率**（多少条记忆里出现过它），阈值定得保守（≥4 条且 ≥10%），
+    免得把"只在这件事里出现"的真特征误当通用词扣掉。
+    ⚠️ 如实说一句：**在目前这个库（512 条）上它一次都没触发过** —— 实测出现频率最高的
+    2-gram 只有 3.7%（"住在" 19 条）。所以 7.2 那次误判**不是**靠它修掉的，
+    真正起作用的是那张 `_STRUCT_GRAMS` 问法片段表和 `OVERLAP_PRECISE` 阈值。
+    留它在这儿是给"库长到几千条以后"兜底，不是当前的功劳。
+    结果按文件指纹缓存：一轮对话里可能被调很多次，不该每次重扫全库。
+    """
+    fp = _memory_fp()
+    if fp is None:
+        return frozenset()
+    c = _DF_CACHE
+    if c["fp"] == fp:
+        return c["grams"]
+    rows = _all_rows()
+    n = len(rows)
+    grams = frozenset()
+    if n >= _DF_MIN_N:
+        df = {}
+        for r in rows:
+            for g in _features(r.get("text") or "", drop_common=False):
+                df[g] = df.get(g, 0) + 1
+        grams = frozenset(g for g, k in df.items()
+                          if k >= _DF_MIN_COUNT and k / float(n) >= _DF_RATIO)
+    c.update({"fp": fp, "grams": grams, "n": n, "scanned_at": time.time()})
+    return grams
+
+
 def overlap(query, text):
-    """查询与记忆内容的表面特征重合率（分母是查询侧，表示"我说的东西你记着多少"）。"""
-    a, b = _features(query), _features(text)
+    """查询与记忆内容的表面特征重合率（分母是查询侧，表示"我说的东西你记着多少"）。
+
+    **记忆那侧会扣掉通用片段**（`_common_grams()`），查询那侧不扣（它是分母）。
+    """
+    a, b = _features(query, drop_common=False), _features(text, drop_common=True)
     if not a:
         return 0.0
     return len(a & b) / float(len(a))
@@ -791,42 +888,81 @@ def recall(query, top_k=5, threshold=None, now=None):
         return {"verdict": "empty", "text": "", "hits": [], "tokens": 0}
     th = SIM_WEAK if threshold is None else float(threshold)
     r = retriever.retrieve(q, top_k=top_k, threshold=th, log=False, now=now)
-    hits = []
+    d = decide_hits(q, r.get("hits") or [], now=now)
+    return {"verdict": d["verdict"], "text": d["text"], "hits": d["hits"],
+            "tokens": r.get("tokens") or 0}
+
+
+def decide_hits(query, hits, now=None, overlap_min=None):
+    """**只判口径、不再检索** —— 判据与 `recall()` 完全同一套（两边各写一套迟早打架）。
+
+    为什么要有这个入口（2026-10-15）：主对话链路**已经有它自己的检索结果**了
+    （`_retrieve_memory()` 走 `retriever.retrieve()`，还带 token 预算与三源并发）。
+    要让"绝假记忆"这道闸门真的上线，只能把判断**接到已有的命中上**；
+    再调一次 `recall()` 等于同一轮里检索两遍（含精排，实测 0.5 秒级），
+    那是拿用户等待时间换一句重复劳动。
+
+    `overlap_min` 给调用方（控制文件里那几个开关）覆盖 `OVERLAP_PRECISE` 用；
+    不传就是默认那 0.4。
+
+    返回 {"verdict", "text", "hits", "best", "reason"}：
+      verdict  precise | fuzzy | none | empty（口径含义见 `recall()`）
+      hits     逐条补上 clarity / overlap / conf，按 conf 降序（给日志与界面看真实依据）
+      best     最优那条（没有就是 None）
+      reason   这一次为什么这么判（人话，写进日志，事后能复盘）
+    """
+    q = (query or "").strip()
+    if not q:
+        return {"verdict": "empty", "text": "", "hits": [], "best": None, "reason": "查询为空"}
+    ov_min = OVERLAP_PRECISE if overlap_min is None else float(overlap_min)
     now = time.time() if now is None else float(now)
     rows = {x.get("id"): x for x in _all_rows()}
-    for h in (r.get("hits") or []):
+    enriched = []
+    for h in (hits or []):
+        if not isinstance(h, dict):      # 坏输入不许把整条判断带崩（调用方各有各的脏数据）
+            continue
+        text = h.get("text") or ""
+        if not text:
+            continue
         row = rows.get(h.get("id")) or {}
         cl = _clarity_of_row(row, now) if row else CLARITY_HD
-        ov = overlap(q, h.get("text") or "")
-        hits.append({"id": h.get("id"), "text": h.get("text"), "score": h.get("score"),
-                     "decayed": h.get("decayed"), "age_days": h.get("age_days"),
-                     "clarity": cl, "clarity_cn": CLARITY_CN.get(cl, cl),
-                     "overlap": round(ov, 3),
-                     "conf": round(confidence(q, h.get("text") or "", h.get("score")), 3)})
-    hits.sort(key=lambda z: -(z["conf"] or 0))
-    if not hits:
+        ov = overlap(q, text)
+        enriched.append({"id": h.get("id"), "text": text, "score": h.get("score"),
+                         "decayed": h.get("decayed"), "age_days": h.get("age_days"),
+                         "clarity": cl, "clarity_cn": CLARITY_CN.get(cl, cl),
+                         "overlap": round(ov, 3),
+                         "conf": round(confidence(q, text, h.get("score")), 3)})
+    enriched.sort(key=lambda z: -(z["conf"] or 0))
+    if not enriched:
         _log("recall_none", query=q[:40])
-        return {"verdict": "none",
-                "text": "你之前没跟我说过这事。", "hits": [], "tokens": r.get("tokens") or 0}
-    best = hits[0]
-    # 精确：向量够强 **且** 表面上确实在说同一件事（有重合特征）—— 两条都满足才敢当事实说
-    if (best["score"] or 0) >= SIM_STRONG and best["overlap"] > 0:
+        return {"verdict": "none", "text": "你之前没跟我说过这事。", "hits": [],
+                "best": None, "reason": "检索没有命中任何一条（阈值以上的一条都没有）"}
+    best = enriched[0]
+    # 精确：向量够强 **且** 表面上确实在说同一件事 —— 两条都满足才敢当事实说。
+    # 「表面上确实在说同一件事」= 重合率过 OVERLAP_PRECISE（不是"有重合就算"，见文件头那段）。
+    if (best["score"] or 0) >= SIM_STRONG and best["overlap"] >= ov_min:
         if best["clarity"] in (CLARITY_BLUR, CLARITY_IMPRESSION):
             # 记得这件事，但内容已经模糊 —— 只承认"记得"，绝不补细节
             _log("recall_fuzzy", query=q[:40], id=best["id"], clarity=best["clarity"])
-            return {"verdict": "fuzzy",
-                    "text": "我记得你提过「%s」，但细节我记不太清了，你提醒我一下。"
-                            % (best["text"] or "")[:40],
-                    "hits": hits, "tokens": r.get("tokens") or 0}
+            return {"verdict": "fuzzy", "text": _fuzzy_text(best["text"]), "hits": enriched,
+                    "best": best, "reason": "命中了，但那条已经降到「%s」档，细节不许补"
+                                            % best["clarity_cn"]}
         _log("recall_precise", query=q[:40], id=best["id"], conf=best["conf"])
-        return {"verdict": "precise", "text": best["text"], "hits": hits,
-                "tokens": r.get("tokens") or 0}
-    # 有相似的句子、但**表面上对不上**（没有共同特征）→ 不敢当事实，也不谎称"没说过"
-    _log("recall_fuzzy", query=q[:40], id=best["id"], why="表面无重合")
-    return {"verdict": "fuzzy",
-            "text": "我记得你提过「%s」，但细节我记不太清了，你提醒我一下。"
-                    % (best["text"] or "")[:40],
-            "hits": hits, "tokens": r.get("tokens") or 0}
+        return {"verdict": "precise", "text": best["text"], "hits": enriched, "best": best,
+                "reason": "余弦 %.3f ≥ %.2f 且表面重合 %.2f ≥ %.2f" % (
+                    best["score"] or 0, SIM_STRONG, best["overlap"], ov_min)}
+    # 有相似的句子、但**表面上对不上**（重合不足 / 只剩通用片段）→ 不敢当事实，也不谎称"没说过"
+    why = ("余弦 %.3f 不够强（< %.2f）" % (best["score"] or 0, SIM_STRONG)
+           if (best["score"] or 0) < SIM_STRONG else
+           "表面重合只有 %.2f（< %.2f），不够证明在说同一件事" % (best["overlap"], ov_min))
+    _log("recall_fuzzy", query=q[:40], id=best["id"], why=why)
+    return {"verdict": "fuzzy", "text": _fuzzy_text(best["text"]), "hits": enriched,
+            "best": best, "reason": why}
+
+
+def _fuzzy_text(text):
+    """fuzzy 口径下能说的话（**只承认记得，不给细节**——细节由那个「…」挡住）。"""
+    return ("我记得你提过「%s」，但细节我记不太清了，你提醒我一下。" % (text or "")[:40])
 
 
 # ------------------------------------------------------------------ 统一入库口
