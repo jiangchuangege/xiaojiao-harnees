@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """记忆向量库 · 索引一致性自测（确定性；只在临时库上跑，不碰真库）。
 
 为什么单独要它：`memory_vec` 有**两条**写路径 —— 新行追加、同 key 刷新 ——
@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -113,8 +114,37 @@ def main():
             ck("新给的分层 meta 并进去了（layer 更新成 fact）",
                m.get("layer") == "fact" and bool(m.get("layer_reason")), m)
 
-        # ---------------- 五、坏行 / 空串不许炸 ----------------
-        print("\n[五] 边界：空文本、坏 meta 不许炸")
+        # ---------------- 五、保养之后立刻检索（真机上崩的就是这一下） ----------------
+        print("\n[五] 跑一轮保养（整库重写 + 补索引）之后，立刻检索不许崩")
+        from core import memory_upkeep as MUx
+        _orep = MUx._REPORT
+        try:
+            MUx._REPORT = os.path.join(os.path.dirname(tmp), "report.jsonl")
+            for i, age in enumerate((200, 400)):      # 造两条够老、该被压缩的
+                MV.add_memory("用户：很久以前第 %d 件事（旧条目）" % i,
+                              kind="dialogue", key_text="很久以前第 %d 件事" % i,
+                              ts=time.time() - age * 86400)
+            rep = MUx.maintain(apply=True)
+            ck("保养真的动了东西（降级或压缩 > 0）",
+               int(rep.get("degraded") or 0) + int(rep.get("compressed") or 0) > 0,
+               "%s / 错误=%s" % (rep.get("compressed"), rep.get("errors")))
+            rows, mat, phas = MV._INDEX["rows"], MV._INDEX["mat"], MV._INDEX["phas"]
+            if np is not None and mat is not None:
+                ck("**保养之后 mat / phas / rows 长度仍然一致**",
+                   len(mat) == len(rows) == len(phas),
+                   "mat=%s phas=%s rows=%s" % (len(mat), len(phas), len(rows)))
+            try:
+                h = MV.search_memory("很久以前的事", top_k=3)
+                ck("**保养之后检索不崩**（真机上崩的正是这一下）", True,
+                   "命中 %d 条" % len(h or []))
+            except Exception as e:
+                ck("**保养之后检索不崩**（真机上崩的正是这一下）", False,
+                   "%s: %s" % (type(e).__name__, e))
+        finally:
+            MUx._REPORT = _orep
+
+        # ---------------- 六、坏行 / 空串不许炸 ----------------
+        print("\n[六] 边界：空文本、坏 meta 不许炸")
         ck("空文本不写（返回空串）", MV.add_memory("   ") == "")
         ck("reload 之后三条长度仍然一致",
            len(MV._INDEX["rows"]) == len(MV._all_rows_raw()), len(MV._INDEX["rows"]))

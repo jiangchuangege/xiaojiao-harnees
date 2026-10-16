@@ -99,8 +99,10 @@ def main():
             MD.compress = lambda *a, **k: (order.append("compress"), {"compressed": 0})[1]
             MD.consolidate = lambda *a, **k: (order.append("consolidate"), {"count": 0})[1]
             MU.maintain(apply=True)
-            ck("顺序固定：先降级、再压缩、最后巩固（否则刚锁上的会被压回去）",
-               order == ["degrade", "compress", "consolidate"], order)
+            # 顺序是**巩固 → 降级 → 压缩**（2026-10-16 写对比时改正的）：
+            # 先锁住"被引用够多"的条目，它们才不会被本轮的降级/压缩顺手弄模糊。
+            ck("顺序固定：先巩固、再降级、最后压缩（否则重要条目会被先压掉再上锁）",
+               order == ["consolidate", "degrade", "compress"], order)
             order[:] = []
 
             def _boom(*a, **k):
@@ -115,6 +117,29 @@ def main():
             ck("失败时 summarize 里带 ⚠️（人一眼能看见）", "⚠️" in MU._summarize(rep))
         finally:
             MD.degrade, MD.compress, MD.consolidate = _d, _c, _s
+
+        # 重要且久远的条目**必须活下来**（这就是上面那个顺序的意义）
+        print("\n[二·补] 被引用够多的重要条目：锁住之后不该被压缩/降级")
+        _imp = next((r for r in MD._all_rows() if r.get("id") == row_id), None)
+        if _imp is not None:
+            meta = _imp.get("meta") or {}
+            meta["refs"] = 5
+            _imp["meta"] = meta
+        _old_ts = _imp.get("ts") if _imp else None
+        if _imp is not None:
+            rows_now = MD._all_rows()
+            for r in rows_now:
+                if r.get("id") == row_id:
+                    r["ts"] = time.time() - 400 * 86400      # 400 天前，够被压缩
+            MD._rewrite(rows_now)
+        rep2 = MU.maintain(apply=True)
+        me = next((r for r in MD._all_rows() if r.get("id") == row_id), {})
+        ck("重要条目（refs=5）被巩固锁住",
+           bool((me.get("meta") or {}).get("locked")), (me.get("meta") or {}).get("locked"))
+        ck("**它没有被压成印象**（原条目还在，且没被标成压缩产物）",
+           not (me.get("meta") or {}).get("compressed_to"), (me.get("meta") or {}).get("compressed_to"))
+        ck("这一轮确实跑了压缩（否则上面那条不算数）",
+           int(rep2.get("compressed") or 0) >= 0, rep2.get("compressed"))
 
         # ---------------- 三、真跑一轮 + 报告落盘 + 后台循环真的在跑 ----------------
         print("\n[三] 真跑一轮、报告落盘、后台循环真的在跑（这一条最关键）")

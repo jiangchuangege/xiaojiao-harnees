@@ -582,7 +582,7 @@ def main():
         _muc = _MU.config(app.CAP)
         if _muc["on"]:
             _r = _MU.start(interval_s=_muc["interval_s"])
-            print("  🧠 记忆保养：%s（每 %.0f 分钟一轮；降级→压缩→巩固，只写不读）"
+            print("  🧠 记忆保养：%s（每 %.0f 分钟一轮；巩固→降级→压缩，只写不读）"
                   % ("已启动" if _r.get("started") else _r.get("why"), _muc["interval_s"] / 60.0))
         else:
             print("  🧠 记忆保养：**已关闭**（capabilities.memory_upkeep=false）—— 如实说明，不假装在跑")

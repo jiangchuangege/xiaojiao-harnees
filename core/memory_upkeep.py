@@ -119,13 +119,23 @@ def note_usages_async(ids):
 
 # ------------------------------------------------------------------ ② 保养一轮
 def maintain(now=None, apply=True):
-    """跑一轮保养：**降级 → 压缩 → 巩固**（顺序固定，理由见下）。
+    """跑一轮保养：**巩固 → 降级 → 压缩**（顺序固定，理由见下）。
 
-    为什么是这个顺序：
-      · 先**降级**（按时间调清晰度）—— 后面两步都要读 clarity；
-      · 再**压缩**（把 180 天以上的压成印象）—— 它依赖降级后的档位，且会追加印象行；
-      · 最后**巩固**（引用够多的锁成高清，永不降级）—— 它要读 refs，
-        而且要**在降级之后**跑，否则刚锁上的那条会被本轮的降级顺手压回去。
+    为什么是这个顺序（**2026-10-16 写"接入前后对比"时改正过一次**）：
+
+      · **先巩固**：把"被引用够多"的条目锁成 `locked`。锁上之后，
+        `_clarity_of_row()` 会直接返回它自己的档位（不再随时间降），
+        而 `compress()` 的条件里写着 `not locked` —— 于是**重要的事既不会被降级、也不会被压缩**。
+        这正是这两个机制文档里承诺的「被引用多的记忆锁定为高清（重要的事不该随时间变模糊）」。
+      · **再降级**：按时间把**没锁**的那些往下调。
+      · **最后压缩**：把 180 天以上、**没锁**的压成印象。
+
+    ⚠️ 原来的顺序是"降级 → 压缩 → 巩固"，**那是错的**：同一轮里，
+    一条 200 天、被引用过 5 次的重要条目会**先被压缩成印象**，
+    之后才轮到巩固给它上锁 —— 锁上也没用了，细节已经被压掉。
+    是写"接入前后对比"时看见"重要条目变成了印象"才发现的，已改正；
+    `tools/test_memory_upkeep.py` 里专门钉了"重要且久远的那条必须活着且没被压"。
+
     每一步**独立成败**：某一步炸了就如实记进 `errors`，其余照跑。
     返回报告 dict（全是真的数字，没有就写 0）。
     """
@@ -136,16 +146,20 @@ def maintain(now=None, apply=True):
            "errors": [], "ms": 0}
     if not apply:
         # 推演模式：只算不写（自测与"想先看看会发生什么"时用）
-        for name, fn in (("degrade", lambda: MD.degrade(now=now, apply=False)),
-                         ("compress", lambda: MD.compress(now=now, rows=MD._all_rows())),
-                         ("consolidate", lambda: {"count": 0, "locked": [],
-                                                  "note": "推演不锁（锁定会写盘）"})):
+        for name, fn in (("consolidate", lambda: {"count": 0, "locked": [],
+                                                  "note": "推演不锁（锁定会写盘）"}),
+                         ("degrade", lambda: MD.degrade(now=now, apply=False)),
+                         ("compress", lambda: MD.compress(now=now, rows=MD._all_rows()))):
             try:
                 rep[name] = fn()
             except Exception as e:
                 rep["errors"].append("%s: %s" % (name, e))
         rep["ms"] = int((time.time() - t0) * 1000)
         return rep
+    try:
+        rep["consolidate"] = MD.consolidate(now=now)
+    except Exception as e:
+        rep["errors"].append("consolidate: %s" % e)
     try:
         rep["degrade"] = MD.degrade(now=now)
     except Exception as e:
@@ -154,10 +168,6 @@ def maintain(now=None, apply=True):
         rep["compress"] = MD.compress(now=now)
     except Exception as e:
         rep["errors"].append("compress: %s" % e)
-    try:
-        rep["consolidate"] = MD.consolidate(now=now)
-    except Exception as e:
-        rep["errors"].append("consolidate: %s" % e)
     rep["ms"] = int((time.time() - t0) * 1000)
     rep["scanned"] = (rep["degrade"] or {}).get("scanned", 0)
     rep["degraded"] = len((rep["degrade"] or {}).get("changed") or [])

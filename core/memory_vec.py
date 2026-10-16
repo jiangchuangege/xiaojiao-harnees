@@ -353,10 +353,33 @@ def reindex_row(rec):
         _INDEX["meta"].append(rec)
         _INDEX["count"] = len(_INDEX["rows"])
         np = _try_numpy()
-        if np is not None and _INDEX["mat"] is not None:
+        if np is not None and _INDEX["mat"] is not None and _INDEX["phas"] is not None:
             try:
                 _INDEX["mat"] = np.vstack([_INDEX["mat"], np.asarray([vec], dtype="float32")])
-            except Exception:      # noqa: silent-ok — 拼不上就下次整体重建
+                # ★ 与 `add_memory` 同一个坑：多向量的三张矩阵与掩码必须一起长 ★
+                # 【症状】"文件里有、索引里没有"的行被补回来之后，下一次带多向量的检索直接崩：
+                #   ValueError: operands could not be broadcast together with shapes (10,) (7,)
+                #   实测触发路径：**跑一轮记忆保养**（compress → `_rewrite()` → `flush_index()` →
+                #   这里逐条 reindex）之后立刻检索就炸。
+                #   也就是说这条追加路径漏掉掩码，会让"保养一跑完，检索就崩"。
+                _has = bool(rec.get("vectors"))
+                _INDEX["phas"] = np.append(_INDEX["phas"], bool(_has))
+                for _name in ("head", "mid", "tail"):
+                    _m = (_INDEX.get("pmat") or {}).get(_name)
+                    _row = np.zeros((1, _DIM), dtype="float32")
+                    _vv = (rec.get("vectors") or {}).get(_name)
+                    if _vv:
+                        _row[0] = np.asarray(_vv, dtype="float32")
+                    _INDEX["pmat"][_name] = _row if _m is None else np.vstack([_m, _row])
+            except Exception:      # noqa: silent-ok — 拼不上就整体重建，绝不留长度不一致
+                try:
+                    _rebuild_matrix()
+                except Exception:      # noqa: silent-ok
+                    _INDEX["mat"] = None
+        elif np is not None:
+            try:
+                _rebuild_matrix()
+            except Exception:      # noqa: silent-ok
                 _INDEX["mat"] = None
         return True
 
