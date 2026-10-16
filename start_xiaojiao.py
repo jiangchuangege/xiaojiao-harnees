@@ -571,6 +571,23 @@ def main():
     start_world()
     # 3f. 心跳：**一直在**的那个证明。挂起时别的全停，只有它不停。
     start_heartbeat()
+    # 3g. 记忆保养：降级 / 压缩 / 巩固（2026-10-16 接上）
+    #     【为什么必须起在这里】真正被用户执行的启动脚本是**这个文件**（`start_xiaojiao.py`），
+    #       它最后直接 `app.app.run(...)`，**不会走 `xiaojiao_app.main()`** ——
+    #       把保养起在 `main()` 里等于在真实启动路径上从来没跑过，
+    #       那正是 7.1 那张表记着的"机制写了没人调"。两处都起（幂等，起两次不会起第二条线程）。
+    #     只有这一条是"随时间发生的保养"：不挂任何一轮对话，所以必须有独立的触发点。
+    try:
+        from core import memory_upkeep as _MU
+        _muc = _MU.config(app.CAP)
+        if _muc["on"]:
+            _r = _MU.start(interval_s=_muc["interval_s"])
+            print("  🧠 记忆保养：%s（每 %.0f 分钟一轮；降级→压缩→巩固，只写不读）"
+                  % ("已启动" if _r.get("started") else _r.get("why"), _muc["interval_s"] / 60.0))
+        else:
+            print("  🧠 记忆保养：**已关闭**（capabilities.memory_upkeep=false）—— 如实说明，不假装在跑")
+    except Exception as _e:      # noqa: silent-ok — 保养起不来不能挡住启动
+        print("  🧠 记忆保养：起不来（%s）—— 如实说明，不假装在跑" % _e)
 
     # 4. 打开浏览器
     _host, _host_lines = app.bind_host(port)      # 与 main() 共用同一套监听规则，见该函数说明
@@ -591,6 +608,11 @@ def main():
         # 清理所有子进程
         stop_autonomy()          # 先优雅关掉自主性线程（有序收尾，别留下半截盯梢状态）
         stop_world()             # 再停世界层（它可能正在抓网页，先收干净）
+        try:
+            from core import memory_upkeep as _MU2
+            _MU2.stop()          # 保养的线程也收干净（它可能正写到一半）
+        except Exception as _e:      # noqa: silent-ok — 收不干净也不能挡住退出
+            LOG.debug("忽略异常(%s:%d): %s", __file__, 594, _e)
         stop_heartbeat()         # 最后停心跳：**只有整个系统下线才停**（挂起不停）
         if llama_proc:
             try:

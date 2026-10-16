@@ -2318,6 +2318,30 @@ def _retrieve_memory(query):
         # 放在这里的原因：命中就在手边，**不用再检索一遍**（再调一次 recall 是同一轮里
         # 检索两遍，含精排实测 0.5 秒级）。判完的结果由 `_rag_concurrent` 决定怎么用。
         _memory_gate_set(query, res.get("hits") or [])
+        # ---- 记忆保养·引用记账：这一轮被检索到的行各记一次（供 consolidate 判"重要"）----
+        # 丢后台线程：记账要重写整个记忆文件，不能挂在用户等待的这条链上。
+        try:
+            from core import memory_upkeep as _MU
+            _MU.note_usages_async([h.get("id") for h in (res.get("hits") or [])])
+        except Exception as _e:      # noqa: silent-ok — 记不上不影响检索本身
+            LOG.debug("记忆引用记账接入失败（忽略）：%s", _e)
+        # ---- 记忆保养·联想：给最优那条找"后来呢 / 为什么"的邻居，作为**额外素材** ----
+        # 为什么要它：单条记忆只回答"这件事"；同一实体的其他侧面、时间线上挨着的事
+        #   只有联想拿得出来（判据纯规则、不调模型，见 memory_deep.associations 的说明）。
+        # 只取前 2 条、每条 60 字：素材不是越多越好，多到把 system 挤满反而干扰生成。
+        try:
+            if CAP.get("memory_associations", True) and (res.get("hits") or []):
+                from core import memory_deep as _MDa
+                _top = (res["hits"] or [])[0]
+                _asso = _MDa.associations(_top.get("id"), limit=2) or []
+                _lines = ["%s" % str(a.get("text") or "")[:60] for a in _asso if a.get("text")]
+                if _lines:
+                    res["text"] = (res.get("text") or "") + "\n（同一件事的其他侧面）" + \
+                                  "\n".join("· " + x for x in _lines)
+                    LOG.info("记忆联想：给最优那条补了 %d 条邻居（%s）", len(_lines),
+                             "、".join(str(a.get("kind")) for a in _asso[:2]))
+        except Exception as _e:      # noqa: silent-ok — 联想挂了不能影响检索
+            LOG.debug("记忆联想接入失败（忽略）：%s", _e)
         # 协同网络：把"本轮检索到了什么"广播出去 ——
         # 订阅者（`app.memory_state`）会把它写进中央状态，推理/元认知/健康都能读到。
         # 这是"模块 A 发布 → 模块 B 收到"在真实运行里的落点（事件同时落盘可复盘）。
@@ -2511,7 +2535,35 @@ def _remember_turn(user_input, answer, tool_trace=None):
             ents.append(_m.group(0)[:80])
         kinds = {t.get("tool") for t in (tool_trace or []) if t.get("tool")}
         kind = "tool" if kinds else "dialogue"
-        return _mv.add_memory(text, kind=kind, entities=sorted(ents)[:5], key_text=_q)
+        # ---- 分层判断（`memory_deep.classify()`）接进写入路径（2026-10-16） ----
+        # 【接的是什么】7.1 那张表里"分层判断 classify()"原来写着「主对话链路的写入走
+        #   add_memory()，kind 只取 dialogue 与 tool，分层的三值不被主链路使用」。
+        #   现在按**用户那句话**判层，并做两件**只加不删**的事：
+        #     · 把**分层结果与理由**写进 meta —— 事后能回答"这条为什么进的这一层"
+        #       （`reason` 不允许丢，那是分类可解释性的全部依据）；
+        #     · 判成表达层（短句 + 寒暄词）时，额外喂一次风格统计
+        #       （语气/句长/称呼；`remember_expression` 只写 style.json，不碰记忆行）。
+        # 【为什么**不**让它决定"存不存"】两条既有契约挡在前面，都不是我该顺手改的：
+        #   ① `_remember_turn` 的契约是"所有历史对话永久保存"（无限 1）；
+        #   ② `tools/test_mem_filter.py` 明确钉着「正常对话照常写入（没被过滤器误伤）」，
+        #      而它用的样例正是「你好」—— 那正是会被判成表达层的一句。
+        #   所以这里**不动是否入库**：寒暄照样进库。真要让"寒暄只学风格不入库"生效，
+        #   是一次策略变更（会牵动时间线检索与那条既有自测），得单独定，不在这一步暗改。
+        _layer, _layer_why = "", ""
+        try:
+            from core import memory_deep as _MDw
+            _layer, _layer_why = _MDw.classify(_q)
+            if _layer == _MDw.LAYER_EXPRESSION:
+                _MDw.remember_expression(_q)      # 只学风格（语气/句长/称呼），不背原句
+                LOG.info("这条判成表达层（照常入库，另外学一次风格）：%s ｜ %s",
+                         _layer_why, _q[:40])
+        except Exception as _e:      # noqa: silent-ok — 分层判不出来就照常入库（宁可多存）
+            LOG.debug("写入分层失败（照常入库）：%s", _e)
+        _meta = {}
+        if _layer:
+            _meta = {"layer": _layer, "layer_reason": _layer_why}
+        return _mv.add_memory(text, kind=kind, entities=sorted(ents)[:5], key_text=_q,
+                              **({"meta": _meta} if _meta else {}))
     except Exception as e:      # noqa: silent-ok — 存记忆失败不能让这一轮对话失败
         LOG.debug("写记忆失败（忽略）(%s:%d): %s", __file__, 1140, e)
         return ""
@@ -13085,6 +13137,23 @@ def _list_preset_files():
     return sorted([f for f in os.listdir(_PRESETS_DIR) if f.endswith(".json")])
 
 
+@app.route("/api/memory/upkeep")
+def api_memory_upkeep():
+    """记忆保养的**真实状态**（它跑没跑、跑了几轮、上一轮的数字、报告在哪）。
+
+    【为什么要暴露这个端点】"接上了没在跑"是这类后台机制最容易犯的错
+    （`docs/modules/03-memory-depth.md` 7.1 那张表就是证据）。光有日志不够 ——
+    日志要看才知道，而这里打开网页就能看见：running / runs / last / last_error。
+    **没有跑过就如实写没跑过**（runs=0、last=null），不假装。
+    """
+    try:
+        from core import memory_upkeep as _MU
+        st = _MU.status()
+        return jsonify({"ok": True, **st})
+    except Exception as e:      # noqa: silent-ok — 查不到就如实报错，不编状态
+        return jsonify({"ok": False, "error": "记忆保养状态读不到：%s" % e}), 500
+
+
 @app.route("/pet")
 def api_pet():
     """猫娘桌面伙伴：重定向到 N.E.K.O. 猫娘(48911)。"""
@@ -17496,6 +17565,23 @@ def main():
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 3608, e)
     threading.Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+    # ---- 记忆保养：降级 / 压缩 / 巩固这三件后台活（2026-10-16 真正接上） ----
+    # 【为什么必须在启动时起】这三件事**没有别的触发点**：原来它们只有自测在调，
+    #   于是"清晰度永不降级、半年前的事永不压成印象、巩固永远锁不住"——
+    #   系统不报错，只是那套机制静默不生效。这里起一条 daemon 线程，按间隔跑，
+    #   每轮把真实数字写进 logs/memory_upkeep.jsonl（"接上了没在跑"必须看得见）。
+    try:
+        from core import memory_upkeep as _MU
+        _muc = _MU.config(CAP)
+        if _muc["on"]:
+            _r = _MU.start(interval_s=_muc["interval_s"])
+            print("  🧠 记忆保养：%s（每 %.0f 分钟一轮；降级→压缩→巩固，只写不读）"
+                  % ("已启动" if _r.get("started") else _r.get("why"),
+                     _muc["interval_s"] / 60.0))
+        else:
+            print("  🧠 记忆保养：**已关闭**（capabilities.memory_upkeep=false）—— 如实说明，不假装在跑")
+    except Exception as _e:      # noqa: silent-ok — 保养起不来不能挡住启动
+        print("  🧠 记忆保养：起不来（%s）—— 如实说明，不假装在跑" % _e)
     # 心跳：**模型启动 → 心跳开始**。它是"一直在"的证明，所以在这儿起、不随对话起落。
     _hb = _heartbeat_mod()
     if _hb is not None:

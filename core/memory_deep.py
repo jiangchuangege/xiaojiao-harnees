@@ -416,16 +416,34 @@ def consolidate(min_refs=3, now=None):
 
 def note_usage(memory_id, now=None):
     """记一次"这条记忆被用上了"（供 consolidate 打分）。"""
+    return note_usages([memory_id], now=now)
+
+
+def note_usages(memory_ids, now=None):
+    """**批量**记引用（一次全库重写搞定多条）。
+
+    为什么必须批量（2026-10-16 实测补的一刀）：`note_usage` 每调一次要
+    读全表 → 改一行 → 原子替换整个文件 → 重建索引；一轮对话命中 5 条时逐个调用
+    就是 5 次全库重写 —— 那是拿磁盘换一个计数器。批量版把这一轮命中的 id
+    一次改完、一次落盘，`MemoryUpkeep.note_usages()` 默认走的就是它。
+    返回**真正记上**的条数（id 不在库里就跳过；不去编一个数出来）。
+    """
+    want = set(str(x) for x in (memory_ids or []) if x)
+    if not want:
+        return 0
+    now = time.time() if now is None else float(now)
     rows = _all_rows()
+    hit = 0
     for r in rows:
-        if r.get("id") == memory_id:
+        if r.get("id") in want:
             meta = r.get("meta") or {}
             meta["refs"] = int(meta.get("refs") or 0) + 1
-            meta["last_used"] = time.time() if now is None else float(now)
+            meta["last_used"] = now
             r["meta"] = meta
-            _rewrite(rows)
-            return meta["refs"]
-    return 0
+            hit += 1
+    if hit:
+        _rewrite(rows)
+    return hit
 
 
 def revive(memory_id, now=None):

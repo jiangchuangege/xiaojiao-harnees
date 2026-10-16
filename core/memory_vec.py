@@ -208,6 +208,20 @@ def add_memory(text, kind="dialogue", entities=None, ts=None, meta=None, key_tex
                     _old["vectors"] = rec["vectors"]
                 _old["refreshed_at"] = rec["ts"]
                 _old["same_key_n"] = int(_old.get("same_key_n") or 1) + 1
+                # ---- 刷新时把**调用方新给的 meta** 并进去（只加不删）----
+                # 【为什么补这一条】分层判断（2026-10-16）要往 meta 里写 `layer/layer_reason`，
+                #   而重复问题走的是**刷新**这条路（不新增行）—— 不并的话，
+                #   "同一句问第二次"就永远补不上分层结果，等于那半截接线只在首次生效。
+                # 保养字段（refs/locked/clarity/...）**不许被覆盖**：它们只由保养那一路写，
+                # 刷新时带进来的 meta 里不会有它们，但要有也一律跳过（防止互相打架）。
+                if meta:
+                    _om = dict(_old.get("meta") or {})
+                    for _k, _v in dict(meta).items():
+                        if _k in ("refs", "locked", "locked_at", "clarity", "degraded_at",
+                                  "revived_at", "compressed_to", "last_used"):
+                            continue
+                        _om[_k] = _v
+                    _old["meta"] = _om
                 try:
                     _n = _replace_line(p, str(_old.get("id") or ""), _old)
                 except Exception as _e:      # noqa: silent-ok — 改不动就当这次没写（绝不新增一行）
@@ -235,13 +249,43 @@ def add_memory(text, kind="dialogue", entities=None, ts=None, meta=None, key_tex
         _INDEX["loaded"] = True
         # 增量追加到矩阵（有 numpy 时）；否则清掉让它下次重建
         np = _try_numpy()
-        if np is not None and _INDEX["mat"] is not None:
+        if np is not None and _INDEX["mat"] is not None and _INDEX["phas"] is not None:
             try:
                 _INDEX["mat"] = np.vstack([_INDEX["mat"], np.asarray([vec], dtype="float32")])
-            except Exception:      # noqa: silent-ok — 拼不上就下次重建，别影响写入
-                _INDEX["mat"] = None
+                # ★ 多向量那三张平行矩阵与掩码**必须跟着长**（2026-10-16 修的真 bug）★
+                # 【症状】写完一条就检索崩溃：
+                #   `ValueError: operands could not be broadcast together with shapes (21,) (20,)`
+                #   出在 `search_memory` 的 `np.where(_INDEX["phas"], np.maximum(sims, ps), sims)`。
+                # 【根因】这条追加路径只长了 `mat`/`rows`/`meta`，**没长** `pmat`/`phas`：
+                #   行数变成 21、掩码还是 20，下一次带多向量的检索一广播就炸。
+                #   它还能潜伏很久 —— 只有"追加之后、又用带多向量的查询检索"才会撞上。
+                # 【为什么是继续增量、不是整体重建】重建是 O(行数×维度)，
+                #   而这里只需要补一行（三张矩阵各补一行零、掩码补一个布尔）。
+                _has = bool(rec.get("vectors"))
+                _INDEX["phas"] = np.append(_INDEX["phas"], bool(_has))
+                for _name in ("head", "mid", "tail"):
+                    _m = (_INDEX.get("pmat") or {}).get(_name)
+                    _row = np.zeros((1, _DIM), dtype="float32")
+                    _vv = (rec.get("vectors") or {}).get(_name)
+                    if _vv:
+                        _row[0] = np.asarray(_vv, dtype="float32")
+                    if _m is None:
+                        _INDEX["pmat"][_name] = _row
+                    else:
+                        _INDEX["pmat"][_name] = np.vstack([_m, _row])
+            except Exception:      # noqa: silent-ok — 拼不上就整体重建，别影响写入也不能留下不一致
+                try:
+                    _rebuild_matrix()
+                except Exception:      # noqa: silent-ok
+                    _INDEX["mat"] = None
         elif np is not None and len(_INDEX["rows"]) == 1:
             _rebuild_matrix()
+        elif np is not None:
+            # 没有 numpy 快路径（或掩码缺失）→ 整体重建，保证三者长度一致
+            try:
+                _rebuild_matrix()
+            except Exception:      # noqa: silent-ok
+                _INDEX["mat"] = None
     return rec["id"]
 
 
