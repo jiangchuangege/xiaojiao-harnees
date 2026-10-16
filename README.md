@@ -76,6 +76,12 @@ python start_xiaojiao.py
 - **教训会留下，不用重新踩坑。** 关键动作（改配置 / 删改文件 / 动显存）前后自动记「决策 → 结果」，
   动手前先问一句「以前这么干出过事吗」。接的是外部因果记忆引擎，**主程序一行没改**，
   只加了两个插件和一个埋点模块 → [`docs/causal-memory.md`](docs/causal-memory.md)
+- **记错了比记不住更糟 —— 所以记忆出口有"口径"。** 用户问自己的事时，
+  「记得 / 只记得大概 / 没记过」三种状态由**载体写死**（余弦 + 表面重合两道判据，不调模型）：
+  精确命中才敢当事实说，证据不够就只说"记得"并请他提醒，没记过就如实说没记过 —— **不许编造用户的经历**。
+  记忆还有**后台保养**：降级 / 压缩 / 巩固每 30 分钟一轮真跑（只写不读、不改任何回答路径），
+  `GET /api/memory/upkeep` 打开就能看见跑了几轮、上一轮的真实数字
+  → [`docs/modules/03-memory-depth.md`](docs/modules/03-memory-depth.md)
 - **每一层都可核对。** 检索、精度叠加、校验、健康治疗全都有日志与自测，能查、能复现。
 
 ### 最强的一点：状态真的改变它的行为，而不是"告诉它"
@@ -200,6 +206,7 @@ flowchart TB
 | 安装与配置 | [`docs/install.md`](docs/install.md)、[`docs/quickstart.md`](docs/quickstart.md) |
 | 插件与扩展 | [`docs/PLUGINS.md`](docs/PLUGINS.md)、[`docs/extend.md`](docs/extend.md) |
 | **因果记忆集成（教训层 · 外部引擎怎么接进来）** | [`docs/causal-memory.md`](docs/causal-memory.md) |
+| **记忆深度（分层 / 降级 / 压缩 / 巩固 / 联想 · 绝假记忆口径）** | [`docs/modules/03-memory-depth.md`](docs/modules/03-memory-depth.md) |
 | 已知限制 | 本文件「[已知限制](#️-已知限制如实说不藏)」一节 |
 
 ---
