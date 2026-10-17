@@ -16400,6 +16400,14 @@ HTML = r"""<!DOCTYPE html>
   button:hover{background:#6366f1}
   .think{color:#7a8290;font-size:13px;padding:6px 2px}
   .think{display:flex;align-items:center;gap:8px}
+  /* 说明/诊断这类"整段文字"必须用块级排版（2026-10-16 修）：
+     `.think` 是 flex 容器，一旦里面有多段文字 + <code> + <br>，
+     它们会变成**多个 flex 子项**并被各自压到最小宽度 —— 结果就是"一个字一列"的竖排长条。
+     带 .prose 的块把排版交回给正常文档流：一行一行读得下去。 */
+  .think.prose{display:block;line-height:1.75;overflow-wrap:anywhere}
+  /* 按钮行：`.row` 是两列 grid，三个按钮会被拉成满宽大块。
+     这一行要的是"按内容排、放不下就换行"的普通按钮行。 */
+  .btn-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
   .pvbar{height:4px;background:#0e1116;border-radius:3px;margin-top:6px;overflow:hidden;max-width:420px}
   .pvbar i? no
   .pvbar{height:4px;background:#0e1116;border-radius:3px;margin-top:6px;overflow:hidden;max-width:420px;display:block}
@@ -16705,7 +16713,7 @@ HTML = r"""<!DOCTYPE html>
           <div class="field" style="margin-top:8px">
             <label style="cursor:pointer" onclick="toggleVideoApi()">🎬 视频协议（可选 · 接任意厂商用）<span id="s_m_vapi_h" style="color:#7a8290;font-weight:400">点击展开</span></label>
             <div id="s_m_vapi_box" style="display:none;margin-top:8px">
-              <div class="think" style="margin-bottom:6px">
+              <div class="think prose" style="margin-bottom:6px">
                 云端视频不认厂商、只认协议：把这家接口的字段填进下面这块 JSON，**不用改代码**。<br>
                 至少要写四个：<code>create_path</code>（建任务路径）、<code>query_path</code>（查任务路径，用 <code>{id}</code> 占位）、
                 <code>id_paths</code> 与 <code>status_paths</code>（从它的返回里取任务号与状态）；成片地址用 <code>url_paths</code>。<br>
@@ -16713,12 +16721,12 @@ HTML = r"""<!DOCTYPE html>
                 例子：<code>{"kind":"custom","create_path":"/v1/videos","query_path":"/v1/jobs/{id}","auth":{"style":"x-api-key","header":"X-Api-Key"},"id_paths":["data.job.uuid"],"status_paths":["data.job.state"],"url_paths":["data.job.file.mp4"],"done":["ok"],"failed":["dead"]}</code>
               </div>
               <textarea id="s_m_vapi" rows="4" style="width:100%;font-family:Consolas,monospace;font-size:12px" placeholder='{"kind":"custom","create_path":"/v1/videos","query_path":"/v1/jobs/{id}","id_paths":["data.job.uuid"],"status_paths":["data.job.state"],"url_paths":["data.job.file.mp4"]}'></textarea>
-              <div class="row" style="margin-top:6px">
+              <div class="btn-row">
                 <button class="btn-sec" onclick="checkVideoApi()">🔍 查这家能不能跑</button>
-                <button class="btn-sec" style="margin-left:8px" onclick="loadVideoApi()">⬇️ 载入已保存的</button>
-                <button class="btn-sec" style="margin-left:8px" onclick="clearVideoApi()">🧹 清空编辑框</button>
+                <button class="btn-sec" onclick="loadVideoApi()">⬇️ 载入已保存的</button>
+                <button class="btn-sec" onclick="clearVideoApi()">🧹 清空编辑框</button>
               </div>
-              <div class="think" id="s_m_vapi_msg" style="margin-top:6px"></div>
+              <div class="think prose" id="s_m_vapi_msg" style="margin-top:6px"></div>
             </div>
           </div>
           <div class="think" id="s_model_msg"></div>
