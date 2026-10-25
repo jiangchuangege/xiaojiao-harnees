@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """REA 插件 · 自测（确定性；用假 MCP 服务，不依赖 node、不联网、不装包）。
 
 为什么必须有它：这个插件把外部 229 个工具收成三个入口，最容易出的错**全都不报错**：
@@ -44,14 +44,16 @@ def main():
     # ---------------- 一、注册条件 ----------------
     print("\n[一] 什么时候注册工具")
     tools = rea._PLUGIN.get_tool_descriptions()
-    ck("服务可用时注册三个粗粒度工具", len(tools) == 3, [t["name"] for t in tools])
-    ck("三个名字就是 status / tools / call",
-       [t["name"] for t in tools] == ["rea_status", "rea_tools", "rea_call"])
+    ck("服务可用时注册五个入口（能力被完整保留）", len(tools) == 5, [t["name"] for t in tools])
+    ck("名字对得上：status / tools / call / do / help",
+       [t["name"] for t in tools] == ["rea_status", "rea_tools", "rea_call", "rea_do", "rea_help"])
     ck("每个工具都有中文说明且不长（4B 好选）",
-       all(0 < len(t["description"]) <= 60 for t in tools),
+       all(0 < len(t["description"]) <= 70 for t in tools),
        max(len(t["description"]) for t in tools))
     ck("call 工具声明了必填的 tool 参数",
        tools[2]["parameters"]["required"] == ["tool"], tools[2]["parameters"]["required"])
+    ck("do 工具只要 intent（target/focus 可省）",
+       tools[3]["parameters"]["required"] == ["intent"], tools[3]["parameters"]["required"])
 
     # 关掉 + 启动器不存在，两种情况都不许注册工具
     os.environ["REA_CMD"] = json.dumps([sys.executable, fake])

@@ -53,10 +53,23 @@ _TOOLS = [
                                    "limit": {"type": "integer", "description": "最多返回几条，默认 20"}},
                     "required": []}},
     {"name": "rea_call",
-     "description": "REA 逆向引擎：分析文件（格式/哈希/架构/反编译）。先 open_binary 给 path，再调分析工具",
+     "description": "REA 逆向引擎：按工具名精确调用（tool+args）。不确定用哪个就先用 rea_do",
      "parameters": {"type": "object",
                     "properties": {"tool": {"type": "string", "description": "REA 工具名，如 open_binary"},
                                    "args": {"type": "object", "description": "该工具的参数，JSON 对象；没有就传 {}"}},
+                    "required": ["tool"]}},
+    # ---- 意图入口：4B 只要说"想干什么"，选工具和拼参数由载体来做（见 _route / _fill_args）----
+    {"name": "rea_do",
+     "description": "REA 逆向：用一句话说想干什么（如 反编译 main、看哈希、列出字符串），载体自己选工具并调",
+     "parameters": {"type": "object",
+                    "properties": {"intent": {"type": "string", "description": "要干什么，中文即可"},
+                                   "target": {"type": "string", "description": "目标文件路径，可省（上次打开过的会沿用）"},
+                                   "focus": {"type": "string", "description": "函数名/地址/要搜的词，可省"}},
+                    "required": ["intent"]}},
+    {"name": "rea_help",
+     "description": "REA 逆向：查某个工具要哪些参数（不知道 rea_do 选对了没、或要精确调时用）",
+     "parameters": {"type": "object",
+                    "properties": {"tool": {"type": "string", "description": "工具名，如 open_binary"}},
                     "required": ["tool"]}},
 ]
 
@@ -301,8 +314,305 @@ def _do_call(cfg, params):
     return _clip(_friendly_error(text), cfg["max_chars"])
 
 
+# ---------------------------------------------------------------- 载体替模型选工具
+# 【为什么要有这一层】REA 有 229 个工具。4B 小模型看 229 个英文工具名，只会做两件事：
+#   挑一个名字里有它认识的词的，或者干脆不调。所以**选工具和拼参数这两件事由载体做**，
+#   模型只负责说"我想干什么"（中文一句话）。这正是这个项目的核心取舍：
+#   能力放载体里，模型只做它擅长的那一小步。
+# 【它不是"缩减能力"】三个入口（rea_do / rea_call / rea_help）覆盖全部 229 个工具：
+#   rea_do 用意图路由，rea_call 用工具名直调，rea_help 看参数 —— 一个都没被藏起来。
+_SESSION = {"opened": "", "at": 0.0}      # 上一次 open_binary 打开的目标（REA 那边是会话级的）
+_INDEX = {"key": None, "docs": None}
+
+
+def _tokens(s):
+    """把工具名/说明切成小写词元（同时认 snake_case 与 camelCase）。"""
+    import re as _re
+    t = str(s or "")
+    t = _re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", t)
+    return set(x for x in _re.split(r"[^A-Za-z0-9_]+", t.lower()) if x)
+
+
+def _intent_words():
+    try:
+        from plugins.rea_tools_zh import INTENT_WORDS, EXT_HINTS, EXT_FAMILY, FAMILY_WORDS
+        return INTENT_WORDS, EXT_HINTS, EXT_FAMILY, FAMILY_WORDS
+    except Exception:
+        try:
+            import importlib.util as _iu
+            p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rea_tools_zh.py")
+            spec = _iu.spec_from_file_location("_xj_rea_words", p)
+            m = _iu.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            return (m.INTENT_WORDS, m.EXT_HINTS,
+                    getattr(m, "EXT_FAMILY", {}), getattr(m, "FAMILY_WORDS", {}))
+        except Exception as e:      # noqa: silent-ok — 词表缺失就退化成纯英文匹配
+            LOG.debug("REA 中文词表加载失败（退化）：%s", e)
+            return {}, {}, {}, {}
+
+
+def _build_index(tools):
+    """给检索用的轻量索引：每个工具的词元集合 + 参数名集合。"""
+    key = (len(tools), str(tools[0].get("name") if tools else ""))
+    if _INDEX["docs"] is not None and _INDEX["key"] == key:
+        return _INDEX["docs"]
+    docs = []
+    for t in tools or []:
+        sch = t.get("inputSchema") or {}
+        props = list((sch.get("properties") or {}).keys())
+        docs.append({
+            "name": str(t.get("name") or ""),
+            "desc": str(t.get("description") or ""),
+            "props": props,
+            "required": list(sch.get("required") or []),
+            "ntok": _tokens(t.get("name")),
+            "dtok": _tokens(t.get("description")),
+            "ptok": set(p.lower() for p in props),
+        })
+    _INDEX["key"], _INDEX["docs"] = key, docs
+    return docs
+
+
+def _route(intent, tools, target="", focus=""):
+    """把一个中文/英文意图路由到具体工具。返回 (候选列表, 说明)。
+
+    打分（确定性，不调模型）：
+      · 意图里出现**工具名本身**（或它的词元）→ 最高分；
+      · 意图里的中文词命中词表 → 词表给的英文线索词出现在工具名里（+6）或说明里（+2）；
+      · 目标扩展名命中的平台线索（apk/ipa/js…）再加一点，避免"看个 apk"却选了 PE 的工具；
+      · 需要参数而我们凑不齐的工具**降权**（能直接跑起来的优先）。
+    """
+    words, ext_hints, ext_family, family_words = _intent_words()
+    docs = _build_index(tools)
+    it = str(intent or "").strip()
+    low = it.lower()
+    itok = _tokens(it)
+    # 中文意图 → 英文线索词
+    cues = []
+    for zh, ens in (words or {}).items():
+        if zh and zh in it:
+            cues.extend([str(x).lower() for x in ens])
+    cues = list(dict.fromkeys(cues))
+    # 目标扩展名 → 平台线索 + 家族
+    ext_cues = []
+    tl = str(target or "").lower()
+    my_family = ""
+    for ext, ens in (ext_hints or {}).items():
+        if tl.endswith(ext):
+            ext_cues.extend([str(x).lower() for x in ens])
+    for ext, fam in (ext_family or {}).items():
+        if tl.endswith(ext):
+            my_family = fam
+            break
+
+    def _family_penalty(name_low):
+        """家族对不上就扣分（.exe 的活不该派给 apk 工具）；**中立工具不奖不罚**。
+
+        【为什么单写成一个"先判自家、再判别家"的函数】第一版是把两件事写在同一个循环里，
+        结果 `continue` 把"自家加分"那一段整个跳过了 —— 于是 pe 的工具永远拿不到家族加分，
+        给 .exe 找签名被派到了 `inspect_apk_signature`。这种"奖励分支永远执行不到"的错
+        不会报错，只会让路由慢慢变差，只能靠枚举用例才看得出来。
+        """
+        if not my_family or not family_words:
+            return 0.0
+        mine = family_words.get(my_family) or ()
+        if any(k in name_low for k in mine):
+            return 4.0
+        for fam, kws in family_words.items():
+            if fam == my_family:
+                continue
+            if any(k in name_low for k in kws):
+                return -7.0
+        return 0.0
+
+    scored = []
+    for d in docs:
+        s = 0.0
+        name_low = d["name"].lower()
+        if low and (low == name_low or low.replace(" ", "_") == name_low):
+            s += 40
+        if itok & d["ntok"]:
+            s += 12 * len(itok & d["ntok"])
+        for c in cues:
+            if c == name_low:
+                s += 14            # 意图里点到工具本名：几乎肯定就是它
+            elif c in name_low:
+                s += 9
+            elif c in d["name"].replace("_", " ").lower() or c in d["ntok"]:
+                s += 5
+            if c and c in d["desc"].lower():
+                s += 2
+        for c in ext_cues:
+            if c in name_low or c in d["ntok"]:
+                s += 3
+        s += _family_penalty(name_low)
+        if focus:
+            # 有 focus 时优先"吃 symbol/address/pattern 这类参数"的工具
+            if d["ptok"] & {"symbol", "name", "address", "pattern", "procedure", "query"}:
+                s += 4
+        # 参数凑得齐的加分（载体知道手里有什么）
+        if d["required"]:
+            have = set()
+            if target:
+                have |= {"path", "file", "target", "artifact"}
+            if focus:
+                have |= {"symbol", "name", "address", "pattern", "procedure", "query"}
+            missing = [r for r in d["required"] if str(r).lower() not in have]
+            if missing:
+                s -= 3 * len(missing)
+        if name_low.startswith("inspect_") or name_low.startswith("open_"):
+            s += 1.5            # 同分时优先"先看清楚"这类动作，比直接深挖安全
+        if s > 0:
+            scored.append((s, d))
+    scored.sort(key=lambda x: (-x[0], len(x[1]["name"])))
+    return [d for _, d in scored[:5]], scored[0][0] if scored else 0.0
+
+
+def _fill_args(doc, target="", focus="", extra=None):
+    """载体替模型拼参数：能填的填上，填不了的**列出来问**（绝不瞎编）。"""
+    args = dict(extra or {})
+    have_target = bool(target) or (bool(_SESSION["opened"]) and not target)
+    if target and any(p.lower() in ("path", "file", "target", "artifact") for p in doc["props"]):
+        for p in doc["props"]:
+            if p.lower() in ("path", "file", "target", "artifact"):
+                args.setdefault(p, target)
+    if focus:
+        for p in doc["props"]:
+            if p.lower() in ("symbol", "name", "address", "pattern", "procedure", "query"):
+                args.setdefault(p, focus)
+    missing = []
+    for r in doc["required"]:
+        if str(r).lower() in [k.lower() for k in args]:
+            continue
+        if str(r).lower() in ("path", "file", "target", "artifact") and have_target:
+            # REA 里"已经打开过目标"时，path 可以不给
+            continue
+        missing.append(str(r))
+    return args, missing
+
+
+def _needs_target(doc):
+    low = " ".join(doc["props"]).lower() + " " + doc["name"].lower()
+    return any(k in low for k in ("path", "file", "target", "artifact")) or \
+        doc["name"].startswith(("binary_overview", "inspect_artifact", "list_", "search_",
+                                "procedure", "read_", "xrefs", "trace_", "get_"))
+
+
+def _do_help(cfg, params):
+    name = str((params or {}).get("tool") or "").strip()
+    tools, err = _tool_list(cfg)
+    if err:
+        return "REA 工具列表取不到：%s" % err
+    if not name:
+        return "要查哪个工具？先用 rea_tools 搜一个名字。"
+    t = next((x for x in (tools or []) if str(x.get("name")) == name), None)
+    if t is None:
+        return "REA 里没有叫「%s」的工具。用 rea_tools 搜一下。" % name
+    sch = t.get("inputSchema") or {}
+    props = sch.get("properties") or {}
+    req = list(sch.get("required") or [])
+    lines = ["%s —— %s" % (name, str(t.get("description") or "")[:300])]
+    if req:
+        lines.append("必填：%s" % "、".join(req))
+    else:
+        lines.append("必填：无（不传参数也能调）")
+    if props:
+        lines.append("可用参数：")
+        for p, spec in list(props.items())[:14]:
+            d = str((spec or {}).get("description") or "").replace("\n", " ")[:70]
+            ty = str((spec or {}).get("type") or "")
+            lines.append("  · %s（%s）%s" % (p, ty or "?", ("：" + d) if d else ""))
+    lines.append("调法：rea_call，tool=%s，args 传上面的参数；或直接 rea_do 说你想干什么。" % name)
+    return "\n".join(lines)
+
+
+def _do_intent(cfg, params):
+    """意图式入口：说人话 → 载体选工具 → 载体拼参数 → 调 → 报错翻人话。"""
+    params = params or {}
+    intent = str(params.get("intent") or "").strip()
+    target = str(params.get("target") or "").strip().strip('"')
+    focus = str(params.get("focus") or "").strip()
+    if not intent:
+        return "想干什么？比如「反编译 main」「看这个文件的哈希」「列出字符串」。"
+    tools, err = _tool_list(cfg)
+    if err:
+        return "REA 工具列表取不到：%s" % err
+    cands, top = _route(intent, tools, target=target, focus=focus)
+    if not cands or top < 2:
+        return ("没找到合适的 REA 工具来干「%s」。可以 rea_tools 用关键词搜一下"
+                "（如 pe、apk、decompile、strings、frida、gguf），再 rea_call 精确调。"
+                % intent[:40])
+    doc = cands[0]
+    # 需要目标但我们手上没有 → 问清楚（比瞎跑一个工具强）
+    if _needs_target(doc) and not target and not _SESSION["opened"]:
+        return ("这个动作需要一个目标文件（%s）。把文件路径给我，我再跑。\n"
+                "可选工具：%s" % (doc["name"], "、".join(d["name"] for d in cands[:3])))
+    args, missing = _fill_args(doc, target=target, focus=focus)
+    if missing:
+        return ("要调 %s，但还缺参数：%s。补充一下（或用 rea_help 看它要什么）。\n"
+                "（这句话是载体替你判断的：工具已经选好了，只差参数）"
+                % (doc["name"], "、".join(missing)))
+    # ---- 执行：目标还没打开就先 open_binary（REA 的多数分析工具都作用于"已打开的目标"）----
+    steps = []
+    real_target = target or _SESSION["opened"]
+    if real_target and not target and _needs_target(doc):
+        for p in doc["props"]:
+            if p.lower() in ("path", "file", "target", "artifact"):
+                args.setdefault(p, real_target)
+    if real_target and (_needs_target(doc) or doc["name"] == "open_binary"):
+        opened = str(_SESSION["opened"] or "")
+        if os.path.normcase(opened) != os.path.normcase(real_target) and doc["name"] != "open_binary":
+            o_text, o_err = _call_tool_safe(cfg, "open_binary", {"path": real_target})
+            if o_err:
+                return "打开目标失败（%s）：%s" % (doc["name"], o_err)
+            if o_text and '"error"' in o_text[:40]:
+                return "打开目标失败：%s" % _friendly_error(o_text)[:300]
+            _SESSION["opened"], _SESSION["at"] = real_target, time.time()
+            steps.append("open_binary(%s)" % os.path.basename(real_target))
+    text, err2 = _call_tool_safe(cfg, doc["name"], args)
+    steps.append("%s(%s)" % (doc["name"], json.dumps(args, ensure_ascii=False)[:120]))
+    if err2:
+        # 一次自动纠正：报"没打开/找不到"时，自动 open_binary 再重试一次
+        low = err2.lower()
+        if real_target and any(k in low for k in ("not found", "no document", "open", "provider")):
+            o_text, o_err = _call_tool_safe(cfg, "open_binary", {"path": real_target})
+            if not o_err:
+                _SESSION["opened"] = real_target
+                steps.append("open_binary(重试)")
+                text, err2 = _call_tool_safe(cfg, doc["name"], args)
+        if err2:
+            return "按「%s」选的工具是 %s，但调用失败：%s\n（试过：%s）" % (
+                intent[:24], doc["name"], err2, "；".join(steps))
+    head = "按「%s」→ %s（载体替你选的工具）\n试过：%s\n" % (
+        intent[:24], doc["name"], "；".join(steps))
+    if not text:
+        return head + "调用成功但没返回内容（多半参数不全，rea_help %s 看它要什么）" % doc["name"]
+    other = [d["name"] for d in cands[1:4]]
+    tail = ("\n（备选工具：%s —— 结果不对就换它们，或 rea_call 精确调）" % "、".join(other)) if other else ""
+    return head + _clip(_friendly_error(text), cfg["max_chars"]) + tail
+
+
+def _call_tool_safe(cfg, name, args, timeout=None):
+    """调一个工具，返回 (text, err)。错误统一走中文说明。"""
+    c, err = _client_obj(cfg)
+    if err:
+        return "", "REA 起不来：%s" % err
+    text, err = c.call_tool(name, args or {}, timeout=int(timeout or cfg["timeout_s"]))
+    if err:
+        return "", err
+    return text or "", ""
+
+
 class ReaPlugin:
-    """插件契约：get_tool_descriptions() 声明工具，execute() 执行。"""
+    """插件契约：get_tool_descriptions() 声明工具，execute() 执行。
+
+    五个入口覆盖全部 229 个工具（**没有缩减任何能力**）：
+      · rea_do    —— 说人话，载体替它选工具、拼参数（4B 主要用这个）
+      · rea_call  —— 知道工具名时精确调用（可调 229 个里的任何一个）
+      · rea_help  —— 看某个工具要哪些参数
+      · rea_tools —— 按关键词搜工具目录
+      · rea_status—— 服务活没活、多少个工具
+    """
 
     def get_tool_descriptions(self):
         cfg = _load_cfg()
@@ -325,7 +635,12 @@ class ReaPlugin:
                 return _do_tools(cfg, params)
             if tool_name == "rea_call":
                 return _do_call(cfg, params)
-            return "未知工具：%s（REA 只有 rea_status、rea_tools、rea_call 三个）" % tool_name
+            if tool_name == "rea_do":
+                return _do_intent(cfg, params)
+            if tool_name == "rea_help":
+                return _do_help(cfg, params)
+            return ("未知工具：%s（REA 有 rea_status、rea_tools、rea_call、rea_do、rea_help）"
+                    % tool_name)
         except Exception as e:      # noqa: silent-ok — 插件内部异常必须转成中文说明
             LOG.warning("REA 插件内部异常（已转成说明）：%s: %s", type(e).__name__, e)
             return "REA 插件内部出错了（%s: %s）。先用 rea_status 看服务活着没；" \

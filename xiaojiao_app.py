@@ -1641,6 +1641,24 @@ def _is_only_modifier(q):
     return len([ch for ch in s if ch.isalnum()]) < 2
 
 
+def _answer_sane(a):
+    """把「根本不算回答」的东西挡在出口外面：空串、占位符 `⏳__pending__`、纯符号。
+
+    【为什么要单独一道】实测踩到过：某一轮模型什么都没产出（工具选了但没答，或者答了个空），
+    `agent_run` 把会话里那条**占位消息**（`⏳__pending__`）当成回答返回了，
+    于是接口把 `⏳__pending__` 原样吐给用户 —— 界面上就是"正在回答…"永远转圈，
+    而且**日志里看不出来**：因为它不是空串，原来那条 `if not answer_final` 的兜底没命中。
+    这里把它归零，交给下游的兜底话术说人话（并把这件事记进日志）。
+    """
+    s = str(a or "").strip()
+    if not s:
+        return ""
+    if "__pending__" in s or s in ("⏳", "…", "...", "（空）"):
+        LOG.warning("出口兜底：这一轮拿到的是占位符而不是回答（%r）→ 按「没答上」处理", s[:40])
+        return ""
+    return s
+
+
 def _strip_think(text):
     """剥掉模型输出的思维块标签（`<think>…</think>` / `<thinking>` / 残留的半个标签）。
 
@@ -14094,6 +14112,7 @@ def api_chat():
     lean = bool((request.get_json(force=True, silent=True) or {}).get("lean", False))
     answer, online, info, needs_confirm, tool_trace = agent_run(user_input, lean=lean)
     answer = _strip_think(answer)                  # 双保险：任何路径的 <think> 都不许进正文/会话
+    answer = _answer_sane(answer)                   # 占位符/空串一律不算回答（见 _answer_sane 说明）
     # ---- 问题 1：**唯一出口的复读解毒网** ----
     # `agent_run` 有十几条 return（看工具原文、超长切片、工具总结…），任何一条都可能绕过健康门。
     # 与其去数"有哪些路径"，不如在所有回答唯一必经的地方（这两个聊天接口）统一过网。
@@ -14122,7 +14141,7 @@ def api_chat():
         LOG.warning("回答疑似未引用检索资料（命中 %d / 候选 %d）：问题=%r",
                     g.get("matched"), g.get("considered"), user_input[:40])
     return jsonify({
-        "answer": answer,
+        "answer": answer_final,
         "brain_online": online,
         "needs_confirm": needs_confirm,
         "tool_trace": tool_trace,
@@ -14280,6 +14299,7 @@ def api_chat_stream():
                 return
             answer, online, info, needs_confirm, tool_trace = holder["r"]
             answer = _strip_think(answer or "")
+            answer = _answer_sane(answer)          # 占位符/空串不算回答（与 /api/chat 同一条规矩）
             if not answer:
                 answer = ("🤖 大脑没有应答，这一问没答上。请确认模型配置正确、端口可达。"
                           + llm_error_suffix())
