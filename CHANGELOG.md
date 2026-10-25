@@ -7,6 +7,38 @@
 
 ## [v1.0] - 2026-09-13
 
+### 接上 REA 逆向工程引擎：229 个工具收成 3 个入口（2026-10-17）
+
+**接的是什么**：[REA](https://github.com/morluto/rea)（Reverse Engineer Anything，npm 包
+`rea-agents`）—— 一个 MCP stdio 服务，229 个工具，覆盖 PE / ELF / Mach-O / .NET / APK / JS 的静态检查、
+反编译、xref、字符串搜索，还有 frida 动态注入、GDB、模型文件（GGUF / safetensors）检查。
+
+**怎么接的**：新增 `core/mcp_stdio.py`（六十行的 MCP 客户端：起进程、握手、列工具、调工具）
+和 `plugins/rea.py`。229 个工具**没有**全挂上去 —— 小焦的大脑是本机 4B，
+229 个名字塞进工具表只会让它挑错工具。所以只暴露三个粗粒度入口：
+`rea_status`（在不在线、多少个工具）、`rea_tools`（按关键词搜工具，带必填参数）、
+`rea_call`（调指定工具：先 `open_binary` 给 path，再调分析类工具）。
+另外把 REA 的结构化报错翻成人话（`provider_unavailable` → 说清"分析引擎没装"并给下一步），
+不然 4B 看到嵌套 JSON 只会复述。
+
+**真机实测**：连上 **0.4 秒**，报 `rea v6.8.0 ｜ 229 个工具`；`open_binary` 打开
+`C:\Windows\System32\notepad.exe` **1.2 秒**认出 `format=pe`、`architecture=x86_64`、`sha256=468ffe12…`；
+深层分析（`binary_overview`）报 `provider_unavailable` —— 反编译要本机装 Ghidra 或 Hopper，
+**这台机器没装**，所以"认文件"能用、"反编译"现在用不了，这是环境不是接线。
+走小焦那条也通了：问「用 rea_status 看一下逆向服务在不在」，4B 自己选中工具、真执行、把 229 这个数答出来。
+
+**踩出来的三个坑（都钉进自测了）**
+
+1. `cmd.exe /c node …` 起服务会留孤儿进程：`terminate()` 只杀 cmd.exe，node 继续占着 stdout 管道，
+   调用方干等。改成直接起 node 加 `taskkill /F /T` 杀进程树。
+2. `call()` 先拿锁再 `start()`，而 `start()` 的握手又要 `call()` —— 不可重入锁**自己锁死自己**，锁换 `RLock`。
+3. `cmd.exe /c` 的 `/c` 被当成文件路径，启动器校验判"文件不存在"，于是**工具一个都不注册**，整条接线静默失效。
+
+**已知边界**：4B 有时挑错工具（问「用 rea 打开 notepad 看看格式」，它选了 `open_app`，真把记事本打开了）；
+深层分析缺外部引擎；第一次调用要等 node 冷启动。
+自测 `tools/test_rea_plugin.py` **39 项**（假 MCP 服务，不依赖 node / 网络 / 装包）。
+说明写在 `docs/PLUGINS.md` 6.4 节。
+
 ### 修「视频协议」那段说明被压成一字一列（2026-10-16）
 
 **症状**（用户截图）：设置里展开「🎬 视频协议（可选 · 接任意厂商用）」后，

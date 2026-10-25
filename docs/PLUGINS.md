@@ -354,6 +354,57 @@ python -c "import xiaojiao_app as x; print(list(x.PLUGINS.keys()))"
 完整说明（结构图、装法、埋点、旁挂工具、实测数据与已知问题）见
 [因果记忆集成](causal-memory.md)。
 
+### 6.4 `rea`：把一个 229 工具的逆向工程引擎收成三个入口（2026-10-17）
+
+[REA](https://github.com/morluto/rea)（Reverse Engineer Anything，npm 包 `rea-agents`）是一个
+MCP stdio 服务，工具表里**229 个工具**：PE / ELF / Mach-O / .NET / APK / JS / WASM 的检查、
+反编译、xref、字符串搜索、证据导出，外加 frida 动态注入、GDB、模型文件（GGUF / safetensors）检查。
+
+**为什么不把 229 个都挂上去**：小焦的大脑是本机 4B 小模型，工具表按意图装载。
+229 个名字塞进去，可预期的后果是它挑错工具、或者挑一个参数根本对不上的。
+所以这个插件只暴露三个**粗粒度**入口：
+
+| 工具 | 干什么 |
+| --- | --- |
+| `rea_status` | 服务在不在线、版本、可用工具数。出问题先看这个 |
+| `rea_tools` | 用关键词搜它能做什么（`pe`、`apk`、`decompile`、`frida`、`gguf`），返回名字和**必填参数** |
+| `rea_call` | 调指定工具：先 `open_binary`（给 `path`）打开目标，再调分析类工具 |
+
+**接线用的东西**：`core/mcp_stdio.py`（一个六十行的 MCP 客户端：起进程、握手、列工具、调工具）。
+插件本身**不做协议细节**，只做三件事：注册条件、参数/结果的翻译、错误话术。
+（`plugins/causal_memory.py` 里有一份同思路的实现，暂时并存 —— 那份已在跑且有 25 项自测钉着，
+这轮不动它。）
+
+**真机实测（本机，2026-10-17）**
+
+* 连上只要 **0.4 秒**，`rea_status` 报 `rea v6.8.0 ｜ 229 个工具`；
+* `open_binary` 打开 `C:\Windows\System32\notepad.exe` → **1.2 秒**认出
+  `format=pe`、`architecture=x86_64`、`sha256=468ffe12…`；
+* `binary_overview` / `list_documents` 这类深层分析报 `provider_unavailable` ——
+  REA 的反编译要本机装 Ghidra 或 Hopper，**这台机器没装**。所以"识别文件"能用、
+  "反编译"现在用不了（这是环境，不是接线）。
+* 走小焦那条路真的调通了：问它「用 rea_status 看一下逆向服务在不在」，
+  4B 自己选中 `rea_status`、工具真的执行、把 229 这个数原样答出来。
+
+**这块踩出来的三个真坑（都写进了自测）**
+
+1. **用 `cmd.exe /c node …` 起服务会留下孤儿进程**：`terminate()` 只杀 cmd.exe，
+   node 还活着并继续占着 stdout 管道，调用方以为没结束就干等 —— 现象是"卡十分钟、日志里一个字没有"。
+   改成直接起 `node`，并在 `stop()` 里用 `taskkill /F /T` 杀**进程树**。
+2. **`call()` 里先拿锁再 `start()`，而 `start()` 里的握手又要 `call()`** ——
+   普通的不可重入锁就是**自己锁死自己**（表现同样是静默卡住）。锁换成 `RLock`。
+3. **`cmd.exe /c` 里的 `/c` 被当成文件路径**：启动器校验报"文件不存在"，
+   于是工具一个都不注册 —— 真机上整条接线静默失效。校验现在会跳过开关参数。
+
+**已知边界（面试/文档都要这么说）**
+
+* 4B 有时会挑错工具：问「用 rea 打开 notepad 看看格式」，它选了 `open_app`（真把记事本打开了）。
+  工具描述已经把「打开」这类动词去掉、换成「逆向分析」类词，但仍然要靠 `rea_tools` 先搜；
+* 深层分析需要外部引擎（Ghidra / Hopper），本机没有；
+* 第一次调用要等 node 冷启动（几秒），之后常驻。
+
+自测：`tools/test_rea_plugin.py` **39 项**（假 MCP 服务，不依赖 node / 网络 / 装包）。
+
 ## 7. 相关文档
 
 - [工具清单](tools.md)：内置工具与插件工具的实际清单
