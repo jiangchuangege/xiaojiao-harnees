@@ -694,7 +694,14 @@ class ArchifyPlugin:
         try:
             fn = self._dispatch(name)
             if fn is None:
-                return None
+                # 不返回 None：说明"清单里没有这个名字"，并把可用的几个列出来。
+                _names = []
+                try:
+                    _names = [str(t.get("name")) for t in (self.get_tool_descriptions() or [])]
+                except Exception:      # noqa: silent-ok — 列不出来就只说"没有"
+                    _names = []
+                return ("Archify 的清单里没有「%s」这个工具。可用的是：%s"
+                        % (name, "、".join(_names[:12]) or "（清单读不出来）"))
             r = fn(params or {})
             _metric(name, True, time.time() - t0)
             return r

@@ -149,7 +149,9 @@ def main():
     r = pl.execute("causal_memory_map", {})
     ok("引擎报错 → 如实转达，不吞", "没查成" in (r or "") and "超时" in (r or ""), (r or "")[:60])
     base.reply["causal_directory"] = ("x", "")
-    ok("不是我的工具 → 返回 None（不抢别人）", pl.execute("get_weather", {}) is None)
+    _foreign = pl.execute("get_weather", {})
+    ok("不是我的工具 → 返回中文说明（不抛异常、也不静默给空）",
+       isinstance(_foreign, str) and "没有" in _foreign, _foreign)
 
     # ---------- 注入的异常不许往上抛 ----------
     class Boom(FakeBase):

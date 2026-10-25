@@ -83,7 +83,9 @@ def main():
     out = pl.execute("causal_report", {})
     ok("预测账本：拿到准确率", out and "预测账本" in out, (out or "")[:70])
 
-    ok("不是我的工具：返回 None（不抢别人的）", pl.execute("get_weather", {}) is None)
+    _foreign = pl.execute("get_weather", {})
+    ok("不是我的工具：返回中文说明（不抛异常、也不静默给空）",
+       isinstance(_foreign, str) and "没有" in _foreign and "causal_warn" in _foreign, _foreign)
     ok("忘了给必填参数：给中文提示，不炸",
        "都得给" in (pl.execute("causal_record", {"decision": "只有决策"}) or ""))
     ok("预警没给 action：明确说清", "没给 action" in (pl.execute("causal_warn", {}) or ""))

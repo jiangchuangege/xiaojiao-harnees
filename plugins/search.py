@@ -16,7 +16,7 @@ class SearchPlugin:
     
     def execute(self, tool_name, params):
         if tool_name != "web_search":
-            return None
+            return f"搜索插件里没有「{tool_name}」这个工具（它只有 web_search）。"
         query = params.get("query", "")
         if not query:
             return "请告诉我你想搜索什么"

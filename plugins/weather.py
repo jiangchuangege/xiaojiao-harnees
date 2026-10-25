@@ -20,7 +20,7 @@ class WeatherPlugin:
     
     def execute(self, tool_name, params):
         if tool_name != "get_weather":
-            return None
+            return f"天气插件里没有「{tool_name}」这个工具（它只有 get_weather）。"
         city = params.get("city", "北京")
         try:
             url = f"https://wttr.in/{city}?format=%C+%t"

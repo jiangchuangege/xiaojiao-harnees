@@ -1,0 +1,1552 @@
+{
+ "total": 99,
+ "ok": 99,
+ "bad": 0,
+ "tools": [
+  {
+   "plugin": "code_intelligence",
+   "kind": "插件",
+   "name": "analyze_dependencies",
+   "description": "列出项目依赖。什么时候用：想知道用了哪些库；输入 path；输出 依赖清单(按语言分组)",
+   "full_description": "列出项目依赖。什么时候用：想知道用了哪些库；输入 path；输出 依赖清单(按语言分组)",
+   "required": [],
+   "properties": [
+    "directory"
+   ],
+   "example": "analyze_dependencies({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_batch",
+   "description": "一次画多张图。什么时候用：用户要一批图；输入 items 数组；输出 每张的结果",
+   "full_description": "一次画多张图。什么时候用：用户要一批图；输入 items 数组；输出 每张的结果",
+   "required": [
+    "items"
+   ],
+   "properties": [
+    "items"
+   ],
+   "example": "archify_batch({\"items\": []})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_check",
+   "description": "检查已生成的 HTML 是否正常。什么时候用：交付后自检；输入 html_path；输出 检查结果",
+   "full_description": "检查已生成的 HTML 是否正常。什么时候用：交付后自检；输入 html_path；输出 检查结果",
+   "required": [
+    "html_path"
+   ],
+   "properties": [
+    "html_path"
+   ],
+   "example": "archify_check({\"html_path\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_compare",
+   "description": "对比两张架构图并给差异。什么时候用：改版前后比一比(仅 architecture)；输入两份 spec；输出 差异清单",
+   "full_description": "对比两张架构图并给差异。什么时候用：改版前后比一比(仅 architecture)；输入两份 spec；输出 差异清单",
+   "required": [
+    "base_json",
+    "head_json"
+   ],
+   "properties": [
+    "base_json",
+    "head_json",
+    "output_name"
+   ],
+   "example": "archify_compare({\"base_json\": \"值\", \"head_json\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_deliver",
+   "description": "**最终交付**：渲染并生成正式 HTML。",
+   "full_description": "**最终交付**：渲染并生成正式 HTML。什么时候用：validate 通过之后；输入 diagram_type + spec_json + output_name + quality 取 showcase；输出 HTML 路径(告诉用户这个)",
+   "required": [
+    "diagram_type",
+    "spec_json"
+   ],
+   "properties": [
+    "diagram_type",
+    "spec_json",
+    "output_name",
+    "quality"
+   ],
+   "example": "archify_deliver({\"diagram_type\": \"值\", \"spec_json\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_doctor",
+   "description": "体检 Archify 环境(Node/依赖/schema 是否齐)。",
+   "full_description": "体检 Archify 环境(Node/依赖/schema 是否齐)。什么时候用：画图报错、或用户让你查环境；无参数；输出 各项 ✅/❌ 报告",
+   "required": [],
+   "properties": [],
+   "example": "archify_doctor({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_guide",
+   "description": "按场景推荐图表类型+配方+官方提示词。",
+   "full_description": "按场景推荐图表类型+配方+官方提示词。什么时候用：读完 SKILL.md 后、决定画哪种图之前；输入 scenario(用户的画图需求)、lang=zh；输出 推荐类型/适用与不适用/应含要素/官方提示词",
+   "required": [
+    "scenario"
+   ],
+   "properties": [
+    "scenario",
+    "lang"
+   ],
+   "example": "archify_guide({\"scenario\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_inspect",
+   "description": "只看结构、不渲染。",
+   "full_description": "只看结构、不渲染。什么时候用：想快速确认节点/关系结构对不对；输入 diagram_type + spec_json；输出 结构报告",
+   "required": [
+    "diagram_type",
+    "spec_json"
+   ],
+   "properties": [
+    "diagram_type",
+    "spec_json"
+   ],
+   "example": "archify_inspect({\"diagram_type\": \"值\", \"spec_json\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_metrics",
+   "description": "看画图调用的统计(成功/失败/耗时)。什么时候用：排查画图为什么慢/失败；无参数；输出 统计表",
+   "full_description": "看画图调用的统计(成功/失败/耗时)。什么时候用：排查画图为什么慢/失败；无参数；输出 统计表",
+   "required": [],
+   "properties": [],
+   "example": "archify_metrics({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_preview",
+   "description": "预览渲染(服务端用，不开浏览器)。什么时候用：想先看看效果再决定交付；输入同 render；输出 预览结果",
+   "full_description": "预览渲染(服务端用，不开浏览器)。什么时候用：想先看看效果再决定交付；输入同 render；输出 预览结果",
+   "required": [
+    "diagram_type",
+    "spec_json"
+   ],
+   "properties": [
+    "diagram_type",
+    "spec_json",
+    "output_name",
+    "quality"
+   ],
+   "example": "archify_preview({\"diagram_type\": \"值\", \"spec_json\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_read_example",
+   "description": "读该类型的**完整示例 JSON**。",
+   "full_description": "读该类型的**完整示例 JSON**。什么时候用：写 JSON 前照着抄结构(比只看 schema 稳)；输入 type；输出 示例 JSON 全文",
+   "required": [
+    "diagram_type"
+   ],
+   "properties": [
+    "diagram_type"
+   ],
+   "example": "archify_read_example({\"diagram_type\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_read_schema",
+   "description": "读该图表类型的 schema(含公共部分)。",
+   "full_description": "读该图表类型的 schema(含公共部分)。什么时候用：按 archify_guide 推荐的类型，**生成 JSON 之前**读；输入 type；输出 schema 全文(照它写 JSON)",
+   "required": [
+    "diagram_type"
+   ],
+   "properties": [
+    "diagram_type"
+   ],
+   "example": "archify_read_schema({\"diagram_type\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_read_skill",
+   "description": "读 Archify 完整技能文档。",
+   "full_description": "读 Archify 完整技能文档。什么时候用：**每次开始画图的第一步**(同一会话只读一次)；无参数；输出 SKILL.md 全文",
+   "required": [],
+   "properties": [],
+   "example": "archify_read_skill({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_render",
+   "description": "把 JSON 渲染成 HTML(基础版，不开浏览器)。",
+   "full_description": "把 JSON 渲染成 HTML(基础版，不开浏览器)。什么时候用：只想拿文件、不需要报告；输入 diagram_type + spec_json + output_name；输出 文件路径",
+   "required": [
+    "diagram_type",
+    "spec_json"
+   ],
+   "properties": [
+    "diagram_type",
+    "spec_json",
+    "output_name",
+    "quality"
+   ],
+   "example": "archify_render({\"diagram_type\": \"值\", \"spec_json\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_validate",
+   "description": "**交付前必做**：校验 JSON 是否符合规范。",
+   "full_description": "**交付前必做**：校验 JSON 是否符合规范。什么时候用：写完 JSON 立刻校验；输入 diagram_type + spec_json + quality 取 showcase；输出 全部报错清单(字段路径+建议修法)。FAIL 时**按全部报错一次改完**再校验，禁止逐条试错",
+   "required": [
+    "diagram_type",
+    "spec_json"
+   ],
+   "properties": [
+    "diagram_type",
+    "spec_json",
+    "quality"
+   ],
+   "example": "archify_validate({\"diagram_type\": \"值\", \"spec_json\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "archify",
+   "kind": "插件",
+   "name": "archify_visual_check",
+   "description": "对已生成的 HTML 做**视觉**检查。",
+   "full_description": "对已生成的 HTML 做**视觉**检查。什么时候用：交付后确认渲染质量(标签重叠等)；输入 html_path；输出 JSON 报告",
+   "required": [
+    "html_path"
+   ],
+   "properties": [
+    "html_path"
+   ],
+   "example": "archify_visual_check({\"html_path\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "ask_user",
+   "description": "向用户提问并给出选项，等待用户选择。用于需要用户拍板时。question=问题, options=选项列表(逗号分隔)。",
+   "full_description": "向用户提问并给出选项，等待用户选择。用于需要用户拍板时。question=问题, options=选项列表(逗号分隔)。",
+   "required": [
+    "question"
+   ],
+   "properties": [
+    "question",
+    "options"
+   ],
+   "example": "ask_user({\"question\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "asset_intel",
+   "kind": "插件",
+   "name": "asset_intel_lookup",
+   "description": "给 IP 查它命中了哪些漏洞(免费，无需 Key)。",
+   "full_description": "给 IP 查它命中了哪些漏洞(免费，无需 Key)。什么时候用：用户给了具体 IP 想知道有没有已知漏洞；输入 ips(一个或多个公网 IP，逗号/空格分隔)；输出 IP→命中 CVE 表格(含端口/主机名)",
+   "required": [
+    "ips"
+   ],
+   "properties": [
+    "ips"
+   ],
+   "example": "asset_intel_lookup({\"ips\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "asset_intel",
+   "kind": "插件",
+   "name": "asset_intel_search",
+   "description": "反过来查：某个 CVE/产品在**全网有哪些 IP** 受影响(需数据源 Key)。",
+   "full_description": "反过来查：某个 CVE/产品在**全网有哪些 IP** 受影响(需数据源 Key)。什么时候用：用户要「含这些漏洞的 IP」；输入 query(如 vuln:CVE-2024-1234)、limit；输出 IP 列表(未配 Key 时给配置指引)",
+   "required": [
+    "query"
+   ],
+   "properties": [
+    "query",
+    "limit"
+   ],
+   "example": "asset_intel_search({\"query\": \"本地大模型怎么部署\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "asset_intel",
+   "kind": "插件",
+   "name": "asset_intel_status",
+   "description": "看资产测绘数据源能不能用。",
+   "full_description": "看资产测绘数据源能不能用。什么时候用：反查失败或用户问「能查 IP 吗」；无参数；输出 各数据源状态 + 还缺哪个 Key + 去哪拿",
+   "required": [],
+   "properties": [],
+   "example": "asset_intel_status({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "background",
+   "description": "在后台运行一条命令(不阻塞)，立即返回任务id。稍后用 background_result 查结果。用于耗时任务。",
+   "full_description": "在后台运行一条命令(不阻塞)，立即返回任务id。稍后用 background_result 查结果。用于耗时任务。",
+   "required": [
+    "command"
+   ],
+   "properties": [
+    "command",
+    "timeout"
+   ],
+   "example": "background({\"command\": \"dir\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "background_result",
+   "description": "查询后台任务(background启动的)的结果。job_id=任务id。",
+   "full_description": "查询后台任务(background启动的)的结果。job_id=任务id。",
+   "required": [
+    "job_id"
+   ],
+   "properties": [
+    "job_id"
+   ],
+   "example": "background_result({\"job_id\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "browser_session",
+   "description": "会话+截图的**聚合入口**(一个工具走完 开→抓→截→关)。",
+   "full_description": "会话+截图的**聚合入口**(一个工具走完 开→抓→截→关)。什么时候用：不想分步调 open/session_fetch/close；输入 action(open/open_http/close/list/fetch/request/screenshot) 等；输出 对应结果",
+   "required": [
+    "action"
+   ],
+   "properties": [
+    "action",
+    "url",
+    "session_id",
+    "session_type",
+    "full_page",
+    "ignore_robots"
+   ],
+   "example": "browser_session({\"action\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "bulk_fetch",
+   "description": "批量用浏览器渲染抓取。什么时候用：多个页面都需渲染；输入 urls；输出 各页正文(较慢)",
+   "full_description": "批量用浏览器渲染抓取。什么时候用：多个页面都需渲染；输入 urls；输出 各页正文(较慢)",
+   "required": [
+    "urls"
+   ],
+   "properties": [
+    "urls",
+    "ignore_robots"
+   ],
+   "example": "bulk_fetch({\"urls\": []})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "bulk_get",
+   "description": "一次抓多个**静态**网页(比逐个 get 快)。",
+   "full_description": "一次抓多个**静态**网页(比逐个 get 快)。什么时候用：给了多个 URL 且都是普通页；输入 urls 数组；输出 每个 URL 的正文(保序，单个失败不影响其它)",
+   "required": [
+    "urls"
+   ],
+   "properties": [
+    "urls",
+    "stealth",
+    "ignore_robots"
+   ],
+   "example": "bulk_get({\"urls\": []})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "bulk_stealthy_fetch",
+   "description": "批量隐身抓取。什么时候用：多个都被风控拦的页面；输入 urls(≤20)；输出 各页正文(很慢，慎用)",
+   "full_description": "批量隐身抓取。什么时候用：多个都被风控拦的页面；输入 urls(≤20)；输出 各页正文(很慢，慎用)",
+   "required": [
+    "urls"
+   ],
+   "properties": [
+    "urls",
+    "ignore_robots"
+   ],
+   "example": "bulk_stealthy_fetch({\"urls\": []})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory",
+   "kind": "插件",
+   "name": "causal_counterfactual",
+   "description": "反事实对比（因果记忆）：两个候选方案，各自过去的结果分布是什么。什么时候用：在两个方案之间拿不定主意时。",
+   "full_description": "反事实对比（因果记忆）：两个候选方案，各自过去的结果分布是什么。什么时候用：在两个方案之间拿不定主意时。",
+   "required": [],
+   "properties": [],
+   "example": "causal_counterfactual({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory_ext",
+   "kind": "插件",
+   "name": "causal_facts",
+   "description": "查因果记忆**它自己那边**的事实层（不是小焦自己的记忆库，两套别混）。什么时候用：明确知道东西记在它那边时。",
+   "full_description": "查因果记忆**它自己那边**的事实层（不是小焦自己的记忆库，两套别混）。什么时候用：明确知道东西记在它那边时。",
+   "required": [],
+   "properties": [],
+   "example": "causal_facts({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory_ext",
+   "kind": "插件",
+   "name": "causal_invalidate",
+   "description": "把一条**错的**教训软作废（不是删除，可回滚；",
+   "full_description": "把一条**错的**教训软作废（不是删除，可回滚；库里仍留痕）。什么时候用：发现某条经验已经不对了（世界变了、当时的结论是错的）。",
+   "required": [],
+   "properties": [],
+   "example": "causal_invalidate({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory_ext",
+   "kind": "插件",
+   "name": "causal_invalidate_pattern",
+   "description": "把引擎挖出来的某条**关系**软作废（相似/矛盾/重复那类 meta 边）。",
+   "full_description": "把引擎挖出来的某条**关系**软作废（相似/矛盾/重复那类 meta 边）。什么时候用：它把两条不相干的经验算成'相似'、或把不该算矛盾的算成矛盾时。",
+   "required": [],
+   "properties": [],
+   "example": "causal_invalidate_pattern({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory_ext",
+   "kind": "插件",
+   "name": "causal_lesson",
+   "description": "从库里多条散着的边**重建一条教训**（比单条边更适合直接照做）。什么时候用：要总结'这一类事我以前吃了什么亏'时。",
+   "full_description": "从库里多条散着的边**重建一条教训**（比单条边更适合直接照做）。什么时候用：要总结'这一类事我以前吃了什么亏'时。",
+   "required": [],
+   "properties": [],
+   "example": "causal_lesson({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory_ext",
+   "kind": "插件",
+   "name": "causal_memory_map",
+   "description": "看一眼因果记忆库的全貌（多少条因果边、多少节点、最近记了什么）。",
+   "full_description": "看一眼因果记忆库的全貌（多少条因果边、多少节点、最近记了什么）。什么时候用：想确认'它到底学过什么'，或者吃完一顿操作后看看记进去没有。",
+   "required": [],
+   "properties": [],
+   "example": "causal_memory_map({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory_ext",
+   "kind": "插件",
+   "name": "causal_patterns",
+   "description": "看引擎自己挖出来的关系：哪些经验**相似**、哪些**互相矛盾**、哪些在**重复**。",
+   "full_description": "看引擎自己挖出来的关系：哪些经验**相似**、哪些**互相矛盾**、哪些在**重复**。什么时候用：怀疑自己前后做法不一致、或想找同类经验时。",
+   "required": [],
+   "properties": [],
+   "example": "causal_patterns({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory",
+   "kind": "插件",
+   "name": "causal_record",
+   "description": "记一条「决策 → 结果」到因果记忆。",
+   "full_description": "记一条「决策 → 结果」到因果记忆。什么时候用：**做完一件事、拿到结果之后**（尤其是踩坑、返工、意外成功）。relation 只能是 caused/enabled/prevented/co_occurrence 之一。",
+   "required": [],
+   "properties": [],
+   "example": "causal_record({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory_ext",
+   "kind": "插件",
+   "name": "causal_remember",
+   "description": "直接把一段对话（几条消息）喂进因果记忆的提炼链路，由它自己拆出决策与结果。",
+   "full_description": "直接把一段对话（几条消息）喂进因果记忆的提炼链路，由它自己拆出决策与结果。什么时候用：刚做完一件有教训的事，懒得一条条手动记。",
+   "required": [],
+   "properties": [],
+   "example": "causal_remember({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory",
+   "kind": "插件",
+   "name": "causal_report",
+   "description": "因果记忆的预测账本：以前那些判断押对了多少（总览/按领域）+ 还没结算的。什么时候用：想知道这套经验到底准不准的时候。",
+   "full_description": "因果记忆的预测账本：以前那些判断押对了多少（总览/按领域）+ 还没结算的。什么时候用：想知道这套经验到底准不准的时候。",
+   "required": [],
+   "properties": [],
+   "example": "causal_report({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory_ext",
+   "kind": "插件",
+   "name": "causal_resolve",
+   "description": "让引擎评审'同一个决策反复记录、结局却不一样'的发散项，并决定要不要取代旧结论。",
+   "full_description": "让引擎评审'同一个决策反复记录、结局却不一样'的发散项，并决定要不要取代旧结论。什么时候用：觉得库里同一个做法有两种相反结论时。",
+   "required": [],
+   "properties": [],
+   "example": "causal_resolve({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory",
+   "kind": "插件",
+   "name": "causal_search",
+   "description": "查以前的教训（因果记忆）：过去同类事情上，什么做法导致了什么结果。",
+   "full_description": "查以前的教训（因果记忆）：过去同类事情上，什么做法导致了什么结果。什么时候用：遇到**非平凡的决策**之前（排障、换方案、改架构），先看看以前踩过什么坑。输入 query；输出若干条「决策 →(关系)→ 结果」。",
+   "required": [],
+   "properties": [],
+   "example": "causal_search({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory",
+   "kind": "插件",
+   "name": "causal_trace",
+   "description": "什么时候用：单看一个原因解释不了故障时。",
+   "full_description": "故障多跳溯源（因果记忆）：从一个坏结果往回追，找出一条因果链（例：服务崩 ← OOM ← 缓存没设 TTL ← Redis 没配过期）。什么时候用：单看一个原因解释不了故障时。输入坏结果描述。",
+   "required": [],
+   "properties": [],
+   "example": "causal_trace({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory_ext",
+   "kind": "插件",
+   "name": "causal_trace_one",
+   "description": "单跳溯源：这个结果**直接**是哪个决策造成的。",
+   "full_description": "单跳溯源：这个结果**直接**是哪个决策造成的。什么时候用：只想找最直接的原因（要找整条链用 causal_trace）。",
+   "required": [],
+   "properties": [],
+   "example": "causal_trace_one({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory_ext",
+   "kind": "插件",
+   "name": "causal_unified",
+   "description": "统一检索：它那边的事实层和因果层一起查。什么时候用：不确定要找的是'一个事实'还是'一条教训'时。",
+   "full_description": "统一检索：它那边的事实层和因果层一起查。什么时候用：不确定要找的是'一个事实'还是'一条教训'时。",
+   "required": [],
+   "properties": [],
+   "example": "causal_unified({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "causal_memory",
+   "kind": "插件",
+   "name": "causal_warn",
+   "description": "动手前预警（因果记忆·抑制侧）：告诉我这个动作以前造成过什么后果，尤其是**以前这么做出过事**。",
+   "full_description": "动手前预警（因果记忆·抑制侧）：告诉我这个动作以前造成过什么后果，尤其是**以前这么做出过事**。什么时候用：要执行有副作用的操作前（改配置、删/覆盖文件、重启服务、装东西、动显卡/显存）。输入 action（你打算做的动作，一句话）；输出 安全/警告/危险 + 因果链。",
+   "required": [],
+   "properties": [],
+   "example": "causal_warn({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "check_env",
+   "description": "检测电脑环境装没装东西(只读): 检查 python/git/node/ffmpeg 等是否安装及版本。",
+   "full_description": "检测电脑环境装没装东西(只读): 检查 python/git/node/ffmpeg 等是否安装及版本。",
+   "required": [],
+   "properties": [
+    "items"
+   ],
+   "example": "check_env({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "code_intelligence",
+   "kind": "插件",
+   "name": "ci_read_file",
+   "description": "读文件内容(带行号，可指定范围)。",
+   "full_description": "读文件内容(带行号，可指定范围)。什么时候用：要**看代码/配置内容**；输入 path(可选 start/end)；输出 带行号的文本。只读，不会改文件",
+   "required": [
+    "file_path"
+   ],
+   "properties": [
+    "file_path",
+    "start_line",
+    "end_line"
+   ],
+   "example": "ci_read_file({\"file_path\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "code_intelligence",
+   "kind": "插件",
+   "name": "ci_search_content",
+   "description": "在**文件内容**里搜关键词/正则。",
+   "full_description": "在**文件内容**里搜关键词/正则。什么时候用：找某个函数/配置写在哪；输入 pattern+path；输出 匹配行及上下文(带文件名与行号)",
+   "required": [
+    "query"
+   ],
+   "properties": [
+    "query",
+    "file_pattern",
+    "directory",
+    "context_lines"
+   ],
+   "example": "ci_search_content({\"query\": \"本地大模型怎么部署\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "code_intelligence",
+   "kind": "插件",
+   "name": "ci_search_files",
+   "description": "按**文件名**找文件(支持 * ?",
+   "full_description": "按**文件名**找文件(支持 * ?)。什么时候用：知道大概文件名、不知道在哪个目录；输入 pattern/path；输出 匹配到的文件路径列表",
+   "required": [
+    "pattern"
+   ],
+   "properties": [
+    "pattern",
+    "directory"
+   ],
+   "example": "ci_search_files({\"pattern\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "close_session",
+   "description": "关闭会话、释放资源。",
+   "full_description": "关闭会话、释放资源。什么时候用：session_fetch/screenshot 做完立刻关，别让会话堆着；输入 session_id(必填)；输出 关闭结果",
+   "required": [
+    "session_id"
+   ],
+   "properties": [
+    "session_id"
+   ],
+   "example": "close_session({\"session_id\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "collect_vulnerabilities",
+   "description": "什么时候用：用户要「最近的漏洞/CVE/高危漏洞」；",
+   "full_description": "**漏洞清单唯一入口**(NVD 结构化数据)。什么时候用：用户要「最近的漏洞/CVE/高危漏洞」；输入 days(默认7,≤120)、severity(HIGH 默认=含以上)、limit(默认5)；输出 Markdown 漏洞表(编号/等级/评分/受影响软件/时间/摘要)。不要用 web_search 凑漏洞清单",
+   "required": [],
+   "properties": [
+    "days",
+    "severity",
+    "limit"
+   ],
+   "example": "collect_vulnerabilities({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "db_helper",
+   "kind": "插件",
+   "name": "connect_db",
+   "description": "连一个 SQLite 库。什么时候用：要对某个 .db 做查询前的第一步；输入 db_path；输出 连接结果",
+   "full_description": "连一个 SQLite 库。什么时候用：要对某个 .db 做查询前的第一步；输入 db_path；输出 连接结果",
+   "required": [
+    "db_path"
+   ],
+   "properties": [
+    "db_path"
+   ],
+   "example": "connect_db({\"db_path\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "code_intelligence",
+   "kind": "插件",
+   "name": "count_code_lines",
+   "description": "统计代码规模。什么时候用：想知道项目多少行、注释占比；输入 path；输出 按语言分类的行数统计",
+   "full_description": "统计代码规模。什么时候用：想知道项目多少行、注释占比；输入 path；输出 按语言分类的行数统计",
+   "required": [],
+   "properties": [
+    "directory"
+   ],
+   "example": "count_code_lines({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "db_helper",
+   "kind": "插件",
+   "name": "describe_table",
+   "description": "看某张表的结构。什么时候用：写查询前确认列名/类型；输入 table；输出 列定义",
+   "full_description": "看某张表的结构。什么时候用：写查询前确认列名/类型；输入 table；输出 列定义",
+   "required": [
+    "table_name"
+   ],
+   "properties": [
+    "table_name"
+   ],
+   "example": "describe_table({\"table_name\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "download",
+   "description": "下载**文件**(PDF/EPUB/ZIP/图片/音视频)到本地。",
+   "full_description": "下载**文件**(PDF/EPUB/ZIP/图片/音视频)到本地。什么时候用：URL 指向文件而不是网页；输入 url(可选 filename)；输出 本地文件路径",
+   "required": [
+    "url"
+   ],
+   "properties": [
+    "url",
+    "filename",
+    "ignore_robots"
+   ],
+   "example": "download({\"url\": \"https://example.com\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "edit_file",
+   "description": "在文本文件里精准替换一段内容(第一次出现的)。",
+   "full_description": "在文本文件里精准替换一段内容(第一次出现的)。",
+   "required": [
+    "path",
+    "old_string",
+    "new_string"
+   ],
+   "properties": [
+    "path",
+    "old_string",
+    "new_string"
+   ],
+   "example": "edit_file({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\", \"old_string\": \"值\", \"new_string\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "db_helper",
+   "kind": "插件",
+   "name": "export_table_json",
+   "description": "把整张表导成 JSON。什么时候用：要把数据给别的程序/看全量；输入 table；输出 JSON",
+   "full_description": "把整张表导成 JSON。什么时候用：要把数据给别的程序/看全量；输入 table；输出 JSON",
+   "required": [
+    "table_name"
+   ],
+   "properties": [
+    "table_name",
+    "limit"
+   ],
+   "example": "export_table_json({\"table_name\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "fetch",
+   "description": "**需要浏览器渲染**时用(JS 动态页/懒加载)。",
+   "full_description": "**需要浏览器渲染**时用(JS 动态页/懒加载)。什么时候用：get 只拿到空壳或内容不全；输入 url(可选 wait_selector 等元素出现)；输出 渲染后的正文。比 get 慢，能不用就不用",
+   "required": [
+    "url"
+   ],
+   "properties": [
+    "url",
+    "wait_selector",
+    "timeout",
+    "save_to",
+    "ignore_robots"
+   ],
+   "example": "fetch({\"url\": \"https://example.com\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "fetch_url",
+   "description": "直接读一个网址/接口的返回内容(纯HTTP，最轻)。",
+   "full_description": "直接读一个网址/接口的返回内容(纯HTTP，最轻)。",
+   "required": [
+    "url"
+   ],
+   "properties": [
+    "url"
+   ],
+   "example": "fetch_url({\"url\": \"https://example.com\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "music_generation",
+   "kind": "插件",
+   "name": "generate_music",
+   "description": "本地生成一段音乐(MusicGen)。",
+   "full_description": "本地生成一段音乐(MusicGen)。什么时候用：用户要「来段音乐/BGM」；输入 prompt(风格描述)、duration(秒,默认5)；输出 音频链接。首次会自动下模型(~1.5G)，较慢。第一次使用会自动下载模型(~1.5G)并安装依赖。返回音频链接。",
+   "required": [
+    "prompt"
+   ],
+   "properties": [
+    "prompt",
+    "duration"
+   ],
+   "example": "generate_music({\"prompt\": \"画一只在窗台晒太阳的猫\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "video_generation",
+   "kind": "插件",
+   "name": "generate_video",
+   "description": "本地生成一段视频(ComfyUI+Wan2.1)。",
+   "full_description": "本地生成一段视频(ComfyUI+Wan2.1)。什么时候用：用户要「生成/画一段视频」；输入中文场景描述；输出 视频链接(几秒到几分钟)。",
+   "required": [
+    "prompt"
+   ],
+   "properties": [
+    "prompt"
+   ],
+   "example": "generate_video({\"prompt\": \"画一只在窗台晒太阳的猫\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "get",
+   "description": "**抓网页首选**(纯HTTP，最快)。",
+   "full_description": "**抓网页首选**(纯HTTP，最快)。什么时候用：静态页/接口/JSON 一律先用它；输入 url(可选 stealth/timeout/save_to)；输出 页面正文+HTTP状态。被拦或正文空 → 再依次换 fetch → stealthy_fetch",
+   "required": [
+    "url"
+   ],
+   "properties": [
+    "url",
+    "stealth",
+    "timeout",
+    "save_to",
+    "ignore_robots"
+   ],
+   "example": "get({\"url\": \"https://example.com\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "code_intelligence",
+   "kind": "插件",
+   "name": "get_file_info",
+   "description": "看单个文件的元信息。什么时候用：想知道大小/行数/改动时间；输入 path；输出 大小/行数/修改时间",
+   "full_description": "看单个文件的元信息。什么时候用：想知道大小/行数/改动时间；输入 path；输出 大小/行数/修改时间",
+   "required": [
+    "file_path"
+   ],
+   "properties": [
+    "file_path"
+   ],
+   "example": "get_file_info({\"file_path\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "ip",
+   "kind": "插件",
+   "name": "get_ip",
+   "description": "查本机公网 IP(只返回地址)。",
+   "full_description": "查本机公网 IP(只返回地址)。什么时候用：只要一个 IP 字符串；要归属地/ISP/时区请用 net_ip 或 get_ip_info；无参数；输出 IP 文本",
+   "required": [],
+   "properties": [],
+   "example": "get_ip({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "ip",
+   "kind": "插件",
+   "name": "get_ip_info",
+   "description": "查某个 IP 的归属地/ISP/时区。",
+   "full_description": "查某个 IP 的归属地/ISP/时区。什么时候用：**已经知道**要查哪个 IP；输入 ip；输出 归属地 JSON。查自己机器的公网 IP 用 net_ip",
+   "required": [],
+   "properties": [],
+   "example": "get_ip_info({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "nginx-vts",
+   "kind": "插件",
+   "name": "get_nginx_status",
+   "description": "获取 Nginx 实时流量状态。",
+   "full_description": "获取 Nginx 实时流量状态。什么时候用：用户问「nginx 状态」「流量」「请求数」「错误数」「响应时间」时。无参数。输出 Nginx 的 JSON 统计数据。",
+   "required": [],
+   "properties": [],
+   "example": "get_nginx_status({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "weather",
+   "kind": "插件",
+   "name": "get_weather",
+   "description": "查某个城市的天气。",
+   "full_description": "查某个城市的天气。什么时候用：用户问「X 天气怎么样」；输入 city；输出 天气一行文本。(问新闻/资料类信息请用 web_search)",
+   "required": [],
+   "properties": [],
+   "example": "get_weather({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "grep_files",
+   "description": "在文件**内容**里搜关键词/正则。",
+   "full_description": "在文件**内容**里搜关键词/正则。",
+   "required": [
+    "path",
+    "pattern"
+   ],
+   "properties": [
+    "path",
+    "pattern"
+   ],
+   "example": "grep_files({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\", \"pattern\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "js-calc",
+   "kind": "插件",
+   "name": "js_calc",
+   "description": "算数学表达式(如 (3+4)*2)。什么时候用：用户要算数且不需要解释过程；输入纯数字/运算符表达式；输出 计算结果",
+   "full_description": "算数学表达式(如 (3+4)*2)。什么时候用：用户要算数且不需要解释过程；输入纯数字/运算符表达式；输出 计算结果",
+   "required": [
+    "expr"
+   ],
+   "properties": [
+    "expr"
+   ],
+   "example": "js_calc({\"expr\": \"1+1\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "list_files",
+   "description": "列目录里有什么。什么时候用：要知道某目录下的文件清单；输入 path；输出 条目列表(不含内容)",
+   "full_description": "列目录里有什么。什么时候用：要知道某目录下的文件清单；输入 path；输出 条目列表(不含内容)",
+   "required": [
+    "path"
+   ],
+   "properties": [
+    "path"
+   ],
+   "example": "list_files({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "list_sessions",
+   "description": "查现在还有哪些会话开着。什么时候用：排障、确认自己有没有忘记 close_session；无参数；输出 会话列表",
+   "full_description": "查现在还有哪些会话开着。什么时候用：排障、确认自己有没有忘记 close_session；无参数；输出 会话列表",
+   "required": [],
+   "properties": [],
+   "example": "list_sessions({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "db_helper",
+   "kind": "插件",
+   "name": "list_tables",
+   "description": "列出库里所有表。什么时候用：不知道表名时先看这个；无参数；输出 表名列表",
+   "full_description": "列出库里所有表。什么时候用：不知道表名时先看这个；无参数；输出 表名列表",
+   "required": [],
+   "properties": [],
+   "example": "list_tables({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "make_request",
+   "description": "抓普通网页的官方同名工具(纯HTTP，最快)。",
+   "full_description": "抓普通网页的官方同名工具(纯HTTP，最快)。什么时候用：和 get 完全等价，脚本/老习惯用这个名；新写法直接用 get。输入 url；输出 页面正文+HTTP状态",
+   "required": [
+    "url"
+   ],
+   "properties": [
+    "url",
+    "timeout",
+    "save_to",
+    "ignore_robots"
+   ],
+   "example": "make_request({\"url\": \"https://example.com\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "netdoctor",
+   "kind": "插件",
+   "name": "net_dns",
+   "description": "解析域名的 DNS 记录。",
+   "full_description": "解析域名的 DNS 记录。什么时候用：要知道某域名指向哪个 IP/有没有邮件记录；输入 domain；输出 A 记录 + MX 记录",
+   "required": [
+    "host"
+   ],
+   "properties": [
+    "host"
+   ],
+   "example": "net_dns({\"host\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "netdoctor",
+   "kind": "插件",
+   "name": "net_ip",
+   "description": "查本机公网 IP(可带归属地/ISP/时区)。",
+   "full_description": "查本机公网 IP(可带归属地/ISP/时区)。什么时候用：用户问「我的 IP/公网 IP/我在哪」；输入 geo(true 带归属地)；输出 IP+归属地一行。查具体某个 IP 用 get_ip_info",
+   "required": [],
+   "properties": [
+    "geo"
+   ],
+   "example": "net_ip({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "netdoctor",
+   "kind": "插件",
+   "name": "net_port",
+   "description": "测主机/端口通不通(TCP)。",
+   "full_description": "测主机/端口通不通(TCP)。什么时候用：排查「服务起没起/端口开没开」；输入 host(+port)；输出 可达性与耗时",
+   "required": [
+    "host",
+    "port"
+   ],
+   "properties": [
+    "host",
+    "port"
+   ],
+   "example": "net_port({\"host\": \"值\", \"port\": 1})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "open_app",
+   "description": "用系统默认方式打开一个应用/文件/网址。",
+   "full_description": "用系统默认方式打开一个应用/文件/网址。",
+   "required": [
+    "path"
+   ],
+   "properties": [
+    "path"
+   ],
+   "example": "open_app({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "open_request_session",
+   "description": "开纯 HTTP 会话(保持 cookie，不开浏览器)。",
+   "full_description": "开纯 HTTP 会话(保持 cookie，不开浏览器)。什么时候用：要连续请求同一站点且需带 cookie；输入 可选 session_id；输出 会话ID(拿去 session_make_request)",
+   "required": [],
+   "properties": [
+    "session_id"
+   ],
+   "example": "open_request_session({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "open_session",
+   "description": "开浏览器会话，用于登录态/过验证后再抓。",
+   "full_description": "开浏览器会话，用于登录态/过验证后再抓。什么时候用：目标页要登录或要先过 Cloudflare 挑战；输入 session_type(dynamic/stealthy)、可选 session_id；输出 会话ID(拿去 session_fetch，用完务必 close_session)",
+   "required": [],
+   "properties": [
+    "session_type",
+    "session_id"
+   ],
+   "example": "open_session({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "code_intelligence",
+   "kind": "插件",
+   "name": "project_tree",
+   "description": "生成目录树。什么时候用：想快速了解项目结构；输入 path(可选忽略规则)；输出 树状文本",
+   "full_description": "生成目录树。什么时候用：想快速了解项目结构；输入 path(可选忽略规则)；输出 树状文本",
+   "required": [],
+   "properties": [
+    "directory",
+    "max_depth"
+   ],
+   "example": "project_tree({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "db_helper",
+   "kind": "插件",
+   "name": "query_db",
+   "description": "跑一条 **SELECT**(只读)。什么时候用：要查数据；输入 sql；输出 结果集。不会写库、不许 DDL/DML",
+   "full_description": "跑一条 **SELECT**(只读)。什么时候用：要查数据；输入 sql；输出 结果集。不会写库、不许 DDL/DML",
+   "required": [
+    "sql"
+   ],
+   "properties": [
+    "sql",
+    "limit"
+   ],
+   "example": "query_db({\"sql\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "rea",
+   "kind": "插件",
+   "name": "rea_call",
+   "description": "REA 逆向引擎：按工具名精确调用（tool+args）。不确定用哪个就先用 rea_do",
+   "full_description": "REA 逆向引擎：按工具名精确调用（tool+args）。不确定用哪个就先用 rea_do",
+   "required": [
+    "tool"
+   ],
+   "properties": [
+    "tool",
+    "args"
+   ],
+   "example": "rea_call({\"tool\": \"open_binary\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "rea",
+   "kind": "插件",
+   "name": "rea_do",
+   "description": "REA 逆向：用一句话说想干什么（如 反编译 main、看哈希、列出字符串），载体自己选工具并调",
+   "full_description": "REA 逆向：用一句话说想干什么（如 反编译 main、看哈希、列出字符串），载体自己选工具并调",
+   "required": [
+    "intent"
+   ],
+   "properties": [
+    "intent",
+    "target",
+    "focus"
+   ],
+   "example": "rea_do({\"intent\": \"反编译 main 函数\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "rea",
+   "kind": "插件",
+   "name": "rea_help",
+   "description": "REA 逆向：查某个工具要哪些参数（不知道 rea_do 选对了没、或要精确调时用）",
+   "full_description": "REA 逆向：查某个工具要哪些参数（不知道 rea_do 选对了没、或要精确调时用）",
+   "required": [
+    "tool"
+   ],
+   "properties": [
+    "tool"
+   ],
+   "example": "rea_help({\"tool\": \"open_binary\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "rea",
+   "kind": "插件",
+   "name": "rea_status",
+   "description": "REA 逆向引擎：查它在不在线、版本、可用工具数（不启动任何程序）",
+   "full_description": "REA 逆向引擎：查它在不在线、版本、可用工具数（不启动任何程序）",
+   "required": [],
+   "properties": [],
+   "example": "rea_status({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "rea",
+   "kind": "插件",
+   "name": "rea_tools",
+   "description": "REA 逆向引擎：搜它能做哪些分析（pe、apk、反编译、frida、gguf 等）",
+   "full_description": "REA 逆向引擎：搜它能做哪些分析（pe、apk、反编译、frida、gguf 等）",
+   "required": [],
+   "properties": [
+    "keyword",
+    "limit"
+   ],
+   "example": "rea_tools({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "read_file",
+   "description": "读文本文件内容。",
+   "full_description": "读文本文件内容。",
+   "required": [
+    "path"
+   ],
+   "properties": [
+    "path",
+    "max_chars"
+   ],
+   "example": "read_file({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "memory",
+   "kind": "插件",
+   "name": "read_memory",
+   "description": "读回所有已保存的记忆。什么时候用：用户问「你记得什么」或需要核对偏好；无参数；输出 记忆列表",
+   "full_description": "读回所有已保存的记忆。什么时候用：用户问「你记得什么」或需要核对偏好；无参数；输出 记忆列表",
+   "required": [],
+   "properties": [],
+   "example": "read_memory({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "run_command",
+   "description": "跑一条系统命令并回显输出(PowerShell 语法)。",
+   "full_description": "跑一条系统命令并回显输出(PowerShell 语法)。",
+   "required": [
+    "command"
+   ],
+   "properties": [
+    "command",
+    "timeout"
+   ],
+   "example": "run_command({\"command\": \"dir\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "memory",
+   "kind": "插件",
+   "name": "save_memory",
+   "description": "把用户明确要求记住的事存进长期记忆。什么时候用：用户说「记住…」「以后都…」；输入 content；输出 保存结果",
+   "full_description": "把用户明确要求记住的事存进长期记忆。什么时候用：用户说「记住…」「以后都…」；输入 content；输出 保存结果",
+   "required": [],
+   "properties": [],
+   "example": "save_memory({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "scrape_with_selector",
+   "description": "只取页面**指定区块**(CSS 选择器)，且自适应抗改版。",
+   "full_description": "只取页面**指定区块**(CSS 选择器)，且自适应抗改版。什么时候用：只要某一块(正文/列表)或站点常改版；输入 url + selector；输出 匹配到的内容",
+   "required": [
+    "url",
+    "selector"
+   ],
+   "properties": [
+    "url",
+    "selector",
+    "adaptive",
+    "name",
+    "ignore_robots"
+   ],
+   "example": "scrape_with_selector({\"url\": \"https://example.com\", \"selector\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "screenshot",
+   "description": "给页面截图并存到本地。",
+   "full_description": "给页面截图并存到本地。什么时候用：需要页面长什么样/留证据；输入 url + session_id，可选 full_page 整页；输出 图片路径(media/screenshot/)",
+   "required": [
+    "url",
+    "session_id"
+   ],
+   "properties": [
+    "url",
+    "session_id",
+    "full_page",
+    "ignore_robots"
+   ],
+   "example": "screenshot({\"url\": \"https://example.com\", \"session_id\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "search_files",
+   "description": "按文件名找文件(glob)。",
+   "full_description": "按文件名找文件(glob)。",
+   "required": [
+    "path",
+    "pattern"
+   ],
+   "properties": [
+    "path",
+    "pattern"
+   ],
+   "example": "search_files({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\", \"pattern\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "session_fetch",
+   "description": "在**已开浏览器会话**里抓页面(保持登录态/已过验证)。",
+   "full_description": "在**已开浏览器会话**里抓页面(保持登录态/已过验证)。什么时候用：先 open_session 再抓；输入 url + session_id；输出 页面正文",
+   "required": [
+    "url",
+    "session_id"
+   ],
+   "properties": [
+    "url",
+    "session_id",
+    "wait_selector",
+    "ignore_robots"
+   ],
+   "example": "session_fetch({\"url\": \"https://example.com\", \"session_id\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "session_make_request",
+   "description": "在**已开 HTTP 会话**里发请求(保持 cookie)。",
+   "full_description": "在**已开 HTTP 会话**里发请求(保持 cookie)。什么时候用：open_request_session 之后；输入 url + session_id；输出 响应正文",
+   "required": [
+    "url",
+    "session_id"
+   ],
+   "properties": [
+    "url",
+    "session_id",
+    "ignore_robots"
+   ],
+   "example": "session_make_request({\"url\": \"https://example.com\", \"session_id\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "scrapling_bridge",
+   "kind": "插件",
+   "name": "stealthy_fetch",
+   "description": "**隐身抓取，专门绕 Cloudflare/风控**。",
+   "full_description": "**隐身抓取，专门绕 Cloudflare/风控**。什么时候用：get 和 fetch 都失败(403/挑战页)才用，开销最大；输入 url；输出 正文",
+   "required": [
+    "url"
+   ],
+   "properties": [
+    "url",
+    "timeout",
+    "save_to",
+    "ignore_robots"
+   ],
+   "example": "stealthy_fetch({\"url\": \"https://example.com\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "suggest_organize",
+   "description": "整理文件建议(只读): 扫描一个目录, 按类型/日期给出整理到哪里的建议。",
+   "full_description": "整理文件建议(只读): 扫描一个目录, 按类型/日期给出整理到哪里的建议。",
+   "required": [
+    "path"
+   ],
+   "properties": [
+    "path"
+   ],
+   "example": "suggest_organize({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "web-search",
+   "kind": "插件",
+   "name": "web_search",
+   "description": "上网搜资料(百度)。",
+   "full_description": "小焦内置能力",
+   "required": [],
+   "properties": [],
+   "example": "web_search({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "内置",
+   "kind": "内置",
+   "name": "write_file",
+   "description": "新建/覆盖写入文件(自动建目录)。",
+   "full_description": "新建/覆盖写入文件(自动建目录)。",
+   "required": [
+    "path",
+    "content"
+   ],
+   "properties": [
+    "path",
+    "content"
+   ],
+   "example": "write_file({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\", \"content\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "workspace_search",
+   "kind": "插件",
+   "name": "ws_list_directory",
+   "description": "列工作区某目录有什么。什么时候用：想看看目录里有哪些文件；输入 path；输出 条目列表",
+   "full_description": "列工作区某目录有什么。什么时候用：想看看目录里有哪些文件；输入 path；输出 条目列表",
+   "required": [],
+   "properties": [
+    "directory",
+    "recursive"
+   ],
+   "example": "ws_list_directory({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "workspace_search",
+   "kind": "插件",
+   "name": "ws_search_content",
+   "description": "在工作区里按**内容**搜关键词。",
+   "full_description": "在工作区里按**内容**搜关键词。什么时候用：在项目里找某段代码/配置；输入 query(可选 path)；输出 命中行+上下文",
+   "required": [
+    "query"
+   ],
+   "properties": [
+    "query",
+    "file_pattern",
+    "directory",
+    "context_lines"
+   ],
+   "example": "ws_search_content({\"query\": \"本地大模型怎么部署\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "workspace_search",
+   "kind": "插件",
+   "name": "ws_search_files",
+   "description": "在工作区里按**文件名**找文件(如 *.py)。",
+   "full_description": "在工作区里按**文件名**找文件(如 *.py)。什么时候用：在小焦工作区里找文件；输入 pattern(可选 path)；输出 文件路径列表",
+   "required": [
+    "pattern"
+   ],
+   "properties": [
+    "pattern",
+    "directory"
+   ],
+   "example": "ws_search_files({\"pattern\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  }
+ ]
+}

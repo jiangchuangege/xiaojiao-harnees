@@ -91,4 +91,5 @@ class MemoryPlugin:
             with open("xiaojiao_memory.txt", "r", encoding="utf-8") as f:
                 return f.read()
 
-        return None
+        # 不返回 None（None 在调用方看来等于"没有输出"，出问题时没有线索）
+        return "memory 插件里没有「%s」这个工具（它只有 save_memory / read_memory）。" % tool_name

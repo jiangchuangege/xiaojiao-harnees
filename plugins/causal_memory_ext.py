@@ -119,7 +119,9 @@ class CausalMemoryExtPlugin:
         第一版就是踩了这个：四个工具全返回"没有相关记录"，看起来像库是空的，其实是调用被它过滤掉了。"""
         params = params or {}
         if tool_name not in self.TOOLS:
-            return None
+            # 同上：不返回 None，改成中文说明并列出现有工具（10 个）。
+            return ("因果记忆第二批里没有「%s」这个工具（它只有 %s）。"
+                    % (tool_name, " / ".join(sorted(self.TOOLS))))
         p = _inst()
         if p is None:
             return "因果记忆扩展工具没启用：第一批插件（causal_memory）没加载，或引擎二进制没配。"

@@ -2139,7 +2139,7 @@ class ScraplingBridge:
               ["url", "selector"]),
             T("browser_session", "会话+截图的**聚合入口**(一个工具走完 开→抓→截→关)。什么时候用：不想分步调 open/session_fetch/close；输入 action(open/open_http/close/list/fetch/request/screenshot) 等；输出 对应结果",
               {"action": {"type": "string",
-                          "description": "action: open/open_http/close/list/fetch/request/screenshot"},
+                          "description": "动作：open/open_http/close/list/fetch/request/screenshot"},
                "url": S_URL, "session_id": {"type": "string", "description": "session_id: 会话ID"},
                "session_type": {"type": "string", "description": "session_type: dynamic或stealthy"},
                "full_page": {"type": "boolean", "description": "full_page: 是否整页截图"},

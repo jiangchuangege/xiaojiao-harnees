@@ -1170,6 +1170,27 @@ def _record_usage(usage, model=""):
         LOG.debug("忽略异常(%s:%d): %s", __file__, 381, e)
 
 
+def _short_desc(desc, limit=60):
+    """把工具说明压成"模型只看一眼就够"的那一句（**真源不动**，插件里仍是全文）。
+
+    【为什么要压】工具说明是给**模型选工具**用的，不是说明书。实测：说明超过 60 字之后，
+    小模型反而更容易挑错（长句里混杂了多个触发词，等于每个都像）。这个项目对插件作者的
+    约定本来就是"一句话、≤60 字"，但历史插件里有不少 80~160 字的。
+    与其逐个去改 20 个插件（还可能改坏原意），不如**在合并工具表这一层统一压**：
+      · 先按中文句号/分号/逗号切，取第一个"像触发场景"的短句（≤limit 字）；
+      · 切不出来就硬切到 limit 并加省略号；
+      · 全文仍然留在插件里，`tools/gen_tool_catalog.py` 生成的清单会带上完整说明。
+    """
+    s = " ".join(str(desc or "").split())
+    if len(s) <= limit:
+        return s
+    for sep in ("。", "；", ";", "！", "!", "？", "?"):
+        i = s.find(sep)
+        if 0 < i + 1 <= limit:
+            return s[:i + 1]
+    return s[:limit - 1] + "…"
+
+
 def _build_tools(only=None):
     """把内置工具 + 已启用的插件工具合并成给模型的功能列表。
 
@@ -1217,6 +1238,13 @@ def _build_tools(only=None):
         tools = [t for t in tools if t["function"]["name"].lower() in _only]
         _TOOL2PLUGIN = {k: v for k, v in _TOOL2PLUGIN.items() if k.lower() in _only}
     # 规范化: 每个工具的 parameters 必须是 JSON Schema object(严格API如deepseek要求)
+    # 并且（2026-10-17）**说明压成第一句、参数缺说明就查通用词典补上** —— 这两件事
+    # 决定模型能不能精准选工具/填参数，统一在这一层做，覆盖所有插件（含以后新加的）。
+    try:
+        from core import tool_desc as _TD
+    except Exception as _e:      # noqa: silent-ok — 规范化模块不可用就退回老行为
+        _TD = None
+        LOG.debug("工具说明规范化模块不可用（退回原样）：%s", _e)
     for t in tools:
         fn = t.get("function") or {}
         prm = fn.get("parameters")
@@ -1225,6 +1253,16 @@ def _build_tools(only=None):
             prm.setdefault("type", "object")
             prm.setdefault("properties", prm.get("properties") or {})
             fn["parameters"] = prm
+        if _TD is not None:
+            try:
+                # ⚠️ 必须**写回 t["function"]**：normalize_tool 返回的是新字典，
+                #    只改局部变量 fn 等于什么都没做（第一版就踩了这个，压过的说明根本没生效）。
+                _nfn, _rep = _TD.normalize_tool(fn)
+                t["function"] = _nfn
+                if _rep.get("desc_problem"):
+                    LOG.debug("工具说明待完善：%s（%s）", _nfn.get("name"), _rep["desc_problem"])
+            except Exception as _e:      # noqa: silent-ok — 单个工具规范化失败不影响整表
+                LOG.debug("工具 %s 规范化失败（忽略）：%s", fn.get("name"), _e)
     return tools
 
 # ================== 小焦模型 ==================

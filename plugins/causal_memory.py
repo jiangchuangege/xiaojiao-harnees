@@ -343,7 +343,11 @@ class CausalMemoryPlugin:
         params = params or {}
         if tool_name not in ("causal_warn", "causal_search", "causal_record",
                              "causal_trace", "causal_counterfactual", "causal_report"):
-            return None
+            # **不许返回 None**：None 在调用方看来是"没有输出"，上游把名字拼错时一点线索都没有。
+            # 如实说清楚"不归我管、我有哪些"，排查才有入口（这也是本插件自己的规矩）。
+            return ("因果记忆插件里没有「%s」这个工具（它只有 causal_warn / causal_search / "
+                    "causal_record / causal_trace / causal_counterfactual / causal_report）。"
+                    % tool_name)
         tag = str(params.get("task_tag") or self._task_tag)[:40]
         try:
             if tool_name == "causal_warn":

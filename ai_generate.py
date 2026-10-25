@@ -27,7 +27,7 @@ def feed():
             f.write(line + "\n")
 
     print(f"✅ 投喂完成！共写入 {len(valid_lines)} 条数据到训练池。")
-    print(f"📊 当前训练池总数据量：请查看 training_data_pool.txt")
+    print("📊 当前训练池总数据量：请查看 training_data_pool.txt")
 
 if __name__ == "__main__":
     feed()
