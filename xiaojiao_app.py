@@ -1247,22 +1247,24 @@ def _build_tools(only=None):
         LOG.debug("工具说明规范化模块不可用（退回原样）：%s", _e)
     for t in tools:
         fn = t.get("function") or {}
+        if _TD is not None:
+            try:
+                # ⚠️ 必须**先**交给 tool_desc 处理：它认得"老式参数表"（{"city": "城市名称"}），
+                #    而下面那段老规范化会先把 properties 补成 {}，把老式写法直接吃掉
+                #    （实测后果：天气工具在模型眼里"不需要城市"，于是它跑去用 web_search 查天气）。
+                _nfn, _rep = _TD.normalize_tool(fn)
+                t["function"] = _nfn
+                if _rep.get("desc_problem"):
+                    LOG.debug("工具说明待完善：%s（%s）", _nfn.get("name"), _rep["desc_problem"])
+                continue
+            except Exception as _e:      # noqa: silent-ok — 规范化失败就退回下面的老逻辑
+                LOG.debug("工具 %s 规范化失败（退回老逻辑）：%s", fn.get("name"), _e)
         prm = fn.get("parameters")
         if not isinstance(prm, dict) or prm.get("type") is None:
             prm = dict(prm or {})
             prm.setdefault("type", "object")
             prm.setdefault("properties", prm.get("properties") or {})
             fn["parameters"] = prm
-        if _TD is not None:
-            try:
-                # ⚠️ 必须**写回 t["function"]**：normalize_tool 返回的是新字典，
-                #    只改局部变量 fn 等于什么都没做（第一版就踩了这个，压过的说明根本没生效）。
-                _nfn, _rep = _TD.normalize_tool(fn)
-                t["function"] = _nfn
-                if _rep.get("desc_problem"):
-                    LOG.debug("工具说明待完善：%s（%s）", _nfn.get("name"), _rep["desc_problem"])
-            except Exception as _e:      # noqa: silent-ok — 单个工具规范化失败不影响整表
-                LOG.debug("工具 %s 规范化失败（忽略）：%s", fn.get("name"), _e)
     return tools
 
 # ================== 小焦模型 ==================

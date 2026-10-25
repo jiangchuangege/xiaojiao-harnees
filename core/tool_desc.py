@@ -113,35 +113,60 @@ def is_cjk(s):
 def short_desc(desc, limit=DESC_LIMIT):
     """压成"模型看一眼就够"的那一句。
 
-    【挑哪一句】不是无脑取第一句 —— 实测有的说明第一句是纯名词短语
-    （「**漏洞清单唯一入口**(NVD 结构化数据)。」），拿它给模型看等于没说清"什么时候用"。
-    所以优先取**第一个带动词或带冒号**的短句；都没有才退回第一句，再不行硬切。
+    【挑哪一句】按优先级：
+      ① 含「什么时候用」的那一句 —— 这是本项目插件说明的固定写法，它就是触发条件，
+         **丢什么都不能丢它**（实测踩过：天气插件的说明是「查某个城市的天气。什么时候用：用户问
+         「X 天气怎么样」…」，第一版按标点取第一句，正好把"什么时候用"整段砍掉了，
+         结果模型问天气时跑去用了 web_search）；
+      ② 第一个带动词或带冒号的短句；
+      ③ 第一个短句；
+      ④ 硬切。
     """
     s = " ".join(str(desc or "").split())
     if not s:
         return ""
     if len(s) <= limit:
         return s
-    clauses = [c for c in re.split(r"(?<=[。；;！!？?])", s) if c.strip()]
+    clauses = [c.strip() for c in re.split(r"(?<=[。；;！!？?])", s) if c.strip()]
+    # ① 「什么时候用」优先：把它和它前面那一句一起留（前面那半句通常是"这是什么工具"）
+    for i, c in enumerate(clauses):
+        if "什么时候用" in c:
+            head = clauses[i - 1] if i > 0 else ""
+            comb = (head + c) if head else c
+            if len(comb) <= limit:
+                return comb
+            return c[:limit] if len(c) <= limit else s[max(0, s.find("什么时候用") - 8):][:limit - 1] + "…"
+    # ② / ③
     for c in clauses:
-        c = c.strip()
         if len(c) <= limit and (any(v in c for v in _VERBS) or "：" in c or ":" in c):
             return c
     for c in clauses:
-        c = c.strip()
         if len(c) <= limit:
             return c
-    for sep in ("。", "；", ";", "！", "!", "？", "?"):
-        i = s.find(sep)
-        if 0 < i + 1 <= limit:
-            return s[:i + 1]
     return s[:limit - 1] + "…"
 
 
 def normalize_schema(params):
-    """保证是合法 JSON Schema object，并且**每个参数都有说明**。返回 (schema, 自动补过的参数名)。"""
+    """保证是合法 JSON Schema object，并且**每个参数都有说明**。返回 (schema, 自动补过的参数名)。
+
+    【老式写法也要认】实测有插件把参数写成 `{"city": "城市名称"}`（不在 properties 里）——
+    只认 properties 的规范化会把它当成"没有参数"，于是模型看到一个不需要城市的天气工具，
+    转头去用 web_search 查天气。所以：没有 properties 但有键值对的，一律当成老式参数表收进来，
+    值若是字符串就当说明，全部记进 required（老写法列出来的就是要填的）。
+    """
     prm = params if isinstance(params, dict) else {}
     prm = dict(prm)
+    legacy = {}
+    if not isinstance(prm.get("properties"), dict) and prm:
+        for k, v in list(prm.items()):
+            if k in ("type", "required", "additionalProperties", "$schema", "description"):
+                continue
+            if isinstance(v, dict):
+                legacy[str(k)] = dict(v)
+            else:
+                legacy[str(k)] = {"type": "string", "description": str(v or "")}
+        prm = {"type": "object", "properties": legacy,
+               "required": [k for k in legacy]}
     prm.setdefault("type", "object")
     props = prm.get("properties")
     if not isinstance(props, dict):

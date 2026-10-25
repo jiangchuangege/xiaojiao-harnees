@@ -27,15 +27,15 @@
 | `background_result` | 查询后台任务(background启动的)的结果。job_id=任务id。 | `background_result({"job_id": "值"})` | ✅ |
 | `check_env` | 检测电脑环境装没装东西(只读): 检查 python/git/node/ffmpeg 等是否安装及版本。 | `check_env({})` | ✅ |
 | `edit_file` | 在文本文件里精准替换一段内容(第一次出现的)。 | `edit_file({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "old_string": "值", "new_string": "值"})` | ✅ |
-| `fetch_url` | 直接读一个网址/接口的返回内容(纯HTTP，最轻)。 | `fetch_url({"url": "https://example.com"})` | ✅ |
-| `grep_files` | 在文件**内容**里搜关键词/正则。 | `grep_files({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "pattern": "值"})` | ✅ |
+| `fetch_url` | 直接读一个网址/接口的返回内容(纯HTTP，最轻)。什么时候用：只想快速拿文本/JSON，不需要渲染或过风控； | `fetch_url({"url": "https://example.com"})` | ✅ |
+| `grep_files` | 在文件**内容**里搜关键词/正则。什么时候用：找某段代码/配置在哪； | `grep_files({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "pattern": "值"})` | ✅ |
 | `list_files` | 列目录里有什么。什么时候用：要知道某目录下的文件清单；输入 path；输出 条目列表(不含内容) | `list_files({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe"})` | ✅ |
-| `open_app` | 用系统默认方式打开一个应用/文件/网址。 | `open_app({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe"})` | ✅ |
-| `read_file` | 读文本文件内容。 | `read_file({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe"})` | ✅ |
-| `run_command` | 跑一条系统命令并回显输出(PowerShell 语法)。 | `run_command({"command": "dir"})` | ✅ |
-| `search_files` | 按文件名找文件(glob)。 | `search_files({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "pattern": "值"})` | ✅ |
+| `open_app` | 用系统默认方式打开一个应用/文件/网址。什么时候用：用户说「打开 XX」； | `open_app({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe"})` | ✅ |
+| `read_file` | 读文本文件内容。什么时候用：查看文件写了什么； | `read_file({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe"})` | ✅ |
+| `run_command` | 跑一条系统命令并回显输出(PowerShell 语法)。什么时候用：要真的执行程序/脚本/安装/查系统信息； | `run_command({"command": "dir"})` | ✅ |
+| `search_files` | 按文件名找文件(glob)。什么时候用：找某个文件在哪； | `search_files({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "pattern": "值"})` | ✅ |
 | `suggest_organize` | 整理文件建议(只读): 扫描一个目录, 按类型/日期给出整理到哪里的建议。 | `suggest_organize({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe"})` | ✅ |
-| `write_file` | 新建/覆盖写入文件(自动建目录)。 | `write_file({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "content": "值"})` | ✅ |
+| `write_file` | 新建/覆盖写入文件(自动建目录)。什么时候用：要产出文件(代码/网页/文档/配置)； | `write_file({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "content": "值"})` | ✅ |
 
 ### 插件 · archify（15 个工具）
 
@@ -44,61 +44,61 @@
 | `archify_batch` | 一次画多张图。什么时候用：用户要一批图；输入 items 数组；输出 每张的结果 | `archify_batch({"items": []})` | ✅ |
 | `archify_check` | 检查已生成的 HTML 是否正常。什么时候用：交付后自检；输入 html_path；输出 检查结果 | `archify_check({"html_path": "值"})` | ✅ |
 | `archify_compare` | 对比两张架构图并给差异。什么时候用：改版前后比一比(仅 architecture)；输入两份 spec；输出 差异清单 | `archify_compare({"base_json": "值", "head_json": "值"})` | ✅ |
-| `archify_deliver` | **最终交付**：渲染并生成正式 HTML。 | `archify_deliver({"diagram_type": "值", "spec_json": "值"})` | ✅ |
-| `archify_doctor` | 体检 Archify 环境(Node/依赖/schema 是否齐)。 | `archify_doctor({})` | ✅ |
-| `archify_guide` | 按场景推荐图表类型+配方+官方提示词。 | `archify_guide({"scenario": "值"})` | ✅ |
-| `archify_inspect` | 只看结构、不渲染。 | `archify_inspect({"diagram_type": "值", "spec_json": "值"})` | ✅ |
+| `archify_deliver` | **最终交付**：渲染并生成正式 HTML。什么时候用：validate 通过之后； | `archify_deliver({"diagram_type": "值", "spec_json": "值"})` | ✅ |
+| `archify_doctor` | 体检 Archify 环境(Node/依赖/schema 是否齐)。什么时候用：画图报错、或用户让你查环境； | `archify_doctor({})` | ✅ |
+| `archify_guide` | 按场景推荐图表类型+配方+官方提示词。什么时候用：读完 SKILL.md 后、决定画哪种图之前； | `archify_guide({"scenario": "值"})` | ✅ |
+| `archify_inspect` | 只看结构、不渲染。什么时候用：想快速确认节点/关系结构对不对； | `archify_inspect({"diagram_type": "值", "spec_json": "值"})` | ✅ |
 | `archify_metrics` | 看画图调用的统计(成功/失败/耗时)。什么时候用：排查画图为什么慢/失败；无参数；输出 统计表 | `archify_metrics({})` | ✅ |
 | `archify_preview` | 预览渲染(服务端用，不开浏览器)。什么时候用：想先看看效果再决定交付；输入同 render；输出 预览结果 | `archify_preview({"diagram_type": "值", "spec_json": "值"})` | ✅ |
-| `archify_read_example` | 读该类型的**完整示例 JSON**。 | `archify_read_example({"diagram_type": "值"})` | ✅ |
-| `archify_read_schema` | 读该图表类型的 schema(含公共部分)。 | `archify_read_schema({"diagram_type": "值"})` | ✅ |
-| `archify_read_skill` | 读 Archify 完整技能文档。 | `archify_read_skill({})` | ✅ |
-| `archify_render` | 把 JSON 渲染成 HTML(基础版，不开浏览器)。 | `archify_render({"diagram_type": "值", "spec_json": "值"})` | ✅ |
-| `archify_validate` | **交付前必做**：校验 JSON 是否符合规范。 | `archify_validate({"diagram_type": "值", "spec_json": "值"})` | ✅ |
-| `archify_visual_check` | 对已生成的 HTML 做**视觉**检查。 | `archify_visual_check({"html_path": "值"})` | ✅ |
+| `archify_read_example` | 读该类型的**完整示例 JSON**。什么时候用：写 JSON 前照着抄结构(比只看 schema 稳)； | `archify_read_example({"diagram_type": "值"})` | ✅ |
+| `archify_read_schema` | 什么时候用：按 archify_guide 推荐的类型，**生成 JSON 之前**读； | `archify_read_schema({"diagram_type": "值"})` | ✅ |
+| `archify_read_skill` | 读 Archify 完整技能文档。什么时候用：**每次开始画图的第一步**(同一会话只读一次)； | `archify_read_skill({})` | ✅ |
+| `archify_render` | 把 JSON 渲染成 HTML(基础版，不开浏览器)。什么时候用：只想拿文件、不需要报告； | `archify_render({"diagram_type": "值", "spec_json": "值"})` | ✅ |
+| `archify_validate` | **交付前必做**：校验 JSON 是否符合规范。什么时候用：写完 JSON 立刻校验； | `archify_validate({"diagram_type": "值", "spec_json": "值"})` | ✅ |
+| `archify_visual_check` | 对已生成的 HTML 做**视觉**检查。什么时候用：交付后确认渲染质量(标签重叠等)； | `archify_visual_check({"html_path": "值"})` | ✅ |
 
 ### 插件 · asset_intel（3 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `asset_intel_lookup` | 给 IP 查它命中了哪些漏洞(免费，无需 Key)。 | `asset_intel_lookup({"ips": "值"})` | ✅ |
-| `asset_intel_search` | 反过来查：某个 CVE/产品在**全网有哪些 IP** 受影响(需数据源 Key)。 | `asset_intel_search({"query": "本地大模型怎么部署"})` | ✅ |
-| `asset_intel_status` | 看资产测绘数据源能不能用。 | `asset_intel_status({})` | ✅ |
+| `asset_intel_lookup` | 给 IP 查它命中了哪些漏洞(免费，无需 Key)。什么时候用：用户给了具体 IP 想知道有没有已知漏洞； | `asset_intel_lookup({"ips": "值"})` | ✅ |
+| `asset_intel_search` | 什么时候用：用户要「含这些漏洞的 IP」； | `asset_intel_search({"query": "本地大模型怎么部署"})` | ✅ |
+| `asset_intel_status` | 看资产测绘数据源能不能用。什么时候用：反查失败或用户问「能查 IP 吗」； | `asset_intel_status({})` | ✅ |
 
 ### 插件 · causal_memory（6 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `causal_counterfactual` | 反事实对比（因果记忆）：两个候选方案，各自过去的结果分布是什么。什么时候用：在两个方案之间拿不定主意时。 | `causal_counterfactual({})` | ✅ |
-| `causal_record` | 记一条「决策 → 结果」到因果记忆。 | `causal_record({})` | ✅ |
+| `causal_counterfactual` | 反事实对比（因果记忆）：两个候选方案，各自过去的结果分布是什么。什么时候用：在两个方案之间拿不定主意时。 | `causal_counterfactual({"decision": "值", "alternative": "值", "task_tag": "值"})` | ✅ |
+| `causal_record` | 记一条「决策 → 结果」到因果记忆。什么时候用：**做完一件事、拿到结果之后**（尤其是踩坑、返工、意外成功）。 | `causal_record({"decision": "值", "outcome": "值", "relation": "值", "task_tag": "值", "context": "值"})` | ✅ |
 | `causal_report` | 因果记忆的预测账本：以前那些判断押对了多少（总览/按领域）+ 还没结算的。什么时候用：想知道这套经验到底准不准的时候。 | `causal_report({})` | ✅ |
-| `causal_search` | 查以前的教训（因果记忆）：过去同类事情上，什么做法导致了什么结果。 | `causal_search({})` | ✅ |
-| `causal_trace` | 什么时候用：单看一个原因解释不了故障时。 | `causal_trace({})` | ✅ |
-| `causal_warn` | 动手前预警（因果记忆·抑制侧）：告诉我这个动作以前造成过什么后果，尤其是**以前这么做出过事**。 | `causal_warn({})` | ✅ |
+| `causal_search` | 什么时候用：遇到**非平凡的决策**之前（排障、换方案、改架构），先看看以前踩过什么坑。 | `causal_search({"query": "本地大模型怎么部署", "task_tag": "值", "limit": "值"})` | ✅ |
+| `causal_trace` | 什么时候用：单看一个原因解释不了故障时。 | `causal_trace({"outcome_description": "值", "max_depth": "值"})` | ✅ |
+| `causal_warn` | 什么时候用：要执行有副作用的操作前（改配置、删/覆盖文件、重启服务、装东西、动显卡/显存）。 | `causal_warn({"action": "值", "task_tag": "值"})` | ✅ |
 
 ### 插件 · causal_memory_ext（10 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `causal_facts` | 查因果记忆**它自己那边**的事实层（不是小焦自己的记忆库，两套别混）。什么时候用：明确知道东西记在它那边时。 | `causal_facts({})` | ✅ |
-| `causal_invalidate` | 把一条**错的**教训软作废（不是删除，可回滚； | `causal_invalidate({})` | ✅ |
-| `causal_invalidate_pattern` | 把引擎挖出来的某条**关系**软作废（相似/矛盾/重复那类 meta 边）。 | `causal_invalidate_pattern({})` | ✅ |
-| `causal_lesson` | 从库里多条散着的边**重建一条教训**（比单条边更适合直接照做）。什么时候用：要总结'这一类事我以前吃了什么亏'时。 | `causal_lesson({})` | ✅ |
-| `causal_memory_map` | 看一眼因果记忆库的全貌（多少条因果边、多少节点、最近记了什么）。 | `causal_memory_map({})` | ✅ |
-| `causal_patterns` | 看引擎自己挖出来的关系：哪些经验**相似**、哪些**互相矛盾**、哪些在**重复**。 | `causal_patterns({})` | ✅ |
-| `causal_remember` | 直接把一段对话（几条消息）喂进因果记忆的提炼链路，由它自己拆出决策与结果。 | `causal_remember({})` | ✅ |
-| `causal_resolve` | 让引擎评审'同一个决策反复记录、结局却不一样'的发散项，并决定要不要取代旧结论。 | `causal_resolve({})` | ✅ |
-| `causal_trace_one` | 单跳溯源：这个结果**直接**是哪个决策造成的。 | `causal_trace_one({})` | ✅ |
-| `causal_unified` | 统一检索：它那边的事实层和因果层一起查。什么时候用：不确定要找的是'一个事实'还是'一条教训'时。 | `causal_unified({})` | ✅ |
+| `causal_facts` | 查因果记忆**它自己那边**的事实层（不是小焦自己的记忆库，两套别混）。什么时候用：明确知道东西记在它那边时。 | `causal_facts({"query": "本地大模型怎么部署", "limit": "值"})` | ✅ |
+| `causal_invalidate` | 库里仍留痕）。什么时候用：发现某条经验已经不对了（世界变了、当时的结论是错的）。 | `causal_invalidate({"edge_id": "值", "reason": "值"})` | ✅ |
+| `causal_invalidate_pattern` | 什么时候用：它把两条不相干的经验算成'相似'、或把不该算矛盾的算成矛盾时。 | `causal_invalidate_pattern({"edge_id": "值", "reason": "值"})` | ✅ |
+| `causal_lesson` | 从库里多条散着的边**重建一条教训**（比单条边更适合直接照做）。什么时候用：要总结'这一类事我以前吃了什么亏'时。 | `causal_lesson({"query": "本地大模型怎么部署", "max_edges": "值"})` | ✅ |
+| `causal_memory_map` | 什么时候用：想确认'它到底学过什么'，或者吃完一顿操作后看看记进去没有。 | `causal_memory_map({"limit": "值"})` | ✅ |
+| `causal_patterns` | 什么时候用：怀疑自己前后做法不一致、或想找同类经验时。 | `causal_patterns({"query": "本地大模型怎么部署", "limit": "值"})` | ✅ |
+| `causal_remember` | 什么时候用：刚做完一件有教训的事，懒得一条条手动记。 | `causal_remember({"messages": "值", "date": "值"})` | ✅ |
+| `causal_resolve` | 什么时候用：觉得库里同一个做法有两种相反结论时。 | `causal_resolve({"apply": "值"})` | ✅ |
+| `causal_trace_one` | 什么时候用：只想找最直接的原因（要找整条链用 causal_trace）。 | `causal_trace_one({"outcome_description": "值"})` | ✅ |
+| `causal_unified` | 统一检索：它那边的事实层和因果层一起查。什么时候用：不确定要找的是'一个事实'还是'一条教训'时。 | `causal_unified({"query": "本地大模型怎么部署", "limit": "值"})` | ✅ |
 
 ### 插件 · code_intelligence（7 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
 | `analyze_dependencies` | 列出项目依赖。什么时候用：想知道用了哪些库；输入 path；输出 依赖清单(按语言分组) | `analyze_dependencies({})` | ✅ |
-| `ci_read_file` | 读文件内容(带行号，可指定范围)。 | `ci_read_file({"file_path": "值"})` | ✅ |
-| `ci_search_content` | 在**文件内容**里搜关键词/正则。 | `ci_search_content({"query": "本地大模型怎么部署"})` | ✅ |
-| `ci_search_files` | 按**文件名**找文件(支持 * ? | `ci_search_files({"pattern": "值"})` | ✅ |
+| `ci_read_file` | 读文件内容(带行号，可指定范围)。什么时候用：要**看代码/配置内容**； | `ci_read_file({"file_path": "值"})` | ✅ |
+| `ci_search_content` | 在**文件内容**里搜关键词/正则。什么时候用：找某个函数/配置写在哪； | `ci_search_content({"query": "本地大模型怎么部署"})` | ✅ |
+| `ci_search_files` | )。什么时候用：知道大概文件名、不知道在哪个目录； | `ci_search_files({"pattern": "值"})` | ✅ |
 | `count_code_lines` | 统计代码规模。什么时候用：想知道项目多少行、注释占比；输入 path；输出 按语言分类的行数统计 | `count_code_lines({})` | ✅ |
 | `get_file_info` | 看单个文件的元信息。什么时候用：想知道大小/行数/改动时间；输入 path；输出 大小/行数/修改时间 | `get_file_info({"file_path": "值"})` | ✅ |
 | `project_tree` | 生成目录树。什么时候用：想快速了解项目结构；输入 path(可选忽略规则)；输出 树状文本 | `project_tree({})` | ✅ |
@@ -117,8 +117,8 @@
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `get_ip` | 查本机公网 IP(只返回地址)。 | `get_ip({})` | ✅ |
-| `get_ip_info` | 查某个 IP 的归属地/ISP/时区。 | `get_ip_info({})` | ✅ |
+| `get_ip` | 查本机公网 IP(只返回地址)。什么时候用：只要一个 IP 字符串； | `get_ip({})` | ✅ |
+| `get_ip_info` | 查某个 IP 的归属地/ISP/时区。什么时候用：**已经知道**要查哪个 IP； | `get_ip_info({})` | ✅ |
 
 ### 插件 · js-calc（1 个工具）
 
@@ -131,27 +131,27 @@
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
 | `read_memory` | 读回所有已保存的记忆。什么时候用：用户问「你记得什么」或需要核对偏好；无参数；输出 记忆列表 | `read_memory({})` | ✅ |
-| `save_memory` | 把用户明确要求记住的事存进长期记忆。什么时候用：用户说「记住…」「以后都…」；输入 content；输出 保存结果 | `save_memory({})` | ✅ |
+| `save_memory` | 把用户明确要求记住的事存进长期记忆。什么时候用：用户说「记住…」「以后都…」；输入 content；输出 保存结果 | `save_memory({"content": "值"})` | ✅ |
 
 ### 插件 · music_generation（1 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `generate_music` | 本地生成一段音乐(MusicGen)。 | `generate_music({"prompt": "画一只在窗台晒太阳的猫"})` | ✅ |
+| `generate_music` | 本地生成一段音乐(MusicGen)。什么时候用：用户要「来段音乐/BGM」； | `generate_music({"prompt": "画一只在窗台晒太阳的猫"})` | ✅ |
 
 ### 插件 · netdoctor（3 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `net_dns` | 解析域名的 DNS 记录。 | `net_dns({"host": "值"})` | ✅ |
-| `net_ip` | 查本机公网 IP(可带归属地/ISP/时区)。 | `net_ip({})` | ✅ |
-| `net_port` | 测主机/端口通不通(TCP)。 | `net_port({"host": "值", "port": 1})` | ✅ |
+| `net_dns` | 解析域名的 DNS 记录。什么时候用：要知道某域名指向哪个 IP/有没有邮件记录； | `net_dns({"host": "值"})` | ✅ |
+| `net_ip` | 查本机公网 IP(可带归属地/ISP/时区)。什么时候用：用户问「我的 IP/公网 IP/我在哪」； | `net_ip({})` | ✅ |
+| `net_port` | 测主机/端口通不通(TCP)。什么时候用：排查「服务起没起/端口开没开」； | `net_port({"host": "值", "port": 1})` | ✅ |
 
 ### 插件 · nginx-vts（1 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `get_nginx_status` | 获取 Nginx 实时流量状态。 | `get_nginx_status({})` | ✅ |
+| `get_nginx_status` | 获取 Nginx 实时流量状态。什么时候用：用户问「nginx 状态」「流量」「请求数」「错误数」「响应时间」时。 | `get_nginx_status({})` | ✅ |
 
 ### 插件 · rea（5 个工具）
 
@@ -167,48 +167,48 @@
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `browser_session` | 会话+截图的**聚合入口**(一个工具走完 开→抓→截→关)。 | `browser_session({"action": "值"})` | ✅ |
+| `browser_session` | 什么时候用：不想分步调 open/session_fetch/close； | `browser_session({"action": "值"})` | ✅ |
 | `bulk_fetch` | 批量用浏览器渲染抓取。什么时候用：多个页面都需渲染；输入 urls；输出 各页正文(较慢) | `bulk_fetch({"urls": []})` | ✅ |
-| `bulk_get` | 一次抓多个**静态**网页(比逐个 get 快)。 | `bulk_get({"urls": []})` | ✅ |
+| `bulk_get` | 一次抓多个**静态**网页(比逐个 get 快)。什么时候用：给了多个 URL 且都是普通页； | `bulk_get({"urls": []})` | ✅ |
 | `bulk_stealthy_fetch` | 批量隐身抓取。什么时候用：多个都被风控拦的页面；输入 urls(≤20)；输出 各页正文(很慢，慎用) | `bulk_stealthy_fetch({"urls": []})` | ✅ |
-| `close_session` | 关闭会话、释放资源。 | `close_session({"session_id": "值"})` | ✅ |
-| `collect_vulnerabilities` | 什么时候用：用户要「最近的漏洞/CVE/高危漏洞」； | `collect_vulnerabilities({})` | ✅ |
-| `download` | 下载**文件**(PDF/EPUB/ZIP/图片/音视频)到本地。 | `download({"url": "https://example.com"})` | ✅ |
-| `fetch` | **需要浏览器渲染**时用(JS 动态页/懒加载)。 | `fetch({"url": "https://example.com"})` | ✅ |
-| `get` | **抓网页首选**(纯HTTP，最快)。 | `get({"url": "https://example.com"})` | ✅ |
+| `close_session` | 关闭会话、释放资源。什么时候用：session_fetch/screenshot 做完立刻关，别让会话堆着； | `close_session({"session_id": "值"})` | ✅ |
+| `collect_vulnerabilities` | **漏洞清单唯一入口**(NVD 结构化数据)。什么时候用：用户要「最近的漏洞/CVE/高危漏洞」； | `collect_vulnerabilities({})` | ✅ |
+| `download` | 下载**文件**(PDF/EPUB/ZIP/图片/音视频)到本地。什么时候用：URL 指向文件而不是网页； | `download({"url": "https://example.com"})` | ✅ |
+| `fetch` | **需要浏览器渲染**时用(JS 动态页/懒加载)。什么时候用：get 只拿到空壳或内容不全； | `fetch({"url": "https://example.com"})` | ✅ |
+| `get` | **抓网页首选**(纯HTTP，最快)。什么时候用：静态页/接口/JSON 一律先用它； | `get({"url": "https://example.com"})` | ✅ |
 | `list_sessions` | 查现在还有哪些会话开着。什么时候用：排障、确认自己有没有忘记 close_session；无参数；输出 会话列表 | `list_sessions({})` | ✅ |
-| `make_request` | 抓普通网页的官方同名工具(纯HTTP，最快)。 | `make_request({"url": "https://example.com"})` | ✅ |
-| `open_request_session` | 开纯 HTTP 会话(保持 cookie，不开浏览器)。 | `open_request_session({})` | ✅ |
-| `open_session` | 开浏览器会话，用于登录态/过验证后再抓。 | `open_session({})` | ✅ |
-| `scrape_with_selector` | 只取页面**指定区块**(CSS 选择器)，且自适应抗改版。 | `scrape_with_selector({"url": "https://example.com", "selector": "值"})` | ✅ |
-| `screenshot` | 给页面截图并存到本地。 | `screenshot({"url": "https://example.com", "session_id": "值"})` | ✅ |
-| `session_fetch` | 在**已开浏览器会话**里抓页面(保持登录态/已过验证)。 | `session_fetch({"url": "https://example.com", "session_id": "值"})` | ✅ |
-| `session_make_request` | 在**已开 HTTP 会话**里发请求(保持 cookie)。 | `session_make_request({"url": "https://example.com", "session_id": "值"})` | ✅ |
-| `stealthy_fetch` | **隐身抓取，专门绕 Cloudflare/风控**。 | `stealthy_fetch({"url": "https://example.com"})` | ✅ |
+| `make_request` | 抓普通网页的官方同名工具(纯HTTP，最快)。什么时候用：和 get 完全等价，脚本/老习惯用这个名； | `make_request({"url": "https://example.com"})` | ✅ |
+| `open_request_session` | 开纯 HTTP 会话(保持 cookie，不开浏览器)。什么时候用：要连续请求同一站点且需带 cookie； | `open_request_session({})` | ✅ |
+| `open_session` | 开浏览器会话，用于登录态/过验证后再抓。什么时候用：目标页要登录或要先过 Cloudflare 挑战； | `open_session({})` | ✅ |
+| `scrape_with_selector` | 只取页面**指定区块**(CSS 选择器)，且自适应抗改版。什么时候用：只要某一块(正文/列表)或站点常改版； | `scrape_with_selector({"url": "https://example.com", "selector": "值"})` | ✅ |
+| `screenshot` | 给页面截图并存到本地。什么时候用：需要页面长什么样/留证据； | `screenshot({"url": "https://example.com", "session_id": "值"})` | ✅ |
+| `session_fetch` | 在**已开浏览器会话**里抓页面(保持登录态/已过验证)。什么时候用：先 open_session 再抓； | `session_fetch({"url": "https://example.com", "session_id": "值"})` | ✅ |
+| `session_make_request` | 什么时候用：open_request_session 之后； | `session_make_request({"url": "https://example.com", "session_id": "值"})` | ✅ |
+| `stealthy_fetch` | 什么时候用：get 和 fetch 都失败(403/挑战页)才用，开销最大； | `stealthy_fetch({"url": "https://example.com"})` | ✅ |
 
 ### 插件 · video_generation（1 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `generate_video` | 本地生成一段视频(ComfyUI+Wan2.1)。 | `generate_video({"prompt": "画一只在窗台晒太阳的猫"})` | ✅ |
+| `generate_video` | 本地生成一段视频(ComfyUI+Wan2.1)。什么时候用：用户要「生成/画一段视频」； | `generate_video({"prompt": "画一只在窗台晒太阳的猫"})` | ✅ |
 
 ### 插件 · weather（1 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `get_weather` | 查某个城市的天气。 | `get_weather({})` | ✅ |
+| `get_weather` | 查某个城市的天气。什么时候用：用户问「X 天气怎么样」； | `get_weather({"city": "济南"})` | ✅ |
 
 ### 插件 · web-search（1 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `web_search` | 上网搜资料(百度)。 | `web_search({})` | ✅ |
+| `web_search` | 什么时候用：查新闻/百科/资料这类**网页信息**（问天气用 get_weather，问本机 IP 用 net_ip）； | `web_search({"query": "本地大模型怎么部署"})` | ✅ |
 
 ### 插件 · workspace_search（3 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
 | `ws_list_directory` | 列工作区某目录有什么。什么时候用：想看看目录里有哪些文件；输入 path；输出 条目列表 | `ws_list_directory({})` | ✅ |
-| `ws_search_content` | 在工作区里按**内容**搜关键词。 | `ws_search_content({"query": "本地大模型怎么部署"})` | ✅ |
-| `ws_search_files` | 在工作区里按**文件名**找文件(如 *.py)。 | `ws_search_files({"pattern": "值"})` | ✅ |
+| `ws_search_content` | 在工作区里按**内容**搜关键词。什么时候用：在项目里找某段代码/配置； | `ws_search_content({"query": "本地大模型怎么部署"})` | ✅ |
+| `ws_search_files` | 在工作区里按**文件名**找文件(如 *.py)。什么时候用：在小焦工作区里找文件； | `ws_search_files({"pattern": "值"})` | ✅ |
 
