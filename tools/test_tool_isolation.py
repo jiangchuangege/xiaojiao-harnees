@@ -129,6 +129,32 @@ def main():
     ck("把开关关掉 → 接口挂了也不联网，如实说查不到", "不拿网页检索兜底" in str(_off), str(_off)[:70])
     ck("开关关掉时没去联网（返回里没有检索来源）", "参考来源" not in str(_off), str(_off)[:50])
 
+    # ---------------- 六、判据不能只靠"天气"两个字 ----------------
+    print("\n[六] 判据是词表的边界：换个说法 / 打个错字也要认得出是天气")
+    _typo = "最近去菏泽旅游根据天去是否可以去"       # 用户真打的句子，"天去"是错字
+    app._WEATHER_LAST["city"], app._WEATHER_LAST["text"], app._WEATHER_LAST["at"] = "", "", 0.0
+    ck("没查过任何城市时，这句（无天气词）不硬判成天气", app._weather_intent(_typo) is False)
+    app._weather_note_success("菏泽", "菏泽天气：阴天 +13°C")
+    ck("刚查过菏泽 → 同一句认出来了（靠城市 + 去/可以这类做决定的话）",
+       app._weather_intent(_typo) is True)
+    ck("并且城市取得到（不用猜，就是刚查过的那个）",
+       app._specialized_args("get_weather", _typo).get("city") == "菏泽",
+       app._specialized_args("get_weather", _typo))
+    ck("同一城市但问的是吃喝 → 不误判成天气", app._weather_intent("菏泽有什么好吃的") is False)
+    ck("换成别的城市 → 不误判（没查过它）", app._weather_intent("最近去济南旅游行不行") is False)
+    ck("与天气无关的请求不受影响", app._weather_intent("帮我写个快速排序") is False)
+    app._WEATHER_LAST["at"] = 0.0        # 过期（半小时前）→ 不拿旧数据冒充现在
+    ck("天气结果过期后不再据此判定", app._weather_intent(_typo) is False)
+    app._weather_note_success("菏泽", "菏泽天气：阴天 +13°C")
+
+    # 上一轮的"查不到/接口不可用"不许被当成事实喂回下一轮
+    from core.mind_stream import inject as _MSI
+    _blk = _MSI.build_block({"current_topic": "天气",
+                             "recent_thoughts": ["⚠️ 天气服务暂时不可用（结构化天气接口已停用）",
+                                                 "菏泽天气：阴天 +13°C"]}, text="菏泽天气", intent="query")
+    ck("事实块里剔掉了上一轮的失败句", "暂时不可用" not in _blk["text"], _blk["text"][:80])
+    ck("同时保留真数据那句（剔的是失败，不是内容）", "阴天 +13°C" in _blk["text"], _blk["text"][:80])
+
     print("\n" + "=" * 80)
     print("  通过 %d / 共 %d%s" % (len(PASS), len(PASS) + len(FAIL),
                                   ("（失败：%s）" % "、".join(FAIL)) if FAIL else ""))

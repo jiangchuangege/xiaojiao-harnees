@@ -106,6 +106,15 @@ def build_block(st, text="", intent="chat"):
     _NEG = ("没有关于", "没有记录", "没有找到", "没查到", "查了一下我的记忆", "我目前没有",
             "我好像没记住", "没有关于“你", "没印象", "不记得")
     thoughts = [t for t in thoughts if not any(w in t for w in _NEG)]
+    # 【2026-10-17 同类再补一刀：上一轮的"这次查不到/接口不可用"也不许摆回来】
+    #   实测：查到「菏泽 阴天 +13°C」之后，隔两分钟有一轮天气接口超时，它回了
+    #   「⚠️ 天气服务暂时不可用（结构化天气接口已停用）」—— 这句被写进"它自己说过"，
+    #   于是**下一轮**（用户问"去菏泽旅游根据天气行不行"）它张嘴就把这句复读出来、
+    #   还升级成"接口已停用"，等于拿一句过期失败当成了事实，与两分钟前刚查到的
+    #   +13°C 直接矛盾。一次失败不是结论，不能被自己的上一句钉死。
+    _FAILSAID = ("暂时不可用", "接口已停用", "无法直接查询", "本次不可用", "服务不可用",
+                 "查询失败", "没有查到可用", "我这会儿查不到")
+    thoughts = [t for t in thoughts if not any(w in t for w in _FAILSAID)]
     unsaid = [_frame.sub("", str(x))[:50] for x in (st.get("unsaid") or [])][-2:]
     opens = [_frame.sub("", str(x))[:40] for x in (st.get("open_questions") or [])][-3:]
     tone = st.get("tone_state") if st.get("tone_state") in TONES else "neutral"

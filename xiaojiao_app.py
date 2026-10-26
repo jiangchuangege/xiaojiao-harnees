@@ -8697,6 +8697,58 @@ def _weather_cn(text):
     return t
 
 
+# ---------------- 天气：记住"刚查到过哪个城市"（2026-10-17 加） ----------------
+# 【为什么需要】用户实测：「帮我查下菏泽现在的天气」→ 查到「阴天 +13°C」；
+#   紧接着问「最近去菏泽旅游根据天去是否可以去」（他打成"天去"，不是"天气"），
+#   这句话里**没有"天气"两个字** → 词表判据不命中 → 不走天气直查 → 拿整句去搜三次全跑题 →
+#   模型自己编了一段"春季赏花 / 夏季木偶戏 / 秋季黄金期"，还复读了上一轮的"接口已停用"。
+#   症结很明确：**判据是词表，用户换个说法（或打个错字）整条链就失效**。
+#   这里补一条更硬的信号：**句子里出现的城市，正是刚刚查过天气的那个**，
+#   加上"去 / 能不能 / 适合 / 冷不冷"这类要拿天气做决定的话 → 就按天气问题处理。
+_WEATHER_LAST = {"city": "", "text": "", "at": 0.0}
+_WEATHER_TTL = 1800.0          # 半小时内的天气还算"当前"；再久就重查，不拿旧数据冒充现在
+_WEATHER_DECIDE_HINTS = ("去", "来", "出门", "旅游", "玩", "适合", "合适", "能不能", "可以",
+                         "带伞", "要不要", "冷", "热", "晒", "穿", "出行", "爬山", "露营", "下雨")
+
+
+def _weather_note_success(city, text):
+    """记下"刚查到的这个城市 + 数据"（带时间戳），供下一轮直接引用。"""
+    try:
+        _WEATHER_LAST["city"] = str(city or "").strip()
+        _WEATHER_LAST["text"] = str(text or "").strip()
+        _WEATHER_LAST["at"] = time.time()
+    except Exception:      # noqa: silent-ok — 记不下来只是少一条捷径，不影响本轮回答
+        pass
+
+
+def _weather_recent_city(text):
+    """这句话提到的城市，是不是刚查过天气的那个？（是就返回城市名，否则返回空）"""
+    try:
+        city = str(_WEATHER_LAST.get("city") or "").strip()
+        q = str(text or "")
+        if not city or not q:
+            return ""
+        if (time.time() - float(_WEATHER_LAST.get("at") or 0)) > _WEATHER_TTL:
+            return ""
+        return city if city in q else ""
+    except Exception:      # noqa: silent-ok — 判不出来就当没有这条捷径
+        return ""
+
+
+def _weather_intent(text):
+    """这一轮算不算"要用天气来回答"：词表命中 **或**（刚查过的城市 + 拿天气做决定的话）。"""
+    q = str(text or "")
+    if not q:
+        return False
+    try:
+        from core import tool_isolation as _TI
+        if _TI.specialized_for(q, available={"get_weather"}):
+            return True
+    except Exception:      # noqa: silent-ok — 隔离模块不在就只看下面那条判据
+        pass
+    return bool(_weather_recent_city(q)) and any(k in q for k in _WEATHER_DECIDE_HINTS)
+
+
 def _web_allowed_this_turn():
     """这一轮还允许"载体自己去联网搜"吗？（隔离把 web_search 逐出时返回 False）
 
@@ -8724,6 +8776,7 @@ def _specialized_args(tool_name, text):
     if name != "get_weather":
         return {}
     try:
+        # ① 先按"城市 + 天气词"相邻的常规写法取（「查下合肥现在的天气」）
         m = re.search(r"([\u4e00-\u9fff]{2,4})(?:市|的)?\s*的?\s*(?:天气|气温|温度|会下雨)",
                       str(text or ""))
         if m:
@@ -8734,6 +8787,12 @@ def _specialized_args(tool_name, text):
             city = city.strip("的，。 ")
             if city:
                 return {"city": city}
+        # ② 兜底：这句话说的城市，正是刚刚查过天气的那个（「最近去**菏泽**旅游根据天去…」）
+        #    为什么要这条：用户换个说法/打个错字，"天气"两个字就没了 →
+        #    ① 取不到城市 → 整条天气链失效（实测就是这里漏的）。城市名不用猜，用刚查过的那个。
+        _recent = _weather_recent_city(text)
+        if _recent:
+            return {"city": _recent}
     except Exception as e:      # noqa: silent-ok — 取不到就当没给
         LOG.debug("提取城市失败（忽略）：%s", e)
     return {}
@@ -11938,7 +11997,13 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     if answer is None and CAP.get("run_tools", True):
         try:
             from core import tool_isolation as _TIw
-            _wsp = _TIw.specialized_for(user_input, available={"get_weather"})
+            # 【2026-10-17 改判据】原来只认 `tool_isolation` 的词表（"天气/气温/下雨…"）。
+            #   实测漏点：用户接着问「最近去菏泽旅游根据天去是否可以去」（打成了"天去"）——
+            #   句子里没有"天气"两个字 → 判据不命中 → 不走天气直查 → 拿整句搜三次全跑题 →
+            #   模型自己编了"春季赏花/夏季木偶戏/秋季黄金期"，还复读了上一轮的"接口已停用"。
+            #   现在用 `_weather_intent()`：词表命中 **或**（刚查过天气的城市出现在这句话里
+            #   + 说的是"去/能不能/适合"这类要拿天气做决定的话）。
+            _wsp = ["get_weather"] if _weather_intent(user_input) else []
             _wargs = _specialized_args("get_weather", user_input) if _wsp else {}
             if _wsp and not _wargs.get("city"):
                 # 【2026-10-17 补：没给城市时不许猜、也不许耗着】实测问「今天天气怎么样」：
@@ -11965,6 +12030,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("天气：结构化接口不可用，已把带来源标注的检索降级结果原样给出")
                 elif not _wbad:
                     tool_trace.append(_trace_entry("get_weather", {"city": _wcity}, _wres))
+                    # 记下"这个城市的天气刚查到过"：下一轮用户换个说法（甚至打成"天去"）问
+                    # 「去菏泽旅游行不行」，判据还能认出来，不用再靠词表碰运气。
+                    _weather_note_success(_wcity, _wres)
                     _nums_need = re.findall(r"-?\d+(?:\.\d+)?", _wres)
                     _wsaid = ""
                     try:
@@ -11984,6 +12052,14 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                         answer = "🌤️ %s 天气（wttr.in 实时数据，未经模型转述）：%s" % (_wcity, _weather_cn(_wres))
                 else:
                     LOG.info("天气：get_weather 没查成功（%r）→ 走降级并如实说明", str(_wres)[:40])
+                    # 【2026-10-17 补：真失败时别把话头交回模型】实测这一支空着的时候，
+                    #   模型自己发挥，编出"春季赏花 / 夏季木偶戏 / 秋季黄金期"这类通用套话，
+                    #   还复读上一轮的"接口已停用"。查不到就说查不到，别拿别的东西填。
+                    tool_trace.append({"tool": "get_weather", "args": {"city": _wcity},
+                                       "result": "接口没查到（不编数据）"})
+                    answer = ("%s 这会儿没查到实时天气（天气接口超时或不可用），我不编数据。"
+                              "过一会儿再问我一次，或者你告诉我想知道哪一项（气温/下不下雨），"
+                              "我换个来源再试。" % _wcity)
         except Exception as _e:      # noqa: silent-ok — 天气这条挂了不能拖垮整轮
             LOG.debug("天气直查失败（忽略）：%s", _e)
 
