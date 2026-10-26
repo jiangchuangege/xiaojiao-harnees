@@ -5070,6 +5070,15 @@ def _weather_fallback(name, args, res):
     if t and not any(w in t for w in _FAIL):
         return res                      # 查成功了就原样返回，不做多余动作
     city = str((args or {}).get("city") or "").strip() or "当地"
+    # 【2026-10-17 补的最后一条旁路】这条降级本身是"函数直调 web_search"，
+    # 而天气这一轮通常已经把 web_search 隔离掉了 —— 那就**不许**背地里再搜一遍，
+    # 否则隔离形同虚设（门只管 run_tool，管不到这里）。
+    # 默认从严：接口挂了就如实说"没查到"，不偷偷换通用检索。
+    # 想恢复旧行为（拿网页检索兜底、带 ⚠️ 标注来源），在 capabilities 里开
+    # `"weather_web_fallback": true` —— 这是显式选择，不是默认路径。
+    if not _web_allowed_this_turn() and not CAP.get("weather_web_fallback", False):
+        return (t or "") + ("\n（天气服务这会儿查不到；这一轮联网检索已被隔离，"
+                            "载体不拿它兜底 —— 如实说明，不编数据）")
     try:
         rows = web_search("%s 天气 今天" % city, num=4) or []
     except Exception as e:      # noqa: silent-ok — 降级本身失败也要如实说，不能假装查到
@@ -6638,6 +6647,20 @@ def _scrape_direct(user_input, tool_trace, force_intent=None):
     _sc = force_intent or _detect_scrape_intent(user_input)
     if not _sc:
         return None, tool_trace
+    # 【最后一道旁路】抓取直通是载体自己发起的抓取，`run_tool(..., force=True)` 不经过工具门。
+    # 如果这一轮已经命中专用工具（问天气、查 IP、要截图…），通用抓取工具就该被逐出；
+    # 直通不许拿着被逐出的工具硬抓一遍 —— 除非用户亲口点了这个工具的名字。
+    # 判据直接用隔离的结论，不依赖工具门记账的先后顺序（直通在模型之前就会跑一次）。
+    try:
+        from core import tool_isolation as _TI3
+        _spec3 = _TI3.specialized_for(user_input)
+        _named3 = _sc[0] in str(user_input or "")
+        if _spec3 and not _named3 and _sc[0] in _TI3.GENERIC:
+            LOG.info("抓取直通跳过：这一轮命中专用工具 %s，通用抓取 %s 已被隔离",
+                     "/".join(_spec3), _sc[0])
+            return None, tool_trace
+    except Exception as e:      # noqa: silent-ok — 隔离模块不可用就按原样直通（不额外限制能力）
+        LOG.debug("忽略异常(%s:%d): %s", __file__, 3312, e)
     # ---- Bug 2 根因修复：直通只做一次 ----
     # 判据是"这一轮**跑过**直通"，不是"直通**成功**了"。原来兜底那条判据是"没抓到页面"，
     # 于是**失败**（正是最需要省时间的情况）反而会触发第二遍 get→fetch→stealthy_fetch，

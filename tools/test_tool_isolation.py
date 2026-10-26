@@ -86,6 +86,28 @@ def main():
     ck("走真实入口：新闻这轮的工具表里**有** web_search", "web_search" in only_news, only_news)
     ck("隔离后这一轮工具表不为空（不能把桌子清空）", len(only_weather) >= 1, only_weather)
 
+    # ---------------- 五、旁路也要管：抓取直通 / 天气降级 ----------------
+    print("\n[五] 不走 run_tool 的旁路也必须受隔离约束")
+    _both = "帮我抓 https://httpbin.org/json 顺便看下合肥天气"
+    _sc = app._detect_scrape_intent(_both)
+    ck("前提：这句话确实同时被判成了「连网址抓」", bool(_sc), _sc)
+    _ans, _tr = app._scrape_direct(_both, [])
+    ck("命中专用工具的这一轮，抓取直通会主动跳过（不拿被逐出的 get 硬抓）",
+       _ans is None and not _tr, (_ans, _tr))
+    _only_url = "帮我抓 https://httpbin.org/json"
+    ck("只给了网址（没命中专用工具）→ 直通照旧放行",
+       bool(app._detect_scrape_intent(_only_url)) and not TI.specialized_for(_only_url),
+       TI.specialized_for(_only_url))
+    _named_txt = "用 get 抓 https://httpbin.org/json 合肥天气"
+    _scn = app._detect_scrape_intent(_named_txt)
+    ck("用户亲口点了工具名 → 豁免成立（点名即装，不当成钻空子）",
+       bool(_scn) and _scn[0] in _named_txt and bool(TI.specialized_for(_named_txt)),
+       _scn)
+    import inspect as _insp
+    _src = _insp.getsource(app._weather_fallback)
+    ck("天气降级里那条 web_search 也过门了（不再背地里联网）",
+       "_web_allowed_this_turn" in _src, _src[:40].strip())
+
     print("\n" + "=" * 80)
     print("  通过 %d / 共 %d%s" % (len(PASS), len(PASS) + len(FAIL),
                                   ("（失败：%s）" % "、".join(FAIL)) if FAIL else ""))
