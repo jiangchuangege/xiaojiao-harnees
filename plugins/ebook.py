@@ -58,9 +58,14 @@ _ROBOTS_TTL = 600.0
 # 付费/登录墙的信号词。命中就**不下**，只说明原因。
 _PAYWALL = ("vip", "会员", "付费", "购买", "请登录", "登录后", "注册后", "积分", "金币",
             "扫码", "支付", "充值", "解锁", "权限不足", "仅限", "购买后", "网盘密码", "提取码")
-# 目录页里"不算条目"的链接（导航、标签、分页、静态资源）
-_NAV_SKIP = ("/tag/", "/tags/", "/page/", "/category/", "/user/", "/login", "/register",
-             "/cart", "/vip", "/about", "/contact", "/feed", "/rss", "#")
+# 目录页里"不算条目"的链接（导航、标签、分页、静态资源、站点杂项）
+# 【为什么要收这么多】真机踩到：拿 Gutenberg 的**条目页**当目录页解析，
+# 于是"捐钱、帮助、离线目录、分类、作者页"全被列成了"书目"—— 那是站点导航，不是书。
+_NAV_SKIP = ("/tag/", "/tags/", "/page/", "/category/", "/categories", "/user/", "/login",
+             "/register", "/cart", "/vip", "/about", "/contact", "/feed", "/rss", "/atom",
+             "#", "/donate", "/help", "/faq", "/privacy", "/terms", "/policy", "/security",
+             "/browse/", "/bookshelf", "/author/", "/search", "/offline", "/account", "/my/",
+             "/readme", "/wiki", "/news", "/blog")
 
 
 def _ok(msg):
@@ -364,6 +369,19 @@ def do_manifest(p):
     html, why = _get(url)
     if why:
         return _err("目录页没抓到：%s" % why)
+    # 先分清这一页是"目录页"还是"条目页"——两者该说的话完全不同。
+    #   条目页（本页就有 pdf/epub 直链）：说清"这一页是条目页，能下哪几种格式"，
+    #     并提示要清单得给列表页；绝不能把 donate/help 这些导航当成"书目"列出来（真机踩过）。
+    own = _file_links(html, url)
+    if own:
+        title = _title_of(html, _safe_name(url))
+        lines = ["📖 **这一页是条目页**（不是目录页）：%s" % title, "",
+                 "可直接下载的文件 %d 个：" % len(own)]
+        for i, u in enumerate(own[:20], 1):
+            lines.append("%d. %s" % (i, u))
+        lines.append("\n想下载就用 `ebook_grab`（给 out_dir）；"
+                     "想要**书目清单**请给列表/目录页地址（本页的导航链接不算书）。")
+        return _ok("\n".join(lines) + _policy_note())
     links = _entry_links(html, url)
     if not links:
         return _ok("这一页里没找到「条目」链接（可能不是目录页，或者条目都是异步加载的）。\n"

@@ -6678,6 +6678,11 @@ _SAVE_TO_RE = re.compile(
     r"|\.{1,2}[\\/][^\s，。；、）】\"'`]*)")
 
 
+# 「采电子书」这条路由的词表（只在句子里有网址时才用，见 `_ebook_intent`）
+_EBOOK_WORDS = ("电子书", "电子版", "书库", "书单", "书目", "这本书", "整站的书")
+_EBOOK_LIST_HINTS = ("清单", "书目", "目录", "列表", "列一下", "有哪些", "导出", "整理成")
+
+
 def _scrape_save_target(text):
     """句子里给了保存位置吗？给了就返回那段路径（原样，不改写），没给返回空。"""
     try:
@@ -6728,6 +6733,40 @@ def _scrape_save_body(url, body, target):
         return path, ("（目录已自动创建）" if created else "")
     except Exception as e:      # noqa: silent-ok — 落盘失败要如实报原因，不假装成功
         return "", "存盘失败：%s: %s" % (type(e).__name__, str(e)[:120])
+
+
+def _ebook_intent(text):
+    """这一轮是不是要"采电子书"？返回 (工具名, 参数) 或 None。
+
+    【为什么载体要单独认这一手】句子里有网址时，"抓取直通"会先把 HTML 抓回来贴给你，
+    新加的 `ebook_manifest` / `ebook_grab` 在聊天里就**永远轮不到**（实测确认过）。
+    所以按"提到书 + 想干什么"先分流一次：
+      · 提到书 + 给了保存路径 + 下载/存下来这类动作 → `ebook_grab`（它会进条目页找 pdf/epub）
+      · 提到书 + 要清单/书目/目录/整理 → `ebook_manifest`（可存 CSV/MD）
+    其余情况一概不管 —— 不跟普通的"抓一下这个网页"抢活。
+    """
+    t = str(text or "")
+    if not any(k in t for k in _EBOOK_WORDS):
+        return None
+    try:
+        urls = [u for u in (_clean_url(x) for x in _SCRAPE_URL_RE.findall(t)) if u]
+    except Exception:      # noqa: silent-ok — 取不到网址就当没这条路由
+        urls = []
+    if not urls:
+        return None
+    url = urls[0]
+    out = _scrape_save_target(t)
+    # 先判"要清单"：句子里同时有"清单"和"存到"时（「整理成清单存到 G:\dzs\书目.csv」），
+    # 要的是**清单文件**，不是把每本书都下下来 —— 顺序不能反。
+    if any(k in t for k in _EBOOK_LIST_HINTS) or "书目" in t:
+        args = {"url": url}
+        if out:
+            ext = os.path.splitext(out)[1].lower()
+            args["out"] = out if ext in (".csv", ".md") else os.path.join(out, "书目.csv")
+        return ("ebook_manifest", args)
+    if out and any(k in t for k in ("下载", "存到", "存下来", "保存", "扒", "抓下来", "下下来")):
+        return ("ebook_grab", {"url": url, "out_dir": out})
+    return None
 
 
 def _scrape_direct(user_input, tool_trace, force_intent=None):
@@ -12268,6 +12307,31 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             else:
                 answer = "💻 **已执行**：`%s`\n\n```\n%s\n```" % (_sh, _r.strip()[:1500])
 
+    # ③0 电子书采集：句子里有网址 + 「电子书/电子版/书」 + 「书目/清单」或「下载到 <目录>」
+    #    → 直接打专用工具，**不交给模型挑**。
+    # 【为什么必须放在直通前面】实测：说「用 ebook_manifest 解析一下这个书页」时，
+    #   ③a 的"句子里有网址就直通抓取"先命中，直接把 HTML 贴回来了 ——
+    #   新工具在聊天里根本轮不到。这里按"电子书 + 想干什么"先分流：
+    #   要清单 → ebook_manifest；要存下来 → ebook_grab（它才会进条目页找文件）。
+    _eb_answered = False          # ③0 是否已经用电子书工具直接答了（②兜底不许覆盖它）
+    if answer is None and CAP.get("run_tools", True) and _looks_like_url(user_input) \
+            and not _asks_diagram(user_input):
+        _eb = _ebook_intent(user_input)
+        if _eb:
+            _ebt, _ebargs = _eb
+            try:
+                _ebres = _tool_result_str(run_tool(_ebt, _ebargs, force=True))
+                if _ebres and not _ebres.startswith("⚠️"):
+                    LOG.info("电子书路由：%s（%s）", _ebt, _summarize_args_for_log(_ebt, _ebargs))
+                    tool_trace.append(_trace_entry(_ebt, _ebargs, _ebres))
+                    _note_tool_path(tool_trace, path="ebook")
+                    answer = _ebres
+                    _eb_answered = True
+                else:
+                    LOG.info("电子书路由 %s 没成（%s）→ 交给后面的流程", _ebt, str(_ebres)[:60])
+            except Exception as _eb_e:      # noqa: silent-ok — 这条路挂了不能拖垮整轮
+                LOG.debug("电子书路由失败（忽略）：%s", _eb_e)
+
     # ③a 句子里直接甩了网址 → 锁定抓取类：规则直连 get（失败自动 fetch → stealthy_fetch）
     if answer is None and CAP.get("run_tools", True) and _looks_like_url(user_input) \
             and not _asks_diagram(user_input):
@@ -12955,7 +13019,11 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
 
     # ② 兜底：抓取类意图直通（模型没自己调工具时走这条）
     #     判据是"没有抓到东西"，不只是 tool_trace 为空 —— 见下面 ②c 的说明。
-    if not _trace_has_page(tool_trace) and CAP.get("run_tools", True) and has_llm:
+    #     【2026-10-17 加一条】③0 已经用电子书工具答过了就别再抓一遍：实测「把书目整理成清单」
+    #     那一轮，ebook_manifest 已经把清单列出来了，却被这条兜底拿"整页 HTML"顶掉 ——
+    #     用户看到的是原始网页，而不是他要的清单。载体自己已经答好的内容，兜底不许覆盖。
+    if (not _eb_answered) and not _trace_has_page(tool_trace) \
+            and CAP.get("run_tools", True) and has_llm:
         if _detect_scrape_intent(user_input):
             _sans, _str = _scrape_direct(user_input, tool_trace)
             if _sans:

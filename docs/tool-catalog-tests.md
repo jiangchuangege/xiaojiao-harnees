@@ -11,7 +11,7 @@
 | `tools/test_tool_contract.py` | 工具调用契约（说明 / 参数 / 执行入口 / 清单一致性） | ✅ 通过 | 通过 12 / 共 12 |
 | `tools/test_tool_isolation.py` | 通用与专用工具的隔离（这一轮摆哪几个） | ✅ 通过 | 通过 50 / 共 50 |
 | `tools/test_scrape_save.py` | 抓取 + 落盘（爬下来存到本地这条链） | ✅ 通过 | 通过 17 / 共 17 |
-| `tools/test_ebook_plugin.py` | 公开电子书采集插件（本地假站：公开能下、付费跳过、robots 遵守） | ✅ 通过 | 通过 27 / 共 27 |
+| `tools/test_ebook_plugin.py` | 公开电子书采集插件（本地假站：公开能下、付费跳过、robots 遵守） | ✅ 通过 | 通过 35 / 共 35 |
 | `tools/test_rea_plugin.py` | REA 插件本体（假 MCP 服务） | ✅ 通过 | 通过 40 / 共 40 |
 | `tools/test_rea_router.py` | REA 意图路由（20 条真实意图） | ✅ 通过 | 通过 12 / 共 12（其中路由命中 19/19 = 100%） |
 | `tools/test_causal_memory_plugin.py` | 因果记忆插件 A（6 个工具） | ✅ 通过 | 通过 25 项, 失败 0 项, 跳过 0 项 |

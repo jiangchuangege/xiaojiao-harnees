@@ -131,6 +131,33 @@ def main():
            "⚠️" in str(plug.execute("ebook_grab",
                                     {"url": "https://no-such-host-xyz-1024.invalid/x",
                                      "out_dir": tmp})))
+
+        # ---------------- 六、载体路由：聊天里怎么才轮到这两个工具 ----------------
+        print("\n[六] 载体路由：句子里有网址时，新工具不能被「抓取直通」抢走")
+        import xiaojiao_app as app            # noqa: E402
+        r_man = app._ebook_intent("把这个书站的电子书目录整理成清单存到 G:\\dzs\\书目.csv "
+                                  "https://www.example.com/books")
+        ck("要清单 → 走 ebook_manifest（且带上保存路径）",
+           bool(r_man) and r_man[0] == "ebook_manifest" and "书目.csv" in str(r_man[1].get("out")),
+           r_man)
+        r_grab = app._ebook_intent("帮我下载电子书 https://www.example.com/books 存到 G:\\dzs")
+        ck("要存下来 → 走 ebook_grab（带上 out_dir）",
+           bool(r_grab) and r_grab[0] == "ebook_grab" and r_grab[1].get("out_dir") == "G:\\dzs",
+           r_grab)
+        ck("没提到书 → 不管（不跟普通抓取抢活）",
+           app._ebook_intent("抓一下 https://www.example.com/x 看看写了啥") is None)
+        ck("没给网址 → 不管", app._ebook_intent("帮我下载电子书到 G:\\dzs") is None)
+
+        # ---------------- 七、条目页 vs 目录页，说的不是一回事 ----------------
+        print("\n[七] 条目页要能认出来（别把 donate/help 这些导航当「书目」）")
+        r_detail = str(plug.execute("ebook_manifest", {"url": srv.base + "/book/1.html"}))
+        ck("条目页 → 明说这是条目页", "条目页" in r_detail, r_detail[:50])
+        ck("条目页 → 列出可下载的文件", "a.pdf" in r_detail, r_detail[:80])
+        ck("条目页 → 不再把导航当书目（没有「关于本站」这类条目）",
+           "关于本站" not in r_detail and "Donate" not in r_detail, r_detail[:80])
+        r_list = str(plug.execute("ebook_manifest", {"url": srv.base + "/books"}))
+        ck("目录页 → 仍然给条目清单（两种页面各说各话）",
+           "book/1.html" in r_list and "条目页" not in r_list, r_list[:60])
     finally:
         srv.stop()
         shutil.rmtree(tmp, ignore_errors=True)
