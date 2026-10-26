@@ -11940,6 +11940,14 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             from core import tool_isolation as _TIw
             _wsp = _TIw.specialized_for(user_input, available={"get_weather"})
             _wargs = _specialized_args("get_weather", user_input) if _wsp else {}
+            if _wsp and not _wargs.get("city"):
+                # 【2026-10-17 补：没给城市时不许猜、也不许耗着】实测问「今天天气怎么样」：
+                #   载体取不到城市 → 这一块跳过 → 模型拿不到数据、自己想了 30 秒，
+                #   最后答「查不到**济南**天气」（城市是从历史里捡的，本轮根本没查济南）。
+                #   诚实且省时的做法：一句话问清楚，不编城市、不空耗。
+                answer = "你想查哪个城市的天气？告诉我城市名，我马上去查。"
+                tool_trace.append({"tool": "get_weather", "args": {},
+                                   "result": "没给城市 → 先问清楚（不猜城市、不编数据）"})
             if _wsp and _wargs.get("city"):
                 _wcity = str(_wargs["city"])
                 _wres = _tool_result_str(run_tool("get_weather", {"city": _wcity}, force=True))
