@@ -2011,6 +2011,21 @@ def web_search(query, num=6):
          词典词条类噪音降权 —— 保证用户拿到的是跟主题相关的结果。
     """
     query = extract_search_keywords(query)
+    # 【2026-10-17 违规直调告警】这一轮若已经被隔离掉联网，却还有人直调 `web_search`，
+    # 就把**调用点**记下来。不在这一层拦（拦在这里会误伤"天气降级"这类正当调用），
+    # 只留证：日志里能直接看出是哪条旁路漏了，不必靠猜。
+    try:
+        if not _web_allowed_this_turn():
+            import inspect as _ins
+            _cp = "?"
+            for _f in _ins.stack()[1:]:
+                if "xiaojiao_app" in str(_f.filename):
+                    _cp = "%s:%d" % (str(_f.filename).rsplit("\\", 1)[-1], _f.lineno)
+                    break
+            LOG.warning("疑似越过隔离直调 web_search（调用点 %s，这一轮本不该联网）：%r",
+                        _cp, str(query)[:40])
+    except Exception as _e:      # noqa: silent-ok — 取证失败不该影响搜索本身
+        LOG.debug("直调取证失败（忽略）：%s", _e)
     if _is_meaningless_query(query):
         LOG.warning("检索词无效，已跳过搜索：%r", str(query)[:60])
         return []
@@ -2048,6 +2063,13 @@ def web_search(query, num=6):
                 LOG.info("新闻类：这一批没有正规新闻媒体 → 一条不留（宁可说没查到）")
                 hits = []
         top = hits[:num]
+        # 【2026-10-17 修崩溃】这里原来直接 `top[0]` —— 上一段"新闻类只留正规媒体"
+        # 可能把 hits 清空（实测：问「最近有什么新闻」→ 这批没有正规新闻源 → hits=[]），
+        # 于是 `top[0]` 抛 IndexError，整个 /api/chat 直接 500。
+        # 空结果不是异常：就是"这一批没搜到"，交给下面的换写法重试/如实说没查到。
+        if not top:
+            LOG.info("检索词 %r 这一批没有可用结果 → 换写法重试或如实说没查到", v[:40])
+            continue
         _sc, _cov = _search_relevance(query, top[0][0], top[0][2])
         if _cov >= 0.6:                              # 主题词覆盖够高 → 这批结果是对的，不再多问引擎
             LOG.info("检索命中：%r（%d 条，覆盖率 %.0f%%）", v[:40], len(top), _cov * 100)
@@ -5070,15 +5092,16 @@ def _weather_fallback(name, args, res):
     if t and not any(w in t for w in _FAIL):
         return res                      # 查成功了就原样返回，不做多余动作
     city = str((args or {}).get("city") or "").strip() or "当地"
-    # 【2026-10-17 补的最后一条旁路】这条降级本身是"函数直调 web_search"，
-    # 而天气这一轮通常已经把 web_search 隔离掉了 —— 那就**不许**背地里再搜一遍，
-    # 否则隔离形同虚设（门只管 run_tool，管不到这里）。
-    # 默认从严：接口挂了就如实说"没查到"，不偷偷换通用检索。
-    # 想恢复旧行为（拿网页检索兜底、带 ⚠️ 标注来源），在 capabilities 里开
-    # `"weather_web_fallback": true` —— 这是显式选择，不是默认路径。
-    if not _web_allowed_this_turn() and not CAP.get("weather_web_fallback", False):
-        return (t or "") + ("\n（天气服务这会儿查不到；这一轮联网检索已被隔离，"
-                            "载体不拿它兜底 —— 如实说明，不编数据）")
+    # 【2026-10-17 定口径：这条降级算不算"绕过隔离"】
+    # 这条 `web_search` 是 get_weather **自己**的失败降级：能走到这里，说明这一轮"用到了天气插件"，
+    # 用户那条「不用到这个插件就不该调它」并没有被破坏（不是模型拿通用工具顶替专用工具）。
+    # 而且检索词是**定向的**（"<城市> 天气 今天"），不是把整句话丢出去（那才是之前搜回字典词条的病因），
+    # 结果还带着 ⚠️ 来源标注。所以默认**允许**这条降级。
+    # 想彻底一刀切（接口挂了就说查不到、绝不联网），把 capabilities 里的
+    # `"weather_web_fallback"` 设成 false —— 这是显式选择。
+    if not CAP.get("weather_web_fallback", True):
+        return (t or "") + ("\n（天气服务这会儿查不到；按配置不拿网页检索兜底 —— "
+                            "如实说明，不编数据）")
     try:
         rows = web_search("%s 天气 今天" % city, num=4) or []
     except Exception as e:      # noqa: silent-ok — 降级本身失败也要如实说，不能假装查到
@@ -8232,6 +8255,28 @@ def all_tool_names():
         return []
 
 
+def _isolate_names(names, user_input):
+    """把"这一轮摆哪些"过一道专用/通用隔离（只改这一轮的表，工具总数一个不动）。
+
+    抽成一个函数的原因：`_intent_tool_names` 有**好几个返回口**（未知意图、空子集、
+    子集全不存在），只要有一个口没过隔离，通用兜底就会在某个意图下重新混进来 ——
+    实战就是这么漏的（"今天天气怎么样"判成 chat → 走早返回 → web_search 又摆回来了，
+    工具门按这份表记账也就放行）。所以所有返回口统一从这里出。
+    """
+    if not names:
+        return []
+    if not user_input:
+        return list(names)
+    try:
+        from core import tool_isolation as _TI
+        out, why = _TI.isolate(user_input, list(names), available=set(all_tool_names()))
+        LOG.info("工具隔离：%s", why)
+        return list(out)
+    except Exception as e:      # noqa: silent-ok — 隔离不可用就按原计划装，不影响对话
+        LOG.debug("工具隔离不可用（按原计划）：%s", e)
+        return list(names)
+
+
 def _intent_tool_names(intent, user_input=""):
     """该意图要加载的工具名列表。**永不返回 None**（None 的旧含义是"全部 77 个"）。
 
@@ -8250,7 +8295,12 @@ def _intent_tool_names(intent, user_input=""):
     返回前与真实工具表对一遍：不存在的名字直接丢弃（防止"以为给了工具、其实没给"）。
     """
     if intent not in _INTENT_TOOLS:
-        return list(_FULL_CORE_TOOLS)    # 未知意图：给核心集，绝不回落全量
+        # 【2026-10-17 修漏】原来这里直接 `return list(_FULL_CORE_TOOLS)` —— **不过隔离**。
+        # 而"今天天气怎么样"这种不带城市的问法会被判成 chat（未知意图），正好走这条早返回：
+        # 通用兜底 web_search 又被塞回这一轮，工具门按这份表记账也就放行了。
+        # 实测就是这么漏的（日志：先"工具隔离：命中 get_weather"，随后照样"检索命中"）。
+        # 现在所有返回口都过同一道隔离。
+        return _isolate_names(_FULL_CORE_TOOLS, user_input)
     if intent == "diagram":
         want = [n for n in real_tool_names() if n.lower().startswith("archify")]
         want += ["read_file", "open_app", "list_files"]
@@ -8270,7 +8320,7 @@ def _intent_tool_names(intent, user_input=""):
     got = [n for n in want if n in real]
     if not got:
         LOG.warning("意图 %s 的工具子集一个都不存在，本轮改发核心集（请检查工具名）", intent)
-        got = [n for n in _FULL_CORE_TOOLS if n in real]
+        got = _isolate_names([n for n in _FULL_CORE_TOOLS if n in real], user_input)
     if len(got) < len(want):
         LOG.debug("意图 %s 的子集里有 %d 个工具名不存在，已忽略：%s",
                   intent, len(want) - len(got), [n for n in want if n not in real])
@@ -8609,7 +8659,8 @@ def _plan_tools(intent, system_text, current_text, max_ctx=None, user_text=None)
         #    渠道下则相反：兜底正好会把工具又塞回来，必须挡住。
         return [], 0
     budget = max_ctx - _estimate_tokens(system_text) - _estimate_tokens(current_text) - _MSG_OVERHEAD * 2
-    keep = list(names) if names else list(_FULL_CORE_TOOLS)
+    # 寒暄轮 names 为空时走核心集兜底 —— 这一份也得过隔离，否则又是一条"通用工具悄悄回来"的口子。
+    keep = list(names) if names else _isolate_names(_FULL_CORE_TOOLS, user_text)
     tok = _tools_tokens(keep)
     if tok > budget:                       # 超预算 → 收敛"本轮装载量"（列表按重要性排序）
         while len(keep) > 1 and _tools_tokens(keep) > budget:
@@ -11258,6 +11309,17 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     """
     # ===== 原有的 agent_run 逻辑 =====
     _round_begin()                            # Bug 2：开一份干净的本轮工具去重表（详见 _round_begin）
+    # 【2026-10-17 本轮一开始就把"用户这句话"记给工具门】
+    # 为什么要提前：这一轮里有几处联网发生在**工具规划之前**（RAG 联网源、提醒词前检索），
+    # 那时还没有"装载表"记账，门会当成"后台任务"一律放行 —— 隔离就这么漏了一次
+    # （实测：问天气时先"检索命中"，再打出"工具隔离"）。
+    # 只记用户原话、不记装载表：装什么仍然由 `_plan_tools` 决定，这里只是让门在做任何
+    # 联网动作之前就知道"这一轮到底在问什么"。
+    try:
+        from core import tool_gate as _TG_begin
+        _TG_begin.begin_turn(user_input)
+    except Exception as _e_begin:      # noqa: silent-ok — 记不上就当没有上下文（门放行）
+        LOG.debug("工具门开局记账失败（忽略）：%s", _e_begin)
     _t_round = time.time()                    # 这一轮从进来到出去花了多久（健康系统的"响应超时"判据）
     # 自主性：上报"用户有交互"，idle 类后台任务靠它判断"用户闲下来了没"
     try:
@@ -11881,8 +11943,19 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             if _wsp and _wargs.get("city"):
                 _wcity = str(_wargs["city"])
                 _wres = _tool_result_str(run_tool("get_weather", {"city": _wcity}, force=True))
-                _wbad = (not _wres) or any(k in _wres for k in ("失败", "不可用", "Traceback"))
-                if not _wbad:
+                # 【2026-10-17 修一处"把降级结果当失败扔了"】
+                # `_weather_fallback` 给的降级正文里写着"结构化天气接口本次**不可用**"，
+                # 于是这里的失败词扫描把它也算成失败 → 载体放弃 → 模型回了句"我这边查不到菏泽天气"，
+                # 而手里那份（带 ⚠️ 标注的）检索结果被丢了。实测就是这么丢掉一份可用数据的。
+                # 现在：带 ⚠️ 降级标记的结果**算可用**，原样给用户看（不让模型转述，免得又编）。
+                _wfb = "数据来自网页检索" in _wres
+                _wbad = (not _wres) or (not _wfb and any(
+                    k in _wres for k in ("失败", "不可用", "Traceback")))
+                if _wfb:
+                    tool_trace.append(_trace_entry("get_weather", {"city": _wcity}, _wres))
+                    answer = _weather_cn(_wres)
+                    LOG.info("天气：结构化接口不可用，已把带来源标注的检索降级结果原样给出")
+                elif not _wbad:
                     tool_trace.append(_trace_entry("get_weather", {"city": _wcity}, _wres))
                     _nums_need = re.findall(r"-?\d+(?:\.\d+)?", _wres)
                     _wsaid = ""
