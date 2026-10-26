@@ -5944,6 +5944,11 @@ _SCRAPE_TOOL_HINTS = [
     ("fetch", ("浏览器", "渲染", "动态页面", "js渲染", "js 渲染", "登录后", "点开")),
     ("get", ("抓取", "爬取", "爬一下", "抓一下", "抓个", "抓网页", "取网页", "请求网页", "抓取网页")),
 ]
+# 【2026-10-17 加】"用户明确要抓"的动作词。命中这些 + 有网址时，抓取就是**正解**，
+# 不该被"通用工具隔离"挡掉（实战：说"爬一下…下载到 G:\dzs"时句子里有"下载"→ 判成专用
+# 工具 download → 抓取被逐出 → 模型没工具可用，跑去调 screenshot 并自己编 session_id）。
+_SCRAPE_STRONG_VERBS = ("抓取", "爬取", "爬一下", "爬下", "爬一遍", "抓一下", "抓下", "抓一遍",
+                        "扒一下", "扒下来", "下载", "保存下来", "存下来", "导出")
 _URL_STOP = "，。！？；：、（）【】《》“”‘’〈〉「」『』…—～·　"
 _SCRAPE_URL_RE = re.compile(r"https?://[^\s" + re.escape(_URL_STOP) + r"\"']+")
 _CJK_ANY = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff]")
@@ -6019,8 +6024,13 @@ _SCRAPE_LOOK_HINTS = ("看看", "看一下", "看下", "瞧瞧", "写了啥", "�
                       "内容是", "内容是什么", "返回什么", "返回了", "是什么", "有什么", "里面是")
 # 句子里有这些词时**不抢**：网址只是宾语，用户要的是别的动作（写文件/下载/截图…）。
 # 真实风险：若不排除，"把这个网址的内容写到 C:\\a.txt" 会被当成"抓网页"，文件就不会被创建。
-_URL_OTHER_ACTION_HINTS = ("写到", "写入", "写进", "保存到", "保存为", "存到", "存为", "另存",
-                           "下载", "输出到", "导出", "截图", "监控", "定时")
+# 【2026-10-17 收紧这条排除表】原来把"下载/保存到/存到/导出"也算成"别的动作"→ 直通直接放弃，
+#   可这几件事**恰恰要先抓下来**（抓完再落盘），排除掉等于整条链没人管。
+#   实测代价：说「帮我爬一下电子书 <网址> 下载到 G:\dzs」→ 判不出抓取意图 → 交给模型 →
+#   模型没抓取工具可用，跑去调 screenshot 并自己编 session_id（"会话 session_20240101_001 不存在"）。
+#   现在：**保存/下载类**不再排除（抓完由 `_scrape_save_body` 落盘）；
+#   仍然排除的是"根本不打算抓正文"的动作：截图、定时监控、写入现有文件那种。
+_URL_OTHER_ACTION_HINTS = ("写到", "写入", "写进", "另存", "输出到", "截图", "监控", "定时")
 
 
 def _detect_scrape_intent(q):
@@ -6657,6 +6667,69 @@ def _apply_transform(user_input, content, url=""):
     return (out or "").strip()
 
 
+# ---- "抓下来然后存到本地"：用户说「爬一下 <网址> 下载到 G:\dzs」这类 ----
+# 【2026-10-17 加】这条链原来完全不存在：抓取直通只会把正文**贴在聊天框**里，
+#   用户说的"下载到 G:\dzs"没人管 —— 而句子里那个"下载"还让隔离把抓取工具逐出，
+#   最后模型跑去调 `screenshot` 并自己编了 session_id（实测："会话 session_20240101_001 不存在"）。
+#   现在：句子里给了保存位置，抓完就**真落盘**，并如实报路径、大小、开头预览。
+_SAVE_TO_RE = re.compile(
+    r"(?:下载到|下载至|存到|存至|保存到|保存至|存进|写进|导出到|导出至|放到|落盘到|抓到|抓至)\s*"
+    r"([A-Za-z]:[\\/][^\s，。；、）】\"'`]*|[\\/]{1,2}[^\s，。；、）】\"'`]*"
+    r"|\.{1,2}[\\/][^\s，。；、）】\"'`]*)")
+
+
+def _scrape_save_target(text):
+    """句子里给了保存位置吗？给了就返回那段路径（原样，不改写），没给返回空。"""
+    try:
+        m = _SAVE_TO_RE.search(str(text or ""))
+        return (m.group(1).strip().strip("\"'`，。；、") if m else "")
+    except Exception:      # noqa: silent-ok — 判不出来就当用户没要求存盘
+        return ""
+
+
+def _scrape_save_body(url, body, target):
+    """把正文写到用户指定的位置。返回 (最终文件路径 或 "", 说明一句话)。
+
+    目标是目录（不存在扩展名 / 以斜杠结尾 / 本来就是目录）→ 自动起文件名；
+    目录不存在就创建（只建不删）。任何一步失败都返回 (“”, 中文原因)，交给上层如实说。
+    """
+    try:
+        body = str(body or "")
+        if not body.strip():
+            return "", "正文是空的，没东西可存"
+        tgt = str(target or "").strip().strip("\"'`")
+        if not tgt:
+            return "", "没给保存路径"
+        # 文件名：先看网址最后一段，取不到就用域名
+        from urllib.parse import urlsplit
+        _tail = ""
+        try:
+            _p = urlsplit(str(url or "")).path.strip("/")
+            _tail = _p.rsplit("/", 1)[-1] if _p else ""
+        except Exception:      # noqa: silent-ok — 解析不了网址就退回域名
+            _tail = ""
+        if not _tail or "." not in _tail:
+            _host = ""
+            try:
+                _host = (urlsplit(str(url or "")).hostname or "").replace(".", "_")
+            except Exception:      # noqa: silent-ok
+                _host = ""
+            _tail = "%s_%s.md" % (_host or "page", time.strftime("%Y%m%d_%H%M%S"))
+        _tail = re.sub(r"[\\/:*?\"<>|\r\n\t]", "_", _tail)[:80] or "page.md"
+        _is_dir = tgt.endswith(("\\", "/")) or os.path.isdir(tgt) or not os.path.splitext(tgt)[1]
+        path = os.path.join(tgt, _tail) if _is_dir else tgt
+        parent = os.path.dirname(os.path.abspath(path))
+        created = False
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent, exist_ok=True)
+            created = True
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        return path, ("（目录已自动创建）" if created else "")
+    except Exception as e:      # noqa: silent-ok — 落盘失败要如实报原因，不假装成功
+        return "", "存盘失败：%s: %s" % (type(e).__name__, str(e)[:120])
+
+
 def _scrape_direct(user_input, tool_trace, force_intent=None):
     """"抓一下 <url>" 这类明确指令的**直通**执行：真调抓取工具，把正文原样给用户。
 
@@ -6670,15 +6743,22 @@ def _scrape_direct(user_input, tool_trace, force_intent=None):
     _sc = force_intent or _detect_scrape_intent(user_input)
     if not _sc:
         return None, tool_trace
-    # 【最后一道旁路】抓取直通是载体自己发起的抓取，`run_tool(..., force=True)` 不经过工具门。
-    # 如果这一轮已经命中专用工具（问天气、查 IP、要截图…），通用抓取工具就该被逐出；
-    # 直通不许拿着被逐出的工具硬抓一遍 —— 除非用户亲口点了这个工具的名字。
-    # 判据直接用隔离的结论，不依赖工具门记账的先后顺序（直通在模型之前就会跑一次）。
+    # 【2026-10-17 修正：这条守卫原来挡得太死，把真正的抓取意图也挡了】
+    #   原意：这一轮命中专用工具（问天气、查 IP…）时，别拿通用抓取去硬抓。
+    #   实战踩坑（用户实测）：说「帮我爬一下电子书 <网址> 下载到 G:\dzs」——
+    #   句子里有"下载" → 命中专用工具 `download` → 通用 `get` 被逐出 → 直通被这条守卫跳过
+    #   → 模型手里没有抓取工具，只好去调 `screenshot`，还自己**编了 session_id**，
+    #   于是看到"会话 session_20240101_001 不存在"、"连续 2 次调错，已停止"。
+    #   用户要的是"把网页内容拿下来"，这件事**没有比抓取更专用的工具**
+    #   （download 只能下文件直链，给的是网页地址）。所以判据改成：
+    #   **只要用户明确说了抓/爬/扒/下载这类动作 + 网址，抓取就放行**（这是正解，不是兜底）。
+    #   只有"顺带提了个网址"（比如问天气时贴了个链接）才继续受隔离约束。
     try:
         from core import tool_isolation as _TI3
+        _verb3 = any(k in str(user_input or "") for k in _SCRAPE_STRONG_VERBS)
         _spec3 = _TI3.specialized_for(user_input)
         _named3 = _sc[0] in str(user_input or "")
-        if _spec3 and not _named3 and _sc[0] in _TI3.GENERIC:
+        if _spec3 and not _named3 and not _verb3 and _sc[0] in _TI3.GENERIC:
             LOG.info("抓取直通跳过：这一轮命中专用工具 %s，通用抓取 %s 已被隔离",
                      "/".join(_spec3), _sc[0])
             return None, tool_trace
@@ -6824,6 +6904,30 @@ def _scrape_direct(user_input, tool_trace, force_intent=None):
                 if _suspect_note:
                     _out += "\n\n" + _suspect_note
                 return _out, tool_trace
+        # 【2026-10-17 加】用户说了"下载/存到 <路径>"→ 抓完**真落盘**，再如实报路径与大小。
+        #   原来这条什么都不做，只把正文糊在聊天框，用户以为存好了（其实没有）。
+        _save_tgt = _scrape_save_target(user_input)
+        if _save_tgt:
+            _spath, _snote = _scrape_save_body(_jd.get("url", ""), _body, _save_tgt)
+            if _spath:
+                tool_trace = list(tool_trace) + [_trace_entry(
+                    "write_file", {"path": _spath}, "%d 字符" % len(_body))]
+                _nlink = len(re.findall(r"https?://", _body))
+                _ans = ("✅ **已抓取并保存到本地**\n\n"
+                        "- 文件：`%s`\n- 来源：%s\n- 大小：%d 字符 ｜ %d 行%s\n\n"
+                        "正文开头（前 300 字）：\n\n%s"
+                        % (_spath, _jd.get("url", ""), len(_body), _body.count("\n") + 1,
+                           _snote, _fence_body(_body[:300])))
+                if _nlink >= 5:
+                    _ans += ("\n\n🔎 这一页里有 %d 个链接，看着像**目录页** —— "
+                             "要不要我逐章抓下来（说「把每章都抓下来存到同一目录」）？" % _nlink)
+            else:
+                _ans = ("⚠️ 抓到了，但**没能存到本地**：%s\n\n"
+                        "（正文我照常给你，下面这段就是抓到的内容）\n\n%s"
+                        % (_snote, _fence_body(_body[:2000])))
+            if _suspect_note:
+                _ans = _suspect_note + "\n\n" + _ans
+            return _ans, tool_trace
         # 单页：正文 + 解读
         _ans = "🌐 **%s** · HTTP %s\n\n%s" % (
             _jd.get("url", ""), _jd.get("status", ""),
