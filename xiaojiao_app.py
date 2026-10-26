@@ -4865,6 +4865,23 @@ def run_tool(name, args, force=False):
     "所有文件/命令入口都拦得住"这句话才成立**。
     """
     args = _fix_args_paths(name, args or {})   # 补充任务 7：先把 [用户名] 这类占位符展开成真实路径
+    # ---- 本轮工具门（2026-10-17）：**这一轮没装载的工具，执行时也不许调** ----
+    # 【为什么必须有这一道】`core/tool_isolation.py` 只决定"工具表里摆哪几个"，
+    #   而实测：隔离之后模型**照样**照着历史去调那个没装载的工具（问天气时仍发了 web_search）——
+    #   因为执行入口只看"这个名字存不存在"。这就是本项目在渠道隔离那段写过的"假隔离"。
+    # 【放行规则】没有本轮上下文（后台/内部流水线）放行；装载了放行；用户这一轮亲口点名放行。
+    # 【force=True 一律放行】载体自己发起的调用（视频/播客/漏洞聚合那些 `run_tool(..., force=True)`）
+    #   本来就不在"模型挑工具"这件事的管辖范围内。
+    if not force:
+        try:
+            from core import tool_gate as _TG
+            _ok, _note = _TG.check(name)
+            if not _ok:
+                LOG.warning("工具门：这一轮没装载 %s，已拒绝执行（本轮装载 %d 个）",
+                            name, _TG.current().get("count") or 0)
+                return _note
+        except Exception as _e:      # noqa: silent-ok — 门坏了就放行，绝不把对话卡死
+            LOG.debug("工具门不可用（放行）：%s", _e)
     # ---- 渠道隔离：**外部通道下只能聊天，任何工具都不给执行** ----
     # 【为什么排在最前面、连delete红线都排在它后面】这是"别人能给它发消息"那条链路的**总闸**。
     #   小焦手上有 run_command / read_file / write_file，接到任何 IM 上就等于把电脑钥匙递出去；
@@ -8496,6 +8513,14 @@ def _plan_tools(intent, system_text, current_text, max_ctx=None, user_text=None)
     #   实测踩到——记忆里存着以前聊过的"逆向/反编译"，于是随便问句话都会把 rea_do 判成"命中专用"，
     #   连带把通用工具一起逐出（过隔离）。所以这一层只认 `user_text`。
     names = _intent_tool_names(intent, user_text or "")
+    # 【先记一次】`_plan_tools` 后面有几条提前 return（预算够 / 状态裁剪），
+    # 只在末尾记账的话，那些路径上执行入口那道门就没有上下文 → 等于门没装。
+    # 所以这里先按"意图给的那份"记一次，末尾再按"实际裁剪后"更新一次。
+    try:
+        from core import tool_gate as _TG0
+        _TG0.set_turn(names, user_text or "")
+    except Exception as _e0:      # noqa: silent-ok
+        LOG.debug("工具门预记账失败（忽略）：%s", _e0)
     if _pol.get("drop_tools"):
         _before = len(names)
         names = [n for n in names
@@ -8568,7 +8593,76 @@ def _plan_tools(intent, system_text, current_text, max_ctx=None, user_text=None)
             keep.pop()
         tok = _tools_tokens(keep)
         LOG.info("本轮按意图装载 %d 个工具（完整工具表仍在 plugins/ 目录，按需加载）", len(keep))
+    # ---- 记账：把"这一轮到底摆了哪些"记给执行入口那道门（`core/tool_gate.py`）----
+    # 只记名字 + 用户原话（用户点名要用的工具门会放行）；不记 token、不记内容。
+    try:
+        from core import tool_gate as _TG
+        _TG.set_turn(keep, user_text or "")
+    except Exception as _e:      # noqa: silent-ok — 记不上就退化成"没有上下文"（门放行）
+        LOG.debug("工具门记账失败（忽略）：%s", _e)
     return keep, tok
+
+
+def _weather_cn(text):
+    """把 wttr.in 返回的英文天气词换成中文（只换常见那批，换不到就原样留着）。
+
+    为什么值得换：这条是"载体直给"的兜底展示（模型没把数字说出来时），
+    用户看到 `Patchy rain nearby +14°C` 会觉得莫名其妙；换成「附近有零星小雨 +14°C」就一眼能读。
+    只做词表替换，**不动数字**——数字是实测的，一个都不许改。
+    """
+    t = str(text or "")
+    pairs = (("Patchy rain nearby", "附近有零星小雨"), ("Patchy rain possible", "可能有零星小雨"),
+             ("Light rain shower", "小阵雨"), ("Moderate rain", "中雨"), ("Heavy rain", "大雨"),
+             ("Light rain", "小雨"), ("Thundery outbreaks possible", "可能有雷阵雨"),
+             ("Partly cloudy", "局部多云"), ("Cloudy", "阴"), ("Overcast", "阴天"),
+             ("Sunny", "晴"), ("Clear", "晴"), ("Mist", "薄雾"), ("Fog", "雾"),
+             ("Light drizzle", "毛毛雨"), ("Light snow", "小雪"), ("Moderate snow", "中雪"),
+             ("Blizzard", "暴雪"), ("Blowing snow", "风吹雪"), ("Sleet", "雨夹雪"))
+    for en, zh in pairs:
+        t = t.replace(en, zh)
+    return t
+
+
+def _web_allowed_this_turn():
+    """这一轮还允许"载体自己去联网搜"吗？（隔离把 web_search 逐出时返回 False）
+
+    为什么要这个问句：`web_search` 在载体里有**好几条旁路**——RAG 的联网源、搜索意图直通、
+    "提醒词前先检索"、治病流程的 `_heal_web`。它们都**不经过** `run_tool`，
+    所以工具门管不到，隔离也就白做了（实测：问天气时这些旁路照样去百度搜，还搜回一堆无关词条）。
+    统一在这里问一句，旁路就知道该不该动。
+    """
+    try:
+        from core import tool_gate as _TG
+        ok, _note = _TG.check("web_search")
+        return bool(ok)
+    except Exception:      # noqa: silent-ok — 门不可用就按原样允许（不额外限制能力）
+        return True
+
+
+def _specialized_args(tool_name, text):
+    """给"兜底换用专用工具"补参数：目前只有天气需要参数（城市），其余工具可以空参数调。
+
+    为什么要单写一个：专用工具大多不需要参数（net_ip / collect_vulnerabilities / screenshot…），
+    只有 get_weather 必须给 city。城市名从用户那句话里取（「查下**合肥**现在的天气」→ 合肥）；
+    取不到就返回空表，让插件用它自己的默认值并在回答里说明是哪里 —— 不猜城市。
+    """
+    name = str(tool_name or "")
+    if name != "get_weather":
+        return {}
+    try:
+        m = re.search(r"([\u4e00-\u9fff]{2,4})(?:市|的)?\s*的?\s*(?:天气|气温|温度|会下雨)",
+                      str(text or ""))
+        if m:
+            city = m.group(1)
+            for junk in ("帮我", "查下", "查一下", "看看", "问下", "现在", "今天", "明天", "后天",
+                         "的", "市", "天气", "气温", "温度"):
+                city = city.replace(junk, "")
+            city = city.strip("的，。 ")
+            if city:
+                return {"city": city}
+    except Exception as e:      # noqa: silent-ok — 取不到就当没给
+        LOG.debug("提取城市失败（忽略）：%s", e)
+    return {}
 
 
 # ================== 上下文四层防护 · 第 1 层（滑动窗口 + 硬性截断） ==================
@@ -9580,7 +9674,14 @@ def _rag_vector_hits(query, top_k=5):
 
 
 def _rag_web_hits(query, num=4):
-    """源③：联网。返回 `[(标题, 链接, 内容)]`，这里拼成候选文本。"""
+    """源③：联网。返回 `[(标题, 链接, 内容)]`，这里拼成候选文本。
+
+    2026-10-17：这一轮若命中专用工具（如 get_weather），说明"联网搜"已被隔离逐出 →
+    这里直接返回空，不再背地里搜一遍。
+    """
+    if not _web_allowed_this_turn():
+        LOG.info("RAG 联网源：本轮已隔离掉 web_search（有专用工具顶上）→ 这一源不查")
+        return []
     try:
         out = []
         for it in (web_search(query, num=num) or []):
@@ -10045,6 +10146,8 @@ def _code_request_question(text):
 
 def _heal_web(query):
     """治病流程用的联网入口：查到的内容作为**参考**（不是答案）给模型。"""
+    if not _web_allowed_this_turn():
+        return ""
     try:
         rows = web_search(query, num=3) or []
     except Exception:      # noqa: silent-ok — 查不到就让治病流程照常收尾
@@ -11742,6 +11845,44 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         except Exception as e:
             LOG.debug("忽略异常(%s:%d): %s", __file__, 1520, e)
 
+    # 1b2b. 天气：**载体先真查**（结构化数据），模型只负责措辞，载体核对数字（2026-10-17）
+    # 【为什么必须由载体查】实测：问天气时它给的是一段"看起来很像天气"的文字，
+    #   而合肥和菏泽的**气温、风力、空气质量一字不差** —— 那是它照着上一轮答案编的。
+    #   根因是这一轮压根没真查到数据（联网旁路搜的是整句话，搜回一堆字典词条）。
+    # 【做法】与"时间"同一招：数据载体查准 → 让它用自己的话讲 → **核对数字**，说不出来就用原始数据。
+    if answer is None and CAP.get("run_tools", True):
+        try:
+            from core import tool_isolation as _TIw
+            _wsp = _TIw.specialized_for(user_input, available={"get_weather"})
+            _wargs = _specialized_args("get_weather", user_input) if _wsp else {}
+            if _wsp and _wargs.get("city"):
+                _wcity = str(_wargs["city"])
+                _wres = _tool_result_str(run_tool("get_weather", {"city": _wcity}, force=True))
+                _wbad = (not _wres) or any(k in _wres for k in ("失败", "不可用", "Traceback"))
+                if not _wbad:
+                    tool_trace.append(_trace_entry("get_weather", {"city": _wcity}, _wres))
+                    _nums_need = re.findall(r"-?\d+(?:\.\d+)?", _wres)
+                    _wsaid = ""
+                    try:
+                        _wsaid = str(llm_chat([
+                            {"role": "system",
+                             "content": ("你刚查到「%s」的真实天气，**这是准确数据**：%s\n"
+                                         "只用这段数据回答，必须带上城市名和气温数字；"
+                                         "**不许编任何数字**，数据里没有的就别写。" % (_wcity, _wres))},
+                            {"role": "user", "content": str(user_input or "")}]) or "").strip()
+                    except Exception as _e:      # noqa: silent-ok — 措辞失败就用原始数据
+                        LOG.debug("天气措辞失败（用原始数据）：%s", _e)
+                    _waid = set(re.findall(r"-?\d+(?:\.\d+)?", _wsaid))
+                    if _wsaid and _nums_need and (set(_nums_need) & _waid):
+                        answer = _weather_cn(_wsaid)   # 英文天气词换成中文（数字不动）
+                    else:
+                        LOG.info("天气：模型没把真实数字说出来（%r）→ 直接给原始数据", _wsaid[:40])
+                        answer = "🌤️ %s 天气（wttr.in 实时数据，未经模型转述）：%s" % (_wcity, _weather_cn(_wres))
+                else:
+                    LOG.info("天气：get_weather 没查成功（%r）→ 走降级并如实说明", str(_wres)[:40])
+        except Exception as _e:      # noqa: silent-ok — 天气这条挂了不能拖垮整轮
+            LOG.debug("天气直查失败（忽略）：%s", _e)
+
     # 1b3. 问"现在几点/今天几号" → **真实时间算好，但要它自己说**（用户要求：别给模板）
     #      历史：这一步原来靠模型自己答，实测它会**编日期**（答"2025 年 1 月 13 日"）、
     #      或者说"我无法获取实时时间" —— 所以改成规则直答。**但规则直答的毛病也很明显：
@@ -11909,7 +12050,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 _q, _qhint = (_route["search_query"] or ""), ""
                 if not _q:
                     _q, _qhint = resolve_search_query(_search_src)
-            if _q:
+            if _q and _web_allowed_this_turn():
                 info = web_search(_q, num=5)
                 # **把内置检索也记进工具轨迹**（本轮实测的体验缺口）：
                 # 它走的是"提醒词前先检索"这条老路，不是工具调用，于是 tool_trace 是空的 ——
@@ -12540,6 +12681,43 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             tname, targs = plan_tool(user_input)
             if tname:
                 tname, targs = _map_tool(tname, targs)
+                # ---- 兜底也要过「本轮工具门」（2026-10-17）----
+                # 【为什么必须有这一条】实测：问天气时模型没自己调工具 → 走到这条兜底 →
+                #   这里原来是 `run_tool(..., force=True)`，**绕过了隔离和工具门**，
+                #   于是"这一轮明明没装载 web_search"，兜底还是去搜了一遍（日志里只看到 web_search）。
+                #   现在：不在本轮装载里就换成**本轮装载的专用工具**（并尽量把参数补上），
+                #   补不出来就**不执行**（宁可少做一步，也不背着隔离偷偷调）。
+                _gate_ok, _ = True, ""
+                try:
+                    from core import tool_gate as _TGb
+                    _gate_ok, _ = _TGb.check(tname)
+                    if not _gate_ok:
+                        _alt, _aargs = "", {}
+                        try:
+                            from core import tool_isolation as _TIb
+                            _loaded = set(_TGb.current().get("loaded") or [])
+                            _sp = _TIb.specialized_for(user_input, available=_loaded)
+                            if _sp:
+                                _alt = _sp[0]
+                                _aargs = _specialized_args(_alt, user_input)
+                        except Exception as _e2:      # noqa: silent-ok
+                            LOG.debug("兜底替代工具计算失败（忽略）：%s", _e2)
+                        if _alt:
+                            _aargs = _specialized_args(_alt, user_input)
+                            # 天气这类**必须**有目标参数的：抽不出城市就**不换**（不能拿默认城市糊弄用户）
+                            if _alt == "get_weather" and not _aargs:
+                                LOG.info("工具门：想换用 get_weather，但没从话里认出城市 → 不执行兜底")
+                                tname = ""
+                            else:
+                                LOG.info("工具门：兜底原想调 %s（本轮没装载）→ 换成专用工具 %s",
+                                         tname, _alt)
+                                tname, targs = _alt, _aargs
+                        else:
+                            LOG.info("工具门：兜底原想调 %s（本轮没装载）且没有可替代的专用工具 → 不执行", tname)
+                            tname = ""
+                except Exception as _e:      # noqa: silent-ok — 门不可用就按原路径（force）
+                    LOG.debug("兜底工具门不可用（忽略）：%s", _e)
+            if tname:
                 result = _tool_result_str(run_tool(tname, targs, force=True))
                 tool_trace.append(_trace_entry(tname, targs, result))
                 if _carrier_block(result):
