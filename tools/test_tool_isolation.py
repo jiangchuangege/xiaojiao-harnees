@@ -85,6 +85,17 @@ def main():
     only_news = app._intent_tool_names("query", "最近有什么新闻")
     ck("走真实入口：新闻这轮的工具表里**有** web_search", "web_search" in only_news, only_news)
     ck("隔离后这一轮工具表不为空（不能把桌子清空）", len(only_weather) >= 1, only_weather)
+    # 【2026-10-17 修漏】早前只对 query 意图过隔离；"今天天气怎么样"（不带城市）判成 chat，
+    #     走的是"未知意图 → 核心集"那条早返回，通用兜底就这么混回来了。
+    for _it in ("chat", "unknown_intent_for_test"):
+        _names_chat = app._intent_tool_names(_it, "今天天气怎么样")
+        ck("意图=%s 也要过隔离：本轮工具表里没有 web_search" % _it,
+           "web_search" not in _names_chat, _names_chat)
+        ck("意图=%s 也要过隔离：get_weather 留下" % _it,
+           "get_weather" in _names_chat, _names_chat)
+    _core_weather = app._isolate_names(app._FULL_CORE_TOOLS, "今天天气怎么样")
+    ck("寒暄轮的核心集兜底也过隔离（又一早返回口）",
+       "web_search" not in _core_weather and len(_core_weather) > 1, _core_weather[:6])
 
     # ---------------- 五、旁路也要管：抓取直通 / 天气降级 ----------------
     print("\n[五] 不走 run_tool 的旁路也必须受隔离约束")
@@ -105,8 +116,18 @@ def main():
        _scn)
     import inspect as _insp
     _src = _insp.getsource(app._weather_fallback)
-    ck("天气降级里那条 web_search 也过门了（不再背地里联网）",
-       "_web_allowed_this_turn" in _src, _src[:40].strip())
+    ck("天气降级是 get_weather 自己的失败降级（走得到这里就说明用了天气插件），默认允许且带来源标注",
+       'CAP.get("weather_web_fallback", True)' in _src and "数据来自网页检索，可能不准" in _src,
+       _src[_src.find("weather_web_fallback"):][:40])
+    _saved = dict(app.CAP)
+    app.CAP["weather_web_fallback"] = False
+    try:
+        _off = app._weather_fallback("get_weather", {"city": "菏泽"}, "查询失败")
+    finally:
+        app.CAP.clear()
+        app.CAP.update(_saved)
+    ck("把开关关掉 → 接口挂了也不联网，如实说查不到", "不拿网页检索兜底" in str(_off), str(_off)[:70])
+    ck("开关关掉时没去联网（返回里没有检索来源）", "参考来源" not in str(_off), str(_off)[:50])
 
     print("\n" + "=" * 80)
     print("  通过 %d / 共 %d%s" % (len(PASS), len(PASS) + len(FAIL),

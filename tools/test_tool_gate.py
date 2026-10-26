@@ -93,6 +93,37 @@ def main():
     ck("清掉上下文后放行（后台/其它入口不受影响）",
        not (isinstance(out3, str) and "没有装载" in out3), str(out3)[:50])
 
+    # ---------------- 七、规划之前就要管住（真实漏点） ----------------
+    print("\n[七] 联网发生在「工具规划之前」时也要拦住（不信记账表，按原话独立判）")
+    TG.clear()
+    TG.begin_turn("今天天气怎么样")
+    ck("还没规划工具，但原话命中专用工具 → 通用检索被拒",
+       TG.check("web_search")[0] is False)
+    ck("专用工具本身不受影响（它才是这一轮的正解）", TG.check("get_weather")[0] is True)
+    TG.clear()
+    TG.begin_turn("最近有什么新闻")
+    ck("原话没命中专用工具 → 通用检索照旧放行", TG.check("web_search")[0] is True)
+    # 记账表记错了（把通用兜底也记进来）也要挡：独立判据不能依赖调用方记什么
+    TG.set_turn(["get_weather", "web_search"], "帮我查下济南现在的天气")
+    ck("即使记账表里混进了通用兜底，命中原话时仍然拒（不信记账表）",
+       TG.check("web_search")[0] is False)
+    TG.set_turn(["get_weather"], "用 web_search 搜一下天气新闻")
+    ck("用户亲口点名仍优先（点名即装）", TG.check("web_search")[0] is True)
+    TG.clear()
+    ck("清掉之后回到「没有上下文」的放行语义", TG.check("web_search")[0] is True)
+
+    # ---------------- 八、上一轮的表不许管这一轮 ----------------
+    print("\n[八] 新的一轮一开始，上一轮的装载表就作废（否则会误伤下一轮）")
+    TG.set_turn(["get_weather", "read_file"], "帮我查下济南现在的天气")
+    ck("上一轮确实只装了 4 个（web_search 不在里面）", TG.check("web_search")[0] is False)
+    TG.begin_turn("最近有什么新闻")      # 新的一轮：还没规划工具
+    ck("新一轮原话没命中专用工具 → 联网在规划之前不被上一轮的表挡住",
+       TG.check("web_search")[0] is True, TG.current())
+    TG.begin_turn("今天天气怎么样")
+    ck("新一轮原话命中专用工具 → 仍然挡通用兜底（该挡的还得挡）",
+       TG.check("web_search")[0] is False)
+    TG.clear()
+
     print("\n" + "=" * 80)
     print("  通过 %d / 共 %d%s" % (len(PASS), len(PASS) + len(FAIL),
                                   ("（失败：%s）" % "、".join(FAIL)) if FAIL else ""))
