@@ -1254,6 +1254,11 @@ class SessionManager:
             if rec:
                 rec["last_used"] = time.time()
 
+    def known(self, sid: str) -> bool:
+        """这个会话本插件登记过吗？（用来识别"模型自己编出来的 session_id"）"""
+        with self._lock:
+            return bool(str(sid or "")) and str(sid) in self._sessions
+
     def forget(self, sid: str) -> None:
         with self._lock:
             self._sessions.pop(sid, None)
@@ -2115,12 +2120,12 @@ class ScraplingBridge:
             T("list_sessions", "查现在还有哪些会话开着。什么时候用：排障、确认自己有没有忘记 close_session；无参数；输出 会话列表", {}, []),
             T("session_fetch", "在**已开浏览器会话**里抓页面(保持登录态/已过验证)。什么时候用：先 open_session 再抓；输入 url + session_id；输出 页面正文",
               {"url": S_URL, "session_id": S_SID, "wait_selector": S_WAIT, "ignore_robots": S_IGN},
-              ["url", "session_id"]),
-            T("session_make_request", "在**已开 HTTP 会话**里发请求(保持 cookie)。什么时候用：open_request_session 之后；输入 url + session_id；输出 响应正文",
-              {"url": S_URL, "session_id": S_SID, "ignore_robots": S_IGN}, ["url", "session_id"]),
-            T("screenshot", "给页面截图并存到本地。什么时候用：需要页面长什么样/留证据；输入 url + session_id，可选 full_page 整页；输出 图片路径(media/screenshot/)",
+              ["url"]),
+            T("session_make_request", "在**已开 HTTP 会话**里发请求(保持 cookie)。什么时候用：open_request_session 之后；输入 url（session_id 可不填）；输出 响应正文",
+              {"url": S_URL, "session_id": S_SID, "ignore_robots": S_IGN}, ["url"]),
+            T("screenshot", "给页面截图并存到本地。什么时候用：需要页面长什么样/留证据；输入 url（session_id 不用填，载体自己开会话）；输出 图片路径(media/screenshot/)",
               {"url": S_URL, "session_id": S_SID, "full_page": S_FULL, "ignore_robots": S_IGN},
-              ["url", "session_id"]),
+              ["url"]),
             # ---------- 小焦增强（原生没有 / 更好用）----------
             T("get", "**抓网页首选**(纯HTTP，最快)。什么时候用：静态页/接口/JSON 一律先用它；输入 url(可选 stealth/timeout/save_to)；输出 页面正文+HTTP状态。被拦或正文空 → 再依次换 fetch → stealthy_fetch",
               {"url": S_URL, "stealth": S_STEALTH, "timeout": S_TO, "save_to": S_SAVE, "ignore_robots": S_IGN}, ["url"]),
@@ -2894,9 +2899,32 @@ class ScraplingBridge:
         if not ok:
             return fmt_result(0, url, "", why)
         _GUARD.wait_rate_limit(url)
-        if not sid:
-            return fmt_result(0, url, "",
-                              "%s 需要提供 session_id（先调用 open_session / open_request_session）" % tool)
+        # 【2026-10-17 加：会话由载体自己管，不许模型去编】
+        #   实测（用户反馈）：说「帮我爬一下电子书 <网址> 下载到 G:\dzs」，模型去调 `screenshot`，
+        #   还**自己编了一个 session_id**（session_20240101_001 / _002）→ 插件回
+        #   "会话 session_20240101_001 不存在" → 连错两次 → 整体"已停止"。
+        #   用户不该知道"会话"是什么。所以：没给会话、或给的会话本插件压根没登记过，
+        #   就**自动开一个浏览器会话**再用，并在结果里说明一句。
+        _auto_note = ""
+        if not sid or not _SESSIONS.known(sid):
+            try:
+                _oargs = {"session_type": "dynamic", "headless": self._cfg.headless}
+                if self._cfg.executable_path:
+                    _oargs["executable_path"] = self._cfg.executable_path
+                _oout = self._session_call("open_session", _oargs)
+                _nsid = _sid_of(_oout)
+                if _nsid:
+                    _SESSIONS.register(_nsid, "dynamic")
+                    _auto_note = "（没给可用会话，载体自动开了 %s）" % _nsid
+                    LOG.info("会话类工具 %s：%s", tool, _auto_note)
+                    sid = _nsid
+                else:
+                    return fmt_result(0, url, "",
+                                      "开不了浏览器会话（Scrapling 没返回 session_id）：%s"
+                                      % str(_oout)[:200])
+            except Exception as e:      # noqa: silent-ok — 开会话失败要如实说，不假装能跑
+                return fmt_result(0, url, "", "开浏览器会话失败：%s: %s"
+                                  % (type(e).__name__, str(e)[:160]))
 
         if tool == "session_fetch":
             _SESSIONS.touch(sid)                       # 改进 1：用过就算"活着"，不会因空闲被回收
@@ -2908,14 +2936,16 @@ class ScraplingBridge:
                 args["solve_cloudflare"] = True
             if p.get("blocked_domains"):
                 args["blocked_domains"] = p["blocked_domains"]
-            return self._session_call("session_fetch", args)
+            _o = self._session_call("session_fetch", args)
+            return (_o + ("\n" + _auto_note if _auto_note else ""))
 
         if tool == "session_make_request":
             _SESSIONS.touch(sid)
             out = self._session_call("session_make_request",
                                      {"url": url, "session_id": sid, "method": "GET",
                                       "extraction_type": _EXTRACT_TYPE})
-            return _session_mismatch_hint(out, sid, "session_make_request")
+            out = _session_mismatch_hint(out, sid, "session_make_request")
+            return (out + ("\n" + _auto_note if _auto_note else ""))
 
         if tool == "screenshot":
             _SESSIONS.touch(sid)
@@ -2923,7 +2953,8 @@ class ScraplingBridge:
                                      {"url": url, "session_id": sid,
                                       "image_type": p.get("image_type") or "png",
                                       "full_page": bool(p.get("full_page"))})
-            return _session_mismatch_hint(out, sid, "screenshot")
+            out = _session_mismatch_hint(out, sid, "screenshot")
+            return (out + ("\n" + _auto_note if _auto_note else ""))
 
         return fmt_result(0, url, "", "未知原生会话工具：%s" % tool)
 
