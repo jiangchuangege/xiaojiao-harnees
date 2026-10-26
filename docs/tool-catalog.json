@@ -1,6 +1,6 @@
 {
- "total": 99,
- "ok": 99,
+ "total": 101,
+ "ok": 101,
  "bad": 0,
  "tools": [
   {
@@ -885,6 +885,46 @@
    "problems": []
   },
   {
+   "plugin": "ebook",
+   "kind": "插件",
+   "name": "ebook_grab",
+   "description": "把公开电子书的文件下载到本地，遇付费墙跳过并说明。什么时候用：要成批存书；输入 url+out_dir",
+   "full_description": "把公开电子书的文件下载到本地，遇付费墙跳过并说明。什么时候用：要成批存书；输入 url+out_dir",
+   "required": [
+    "url",
+    "out_dir",
+    "limit"
+   ],
+   "properties": [
+    "url",
+    "out_dir",
+    "limit"
+   ],
+   "example": "ebook_grab({\"url\": \"https://example.com\", \"out_dir\": \"值\", \"limit\": 1})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "ebook",
+   "kind": "插件",
+   "name": "ebook_manifest",
+   "description": "解析公开书站目录页成书目清单（可存 CSV/MD）。什么时候用：要书目一览；输入 url；输出清单",
+   "full_description": "解析公开书站目录页成书目清单（可存 CSV/MD）。什么时候用：要书目一览；输入 url；输出清单",
+   "required": [
+    "url",
+    "out",
+    "limit"
+   ],
+   "properties": [
+    "url",
+    "out",
+    "limit"
+   ],
+   "example": "ebook_manifest({\"url\": \"https://example.com\", \"out\": \"值\", \"limit\": 1})",
+   "test": "通过",
+   "problems": []
+  },
+  {
    "plugin": "内置",
    "kind": "内置",
    "name": "edit_file",
@@ -1462,10 +1502,9 @@
    "kind": "插件",
    "name": "screenshot",
    "description": "给页面截图并存到本地。什么时候用：需要页面长什么样/留证据；",
-   "full_description": "给页面截图并存到本地。什么时候用：需要页面长什么样/留证据；输入 url + session_id，可选 full_page 整页；输出 图片路径(media/screenshot/)",
+   "full_description": "给页面截图并存到本地。什么时候用：需要页面长什么样/留证据；输入 url（session_id 不用填，载体自己开会话）；输出 图片路径(media/screenshot/)",
    "required": [
-    "url",
-    "session_id"
+    "url"
    ],
    "properties": [
     "url",
@@ -1473,7 +1512,7 @@
     "full_page",
     "ignore_robots"
    ],
-   "example": "screenshot({\"url\": \"https://example.com\", \"session_id\": \"值\"})",
+   "example": "screenshot({\"url\": \"https://example.com\"})",
    "test": "通过",
    "problems": []
   },
@@ -1502,8 +1541,7 @@
    "description": "在**已开浏览器会话**里抓页面(保持登录态/已过验证)。什么时候用：先 open_session 再抓；",
    "full_description": "在**已开浏览器会话**里抓页面(保持登录态/已过验证)。什么时候用：先 open_session 再抓；输入 url + session_id；输出 页面正文",
    "required": [
-    "url",
-    "session_id"
+    "url"
    ],
    "properties": [
     "url",
@@ -1511,7 +1549,7 @@
     "wait_selector",
     "ignore_robots"
    ],
-   "example": "session_fetch({\"url\": \"https://example.com\", \"session_id\": \"值\"})",
+   "example": "session_fetch({\"url\": \"https://example.com\"})",
    "test": "通过",
    "problems": []
   },
@@ -1520,17 +1558,16 @@
    "kind": "插件",
    "name": "session_make_request",
    "description": "什么时候用：open_request_session 之后；",
-   "full_description": "在**已开 HTTP 会话**里发请求(保持 cookie)。什么时候用：open_request_session 之后；输入 url + session_id；输出 响应正文",
+   "full_description": "在**已开 HTTP 会话**里发请求(保持 cookie)。什么时候用：open_request_session 之后；输入 url（session_id 可不填）；输出 响应正文",
    "required": [
-    "url",
-    "session_id"
+    "url"
    ],
    "properties": [
     "url",
     "session_id",
     "ignore_robots"
    ],
-   "example": "session_make_request({\"url\": \"https://example.com\", \"session_id\": \"值\"})",
+   "example": "session_make_request({\"url\": \"https://example.com\"})",
    "test": "通过",
    "problems": []
   },

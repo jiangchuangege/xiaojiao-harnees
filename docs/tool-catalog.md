@@ -3,7 +3,7 @@
 > 这份文件是 `tools/gen_tool_catalog.py` **自动生成**的，别手改 —— 
 > 改了工具描述就重跑一次；`tools/test_tool_contract.py` 会校验它和实际工具表是否一致。
 
-**全部工具：99 个 ｜ 契约合格：99 个 ｜ 不合格：0 个**
+**全部工具：101 个 ｜ 契约合格：101 个 ｜ 不合格：0 个**
 
 ## 怎么读这张表
 
@@ -113,6 +113,13 @@
 | `list_tables` | 列出库里所有表。什么时候用：不知道表名时先看这个；无参数；输出 表名列表 | `list_tables({})` | ✅ |
 | `query_db` | 跑一条 **SELECT**(只读)。什么时候用：要查数据；输入 sql；输出 结果集。不会写库、不许 DDL/DML | `query_db({"sql": "值"})` | ✅ |
 
+### 插件 · ebook（2 个工具）
+
+| 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
+| --- | --- | --- | --- |
+| `ebook_grab` | 把公开电子书的文件下载到本地，遇付费墙跳过并说明。什么时候用：要成批存书；输入 url+out_dir | `ebook_grab({"url": "https://example.com", "out_dir": "值", "limit": 1})` | ✅ |
+| `ebook_manifest` | 解析公开书站目录页成书目清单（可存 CSV/MD）。什么时候用：要书目一览；输入 url；输出清单 | `ebook_manifest({"url": "https://example.com", "out": "值", "limit": 1})` | ✅ |
+
 ### 插件 · ip（2 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
@@ -181,9 +188,9 @@
 | `open_request_session` | 开纯 HTTP 会话(保持 cookie，不开浏览器)。什么时候用：要连续请求同一站点且需带 cookie； | `open_request_session({})` | ✅ |
 | `open_session` | 开浏览器会话，用于登录态/过验证后再抓。什么时候用：目标页要登录或要先过 Cloudflare 挑战； | `open_session({})` | ✅ |
 | `scrape_with_selector` | 只取页面**指定区块**(CSS 选择器)，且自适应抗改版。什么时候用：只要某一块(正文/列表)或站点常改版； | `scrape_with_selector({"url": "https://example.com", "selector": "值"})` | ✅ |
-| `screenshot` | 给页面截图并存到本地。什么时候用：需要页面长什么样/留证据； | `screenshot({"url": "https://example.com", "session_id": "值"})` | ✅ |
-| `session_fetch` | 在**已开浏览器会话**里抓页面(保持登录态/已过验证)。什么时候用：先 open_session 再抓； | `session_fetch({"url": "https://example.com", "session_id": "值"})` | ✅ |
-| `session_make_request` | 什么时候用：open_request_session 之后； | `session_make_request({"url": "https://example.com", "session_id": "值"})` | ✅ |
+| `screenshot` | 给页面截图并存到本地。什么时候用：需要页面长什么样/留证据； | `screenshot({"url": "https://example.com"})` | ✅ |
+| `session_fetch` | 在**已开浏览器会话**里抓页面(保持登录态/已过验证)。什么时候用：先 open_session 再抓； | `session_fetch({"url": "https://example.com"})` | ✅ |
+| `session_make_request` | 什么时候用：open_request_session 之后； | `session_make_request({"url": "https://example.com"})` | ✅ |
 | `stealthy_fetch` | 什么时候用：get 和 fetch 都失败(403/挑战页)才用，开销最大； | `stealthy_fetch({"url": "https://example.com"})` | ✅ |
 
 ### 插件 · video_generation（1 个工具）
