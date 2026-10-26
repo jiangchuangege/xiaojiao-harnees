@@ -89,6 +89,25 @@ def main():
         req = (fn.get("parameters") or {}).get("required") or []
         ck("%s 的 session_id 不是必填" % name, "session_id" not in req, req)
 
+    # ---------------- 五、抓来的正文展示前要去噪（用户实测"满屏方括号"） ----------------
+    print("\n[五] 抓来的正文：展示前去掉站点导航/图片/按钮词，正文一个字不动")
+    raw = ("[跳转到主内容] (#content)\n"
+           "[![站标] (/logo.png)] (/)\n"
+           "打开搜索\n关闭搜索\n开始!\n"
+           "[捐赠] (/donate/)\n"
+           "[阅读选项和Kindle] (/help/reading_options.html)\n\n"
+           "《傲慢与偏见》是一部于1813年出版的小说，故事讲了伊丽莎白·班纳特。\n\n"
+           "[立即阅读！] (/cache/epub/1342/1342-images.html)\n")
+    show = app._display_body(raw, 800)
+    ck("站点导航链接不见了", "/donate/" not in show and "#content" not in show, show[:60])
+    ck("图片语法不见了", "logo.png" not in show and "![" not in show, show[:60])
+    ck("按钮词（打开搜索/关闭搜索）不见了",
+       "打开搜索" not in show and "关闭搜索" not in show, show[:60])
+    ck("正文原样保留（一个字都不改）", "《傲慢与偏见》是一部于1813年出版的小说" in show, show[:80])
+    ck("去噪后不再有明显的方括号堆", show.count("[") <= 1, show[:80])
+    ck("超长正文会截断并说明", app._display_body("正文" * 2000, 100).endswith("全文见保存的文件）"),
+       app._display_body("正文" * 2000, 100)[-20:])
+
     print("\n" + "=" * 80)
     print("  通过 %d / 共 %d%s" % (len(PASS), len(PASS) + len(FAIL),
                                   ("（失败：%s）" % "、".join(FAIL)) if FAIL else ""))

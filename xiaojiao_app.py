@@ -6683,6 +6683,71 @@ _EBOOK_WORDS = ("电子书", "电子版", "书库", "书单", "书目", "这本�
 _EBOOK_LIST_HINTS = ("清单", "书目", "目录", "列表", "列一下", "有哪些", "导出", "整理成")
 
 
+# 页面按钮/导航词：整行只有它就丢掉（抓来的正文里这些通常出现在最前面，占满屏幕）
+_UI_NOISE = ("打开搜索", "关闭搜索", "搜索", "菜单", "首页", "登录", "注册", "捐赠", "关于",
+             "联系我们", "更多", "展开", "收起", "分享", "收藏", "上一页", "下一页",
+             "查看全部", "立即购买", "加入购物车", "开始", "返回", "顶部")
+
+
+def _display_body(text, limit=1500):
+    """把抓来的正文整理成"能看的几段"：去掉站点导航/图片语法/纯链接行，折叠空行。
+
+    【为什么需要】抓回来的正文最前面常常是这样一堆东西：
+
+        [跳转到主内容] (#content)
+        [![站标] (/logo.png)] (/)
+        打开搜索   关闭搜索   开始!
+        [捐赠] (/donate/)
+        [阅读选项和Kindle] (/help/reading_options.html)
+
+    用户实测的原话是「这个页面是不是显示有点问题」—— 他看到的满屏方括号。
+    这里只做**去噪**：删掉"整行只有一个链接/一张图片/一个锚点"的行，折叠多余空行。
+    正文一个字都不改、也不删正文（存到本地的文件仍是完整原文，见 `_scrape_save_body`）。
+    """
+    t = str(text or "")
+    t = re.sub(r"!\[[^\]\n]*\]\s*\([^)\n]*\)", "", t)          # 图片语法（含站标）整段去掉
+    # 先把 `[文字](网址 "标题")` 的**标题部分**去掉（转换器常把标题里的括号也带上，
+    # 于是后面按括号匹配就会断在半路，留下 `EPUB (older e-readers))")` 这种尾巴）。
+    t = re.sub(r"\]\s*\(([^)\n\"]+?)\s+\"[^\"]*\"\s*\)", r"](\1)", t)
+    # 站内相对链接（`[文字] (/help/…)`）只留文字：聊天里点不了站内路径，留着只是噪音；
+    # 绝对地址（http…）**保留** —— 用户可能真想点开。
+    t = re.sub(r"\[([^\]\n]{1,80})\]\s*\((/[^)\n]*)\)", r"\1", t)
+    # 有些页面转换出来**丢了左括号**（`推荐！](/ebooks/x.epub)`），这种残尾也清掉；
+    # 只清相对地址的残尾，绝对地址的链接一个字都不动。
+    t = re.sub(r"\]\s*\(/[^)\n]*\)", "", t)
+    keep = []
+    for ln in t.split("\n"):
+        s = ln.strip()
+        if not s:
+            keep.append("")
+            continue
+        if re.fullmatch(r"\[[^\]\n]*\]\s*\([^)\n]*\)", s):      # 整行就是一个链接
+            continue
+        if re.fullmatch(r"\([#/][^)\n]*\)", s):                 # 整行只有一个锚点/相对地址
+            continue
+        if re.fullmatch(r"[-*+]\s*\[[^\]\n]*\]\s*\([^)\n]*\)", s):   # 列表项只有链接
+            continue
+        if re.fullmatch(r"[…\.·\s]{1,8}", s):                    # 只剩省略号/点
+            continue
+        if re.fullmatch(r"\d+(?:\.\d+)?\s*(?:MB|KB|GB|B)", s):    # 只有文件大小
+            continue
+        if re.fullmatch(r"[A-Za-z!?.\s]{1,12}", s):              # 只有几个英文单词的按钮
+            continue
+        if len(s) <= 12 and not re.search(r"[\u4e00-\u9fff]{4,}|[.。！？!?]", s):
+            continue                                            # 太短的碎片，基本是按钮/标签
+        if s.strip("!！.。 ") in _UI_NOISE:                      # 页面按钮/导航词（整行就是它）
+            continue
+        # 一行里塞了好几个导航链接 → 链接去掉后变成"关于 常见问题 帮助"这种没标点的碎词堆。
+        # 判据卡得紧：**不是标题**、没有标点、没有数字、且很短 —— 真正的正文几乎不会长这样。
+        if (not s.startswith("#") and len(s) <= 30
+                and not re.search(r"[，。！？；：、,.!?;:]", s)
+                and not re.search(r"[0-9]", s)):
+            continue
+        keep.append(ln.rstrip())
+    t = re.sub(r"\n{3,}", "\n\n", "\n".join(keep)).strip()
+    return t[:limit] + ("…（后略，全文见保存的文件）" if len(t) > limit else "")
+
+
 def _scrape_save_target(text):
     """句子里给了保存位置吗？给了就返回那段路径（原样，不改写），没给返回空。"""
     try:
@@ -6956,21 +7021,21 @@ def _scrape_direct(user_input, tool_trace, force_intent=None):
                         "- 文件：`%s`\n- 来源：%s\n- 大小：%d 字符 ｜ %d 行%s\n\n"
                         "正文开头（前 300 字）：\n\n%s"
                         % (_spath, _jd.get("url", ""), len(_body), _body.count("\n") + 1,
-                           _snote, _fence_body(_body[:300])))
+                           _snote, _fence_body(_display_body(_body, 300))))
                 if _nlink >= 5:
                     _ans += ("\n\n🔎 这一页里有 %d 个链接，看着像**目录页** —— "
                              "要不要我逐章抓下来（说「把每章都抓下来存到同一目录」）？" % _nlink)
             else:
                 _ans = ("⚠️ 抓到了，但**没能存到本地**：%s\n\n"
                         "（正文我照常给你，下面这段就是抓到的内容）\n\n%s"
-                        % (_snote, _fence_body(_body[:2000])))
+                        % (_snote, _fence_body(_display_body(_body, 2000))))
             if _suspect_note:
                 _ans = _suspect_note + "\n\n" + _ans
             return _ans, tool_trace
         # 单页：正文 + 解读
         _ans = "🌐 **%s** · HTTP %s\n\n%s" % (
             _jd.get("url", ""), _jd.get("status", ""),
-            _fence_body(_body[:4000]) or "(页面无正文)")
+            _fence_body(_display_body(_body, 4000)) or "(页面无正文)")
         _exp = _explain_content(_body, _jd.get("url", ""))
         if _exp:
             _ans += "\n\n---\n\n📖 **小焦解读**\n\n" + _exp
@@ -17431,7 +17496,13 @@ function mathify(el){
 function inline(t){t=t.replace(/\*\*([^\n*]+)\*\*/g,'<strong>$1</strong>')
   .replace(/(^|\n)#{1,6}\s+([^\n]+)/g,'<h3>$2</h3>')
   .replace(/`([^`\n]+)`/g,'<code>$1</code>')
-  .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>')
+  // 【2026-10-17 补：抓来的网页正文里，链接常写成 `[文字] (网址)`（中括号和圆括号之间有空格）】
+  //   原来的正则要求紧挨着 `](http…`，于是这类链接**一条都渲染不出来**，
+  //   用户看到的就是满屏 `[捐赠] (/donate/)` 这种方括号 —— 实测截图里就是这个样子。
+  //   现在：允许中间有空格；图片语法（`![alt] (x.png)`）直接去掉，锚点链接（`](#top)`）只留文字。
+  .replace(/!\[[^\]\n]*\]\s*\([^)\n]*\)/g,'')
+  .replace(/\[([^\]\n]{1,80})\]\s*\((#[^)\n]*)\)/g,'$1')
+  .replace(/\[([^\]\n]{1,80})\]\s*\((https?:\/\/[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>')
   .replace(/^[-*]\s+/gm,'· ')
   .replace(/\n/g,'<br>');return t;}
 // ===== 语法高亮：按语言分词上色（关键字/字符串/数字/注释/函数名/JSON 键…）=====
