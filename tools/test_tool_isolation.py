@@ -142,6 +142,10 @@ def main():
        app._specialized_args("get_weather", _typo))
     ck("同一城市但问的是吃喝 → 不误判成天气", app._weather_intent("菏泽有什么好吃的") is False)
     ck("换成别的城市 → 不误判（没查过它）", app._weather_intent("最近去济南旅游行不行") is False)
+    ck("城市名撞上普通词也不误判（日照时间长适合晒被子）",
+       app._weather_intent("日照时间长适合晒被子") is False
+       or app._weather_recent_city("日照时间长适合晒被子") == "",
+       app._weather_recent_city("日照时间长适合晒被子"))
     ck("与天气无关的请求不受影响", app._weather_intent("帮我写个快速排序") is False)
     app._WEATHER_LAST["at"] = 0.0        # 过期（半小时前）→ 不拿旧数据冒充现在
     ck("天气结果过期后不再据此判定", app._weather_intent(_typo) is False)

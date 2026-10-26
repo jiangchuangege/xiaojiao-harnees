@@ -8707,8 +8707,11 @@ def _weather_cn(text):
 #   加上"去 / 能不能 / 适合 / 冷不冷"这类要拿天气做决定的话 → 就按天气问题处理。
 _WEATHER_LAST = {"city": "", "text": "", "at": 0.0}
 _WEATHER_TTL = 1800.0          # 半小时内的天气还算"当前"；再久就重查，不拿旧数据冒充现在
-_WEATHER_DECIDE_HINTS = ("去", "来", "出门", "旅游", "玩", "适合", "合适", "能不能", "可以",
-                         "带伞", "要不要", "冷", "热", "晒", "穿", "出行", "爬山", "露营", "下雨")
+# 【为什么这条要收窄】判据靠"句子里出现了刚查过的城市"，但有些城市名本身是普通词
+#   （「日照」：日照时间长、日照充足），放宽一点就会把"晒被子"当成问天气。
+#   所以只认**明确的出行动作**；"适合/可以/冷/热"这类太泛的词不参与这条捷径
+#   （它们仍可以走词表那条路，词表里本来就有"天气/气温/冷不冷"）。
+_WEATHER_TRAVEL_HINTS = ("去", "到", "来", "旅游", "出行", "出门", "玩", "爬山", "露营", "自驾")
 
 
 def _weather_note_success(city, text):
@@ -8746,7 +8749,7 @@ def _weather_intent(text):
             return True
     except Exception:      # noqa: silent-ok — 隔离模块不在就只看下面那条判据
         pass
-    return bool(_weather_recent_city(q)) and any(k in q for k in _WEATHER_DECIDE_HINTS)
+    return bool(_weather_recent_city(q)) and any(k in q for k in _WEATHER_TRAVEL_HINTS)
 
 
 def _web_allowed_this_turn():
