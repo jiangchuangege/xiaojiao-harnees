@@ -4483,9 +4483,9 @@ def llm_online():
 import subprocess
 
 TOOLS = [
-    {"type": "function", "function": {"name": "check_env", "description": "检测电脑环境装没装东西(只读): 检查 python/git/node/ffmpeg 等是否安装及版本。用于'帮我装环境/配置'场景, 只给建议不执行。",
+    {"type": "function", "function": {"name": "check_env", "description": "查电脑装没装 python/git/node/ffmpeg（只读）。什么时候用：问环境/能不能跑；输入 无；输出 版本清单",
      "parameters": {"type": "object", "properties": {"items": {"type": "string", "description": "要检测的工具, 逗号分隔"}}, "required": []}}},
-    {"type": "function", "function": {"name": "suggest_organize", "description": "整理文件建议(只读): 扫描一个目录, 按类型/日期给出整理到哪里的建议。用于'整理桌面/文件夹'。只给建议清单, 确认才移动。",
+    {"type": "function", "function": {"name": "suggest_organize", "description": "扫目录给出整理建议（只读，不移动文件）。什么时候用：想整理桌面/文件夹；输入 path；输出 建议清单",
      "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "要整理的目录"}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "run_command", "description": "跑一条系统命令并回显输出(PowerShell 语法)。什么时候用：要真的执行程序/脚本/安装/查系统信息；输入 command(多条命令用分号，不能用 && )，可选 timeout；输出 命令输出。写文件请用 write_file，别用它",
      "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "要执行的命令"},
@@ -4500,7 +4500,7 @@ TOOLS = [
     {"type": "function", "function": {"name": "write_file", "description": "新建/覆盖写入文件(自动建目录)。什么时候用：要产出文件(代码/网页/文档/配置)；输入 path(Windows 绝对路径) + content；输出 写入结果。**改**已有文件请用 edit_file，避免整篇覆盖",
      "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "文件路径"},
                     "content": {"type": "string", "description": "写入的内容"}}, "required": ["path", "content"]}}},
-    {"type": "function", "function": {"name": "edit_file", "description": "在文本文件里精准替换一段内容(第一次出现的)。用于改代码/配置。path=文件, old_string=原文, new_string=新文。",
+    {"type": "function", "function": {"name": "edit_file", "description": "在文本文件里替换首次出现的一段。什么时候用：改代码/配置的小改；输入 path/old/new；输出 结果",
      "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "文件路径"}, "old_string": {"type": "string", "description": "要被替换的原文"}, "new_string": {"type": "string", "description": "替换成的新文"}}, "required": ["path", "old_string", "new_string"]}}},
     {"type": "function", "function": {"name": "search_files", "description": "按文件名找文件(glob)。什么时候用：找某个文件在哪；输入 path + pattern(如 **/*.py)；输出 文件路径列表。找**内容**请用 grep_files",
      "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "要搜索的目录"}, "pattern": {"type": "string", "description": "文件名模式如 *.txt"}}, "required": ["path", "pattern"]}}},
@@ -4508,11 +4508,11 @@ TOOLS = [
      "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "要搜索的目录"}, "pattern": {"type": "string", "description": "关键词或正则"}}, "required": ["path", "pattern"]}}},
     {"type": "function", "function": {"name": "fetch_url", "description": "直接读一个网址/接口的返回内容(纯HTTP，最轻)。什么时候用：只想快速拿文本/JSON，不需要渲染或过风控；输入 url；输出 返回文本。复杂页面(要登录/JS渲染/被风控)用 get → fetch → stealthy_fetch",
      "parameters": {"type": "object", "properties": {"url": {"type": "string", "description": "网址"}}, "required": ["url"]}}},
-    {"type": "function", "function": {"name": "ask_user", "description": "向用户提问并给出选项，等待用户选择。用于需要用户拍板时。question=问题, options=选项列表(逗号分隔)。",
+    {"type": "function", "function": {"name": "ask_user", "description": "向用户提问并给选项，等你拍板。什么时候用：需要你决定时；输入 question/options；输出 你的选择",
      "parameters": {"type": "object", "properties": {"question": {"type": "string", "description": "要问的问题"}, "options": {"type": "string", "description": "选项，逗号分隔"}}, "required": ["question"]}}},
-    {"type": "function", "function": {"name": "background", "description": "在后台运行一条命令(不阻塞)，立即返回任务id。稍后用 background_result 查结果。用于耗时任务。",
+    {"type": "function", "function": {"name": "background", "description": "后台跑命令，立即返回 job_id。什么时候用：任务耗时长等不了；输入 command；输出 任务号",
      "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "要后台运行的命令"}, "timeout": {"type": "number", "description": "超时秒数默认120"}}, "required": ["command"]}}},
-    {"type": "function", "function": {"name": "background_result", "description": "查询后台任务(background启动的)的结果。job_id=任务id。",
+    {"type": "function", "function": {"name": "background_result", "description": "查后台任务结果。什么时候用：拿到 job_id 之后要看结果；输入 job_id；输出 输出文本",
      "parameters": {"type": "object", "properties": {"job_id": {"type": "string", "description": "后台任务id"}}, "required": ["job_id"]}}},
 ]
 
@@ -8913,9 +8913,13 @@ def _weather_cn(text):
 #   症结很明确：**判据是词表，用户换个说法（或打个错字）整条链就失效**。
 #   这里补一条更硬的信号：**句子里出现的城市，正是刚刚查过天气的那个**，
 #   加上"去 / 能不能 / 适合 / 冷不冷"这类要拿天气做决定的话 → 就按天气问题处理。
-_WEATHER_LAST = {"city": "", "text": "", "at": 0.0}
+_WEATHER_LAST = {}             # 城市 -> {"text": 数据, "at": 时间}（记最近几个城市，不是只记一个）
 _WEATHER_TTL = 1800.0          # 半小时内的天气还算"当前"；再久就重查，不拿旧数据冒充现在
-# 【为什么这条要收窄】判据靠"句子里出现了刚查过的城市"，但有些城市名本身是普通词
+_WEATHER_KEEP = 20             # 最多记 20 个城市，超了丢最旧的
+# 【为什么必须记多个】评测当场抓到的真缺陷：先问「菏泽天气」→ 再问「合肥天气」→
+#   再问「最近去**菏泽**旅游能不能去」时，"最近查过的城市"已被合肥覆盖，
+#   于是菏泽这句认不出来、也不去查天气。用户侧的感受就是"刚查过它就忘了"。
+# 【为什么这条收窄】判据靠"句子里出现了刚查过的城市"，但有些城市名本身是普通词
 #   （「日照」：日照时间长、日照充足），放宽一点就会把"晒被子"当成问天气。
 #   所以只认**明确的出行动作**；"适合/可以/冷/热"这类太泛的词不参与这条捷径
 #   （它们仍可以走词表那条路，词表里本来就有"天气/气温/冷不冷"）。
@@ -8923,25 +8927,35 @@ _WEATHER_TRAVEL_HINTS = ("去", "到", "来", "旅游", "出行", "出门", "玩
 
 
 def _weather_note_success(city, text):
-    """记下"刚查到的这个城市 + 数据"（带时间戳），供下一轮直接引用。"""
+    """记下"刚查到的这个城市 + 数据"（带时间戳），供后面几轮直接引用。"""
     try:
-        _WEATHER_LAST["city"] = str(city or "").strip()
-        _WEATHER_LAST["text"] = str(text or "").strip()
-        _WEATHER_LAST["at"] = time.time()
+        c = str(city or "").strip()
+        if not c:
+            return
+        _WEATHER_LAST[c] = {"text": str(text or "").strip(), "at": time.time()}
+        if len(_WEATHER_LAST) > _WEATHER_KEEP:
+            _oldest = min(_WEATHER_LAST, key=lambda k: _WEATHER_LAST[k].get("at") or 0)
+            _WEATHER_LAST.pop(_oldest, None)
     except Exception:      # noqa: silent-ok — 记不下来只是少一条捷径，不影响本轮回答
         pass
 
 
 def _weather_recent_city(text):
-    """这句话提到的城市，是不是刚查过天气的那个？（是就返回城市名，否则返回空）"""
+    """这句话提到的城市，是刚才查过天气的那些里的哪个？（命中返回城市名，否则空）
+
+    多个城市同时出现在句子里时，返回**最近查过的那个**。
+    """
     try:
-        city = str(_WEATHER_LAST.get("city") or "").strip()
         q = str(text or "")
-        if not city or not q:
+        if not q or not _WEATHER_LAST:
             return ""
-        if (time.time() - float(_WEATHER_LAST.get("at") or 0)) > _WEATHER_TTL:
+        _now = time.time()
+        _hits = [(_rec.get("at") or 0, c) for c, _rec in _WEATHER_LAST.items()
+                 if c in q and (_now - float(_rec.get("at") or 0)) <= _WEATHER_TTL]
+        if not _hits:
             return ""
-        return city if city in q else ""
+        _hits.sort(reverse=True)
+        return _hits[0][1]
     except Exception:      # noqa: silent-ok — 判不出来就当没有这条捷径
         return ""
 

@@ -132,7 +132,7 @@ def main():
     # ---------------- 六、判据不能只靠"天气"两个字 ----------------
     print("\n[六] 判据是词表的边界：换个说法 / 打个错字也要认得出是天气")
     _typo = "最近去菏泽旅游根据天去是否可以去"       # 用户真打的句子，"天去"是错字
-    app._WEATHER_LAST["city"], app._WEATHER_LAST["text"], app._WEATHER_LAST["at"] = "", "", 0.0
+    app._WEATHER_LAST.clear()          # 换个干净的起点（现在记的是"城市 -> 数据"的字典）
     ck("没查过任何城市时，这句（无天气词）不硬判成天气", app._weather_intent(_typo) is False)
     app._weather_note_success("菏泽", "菏泽天气：阴天 +13°C")
     ck("刚查过菏泽 → 同一句认出来了（靠城市 + 去/可以这类做决定的话）",
@@ -147,9 +147,18 @@ def main():
        or app._weather_recent_city("日照时间长适合晒被子") == "",
        app._weather_recent_city("日照时间长适合晒被子"))
     ck("与天气无关的请求不受影响", app._weather_intent("帮我写个快速排序") is False)
-    app._WEATHER_LAST["at"] = 0.0        # 过期（半小时前）→ 不拿旧数据冒充现在
+    # 过期（半小时前）→ 不拿旧数据冒充现在
+    for _c, _rec in list(app._WEATHER_LAST.items()):
+        _rec["at"] = 0.0
     ck("天气结果过期后不再据此判定", app._weather_intent(_typo) is False)
+    app._WEATHER_LAST.clear()
     app._weather_note_success("菏泽", "菏泽天气：阴天 +13°C")
+    # 多城市：先查菏泽、再查合肥，问"去菏泽"仍然认得出（评测当场抓到的真缺陷）
+    app._weather_note_success("合肥", "合肥天气：阴 +23°C")
+    ck("查过两个城市后，问先查的那个仍然命中",
+       app._weather_intent("最近去菏泽旅游根据天去是否可以去") is True,
+       list(app._WEATHER_LAST.keys()))
+    ck("问后查的那个也命中", app._weather_intent("去合肥玩冷不冷") is True)
 
     # 上一轮的"查不到/接口不可用"不许被当成事实喂回下一轮
     from core.mind_stream import inject as _MSI

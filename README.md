@@ -177,6 +177,9 @@ flowchart TB
 
 | 想了解 | 看这篇 |
 | --- | --- |
+| **它现在到底有多强（端到端评测基线）** | [`docs/eval-baseline.md`](docs/eval-baseline.md) |
+| **101 个工具在这台机器上能不能用（能力体检）** | [`docs/capability-health.md`](docs/capability-health.md) |
+| 工具清单（101 个工具怎么精准调） | [`docs/tool-catalog.md`](docs/tool-catalog.md) |
 | 设计哲学与工程依据（22 节） | [`docs/design-philosophy.md`](docs/design-philosophy.md) |
 | 架构图册（22 张 Mermaid） | [`docs/architecture-diagrams.md`](docs/architecture-diagrams.md) |
 | 每个模块的独立文档 | [`docs/modules/`](docs/modules/) |
