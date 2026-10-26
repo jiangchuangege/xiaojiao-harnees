@@ -18,6 +18,7 @@ JS = os.path.join(ROOT, "docs", "tool-catalog.json")
 
 TESTS = [
     ("tools/test_tool_contract.py", "工具调用契约（说明 / 参数 / 执行入口 / 清单一致性）"),
+    ("tools/test_tool_isolation.py", "通用与专用工具的隔离（这一轮摆哪几个）"),
     ("tools/test_rea_plugin.py", "REA 插件本体（假 MCP 服务）"),
     ("tools/test_rea_router.py", "REA 意图路由（20 条真实意图）"),
     ("tools/test_causal_memory_plugin.py", "因果记忆插件 A（6 个工具）"),

@@ -8192,13 +8192,20 @@ def all_tool_names():
         return []
 
 
-def _intent_tool_names(intent):
+def _intent_tool_names(intent, user_input=""):
     """该意图要加载的工具名列表。**永不返回 None**（None 的旧含义是"全部 77 个"）。
 
     第 1 步之前：认不出意图 → full → None → 一次性把 77 个工具的完整 schema（13891 token）
     发出去，单这一项就把本地 20224 的 ctx 挤爆 —— 这正是"说句你好都撞 ctx 墙"的根因。
     现在 full 也是**核心集**：能力靠「完整工具目录随 system 下发 + 下一轮按需装载」保证，
     而不是靠一轮里全塞。工具一个没删、一个没停用，只是不在一轮里全发。
+
+    【2026-10-17 加的隔离】`user_input` 给了就再走一道 `core/tool_isolation.isolate()`：
+    这句话命中了**专用工具**（天气→get_weather、公网 IP→net_ip、漏洞→collect_vulnerabilities…）时，
+    这一轮**不装载通用兜底**（web_search / get / fetch / run_command…）。
+    原因很实在：同一轮里两者都在，4B 会挑通用的那个（实测两次都去 web_search 查天气），
+    而有些场景挑通用不是风格差、是**答不对**（问"我的公网 IP"用搜索永远查不到本机真实 IP）。
+    一个专用工具都没命中时原样返回 —— 那种问题（比如查新闻）通用工具本来就是正解。
 
     返回前与真实工具表对一遍：不存在的名字直接丢弃（防止"以为给了工具、其实没给"）。
     """
@@ -8212,6 +8219,14 @@ def _intent_tool_names(intent):
     if not want:
         want = list(_FULL_CORE_TOOLS)    # 空子集：给核心集，不给全量
     real = set(all_tool_names())
+    # ---- 专用/通用隔离（只在认得出"这件事有专用工具"时生效）----
+    if user_input:
+        try:
+            from core import tool_isolation as _TI
+            want, _why = _TI.isolate(user_input, want, available=real)
+            LOG.info("工具隔离：%s", _why)
+        except Exception as e:      # noqa: silent-ok — 隔离失败就按原计划装，不影响对话
+            LOG.debug("工具隔离不可用（按原计划）：%s", e)
     got = [n for n in want if n in real]
     if not got:
         LOG.warning("意图 %s 的工具子集一个都不存在，本轮改发核心集（请检查工具名）", intent)
@@ -8435,18 +8450,18 @@ def system_for_intent(intent, role=None, plugins=None, user_input=""):
     role = strip_search_rules(role if role is not None else CONTROL.get("role", ""))
     if intent == "chat":
         hint = _CHAT_SYSTEM_HINT if _is_chitchat(user_input) else _CHAT_FALLBACK_HINT
-        return role + hint + _tool_index(only=_intent_tool_names("chat"), plugins=plugins)
+        return role + hint + _tool_index(only=_intent_tool_names("chat", user_input), plugins=plugins)
     if intent == "full":
         # 保留供工具目录查询，不再由意图识别触发（`_detect_intent` 兜底已改为 chat）。
         # 这里 `only=None` 是**故意的**：本轮 schema 只发核心集，但目录要列全 77 个，
         # 模型才知道"还有哪些工具可点名"。
         return role + _SEARCH_RULES + _TOOL_RULES + _tool_index(only=None, plugins=plugins)
-    only = _intent_tool_names(intent)
+    only = _intent_tool_names(intent, user_input)
     extra = _DIAGRAM_SYSTEM_HINT if intent == "diagram" else ""
     return (role + _SEARCH_RULES + _TOOL_RULES + _tool_index(only=only, plugins=plugins) + extra)
 
 
-def _plan_tools(intent, system_text, current_text, max_ctx=None):
+def _plan_tools(intent, system_text, current_text, max_ctx=None, user_text=None):
     """定这一轮给哪些工具，并保证 `system + tools + 本轮问题` **一定塞得进 ctx**。
 
     返回 (工具名列表, 预估 token)。
@@ -8477,7 +8492,10 @@ def _plan_tools(intent, system_text, current_text, max_ctx=None):
     _pol = _state_policy()
     if _pol.get("context_scale", 1.0) < 1.0:
         max_ctx = max(1500, int(max_ctx * float(_pol["context_scale"])))
-    names = _intent_tool_names(intent)
+    # 【隔离只看用户那句原话】**不能**拿 current_text（检索上下文 + 用户这句）去判：
+    #   实测踩到——记忆里存着以前聊过的"逆向/反编译"，于是随便问句话都会把 rea_do 判成"命中专用"，
+    #   连带把通用工具一起逐出（过隔离）。所以这一层只认 `user_text`。
+    names = _intent_tool_names(intent, user_text or "")
     if _pol.get("drop_tools"):
         _before = len(names)
         names = [n for n in names
@@ -12390,7 +12408,8 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                   "archify_deliver → archify_visual_check；不要联网搜索，不要用别的画图方式。）")
         _current = (context + "用户：" + _u) if context else _u
         # 发之前先算 token —— 按意图取工具子集，并把工具裁到"装得下"为止
-        _subset, _reserve = _plan_tools(intent, messages[0].get("content", ""), _current)
+        _subset, _reserve = _plan_tools(intent, messages[0].get("content", ""), _current,
+                                        user_text=user_input)
         LOG.info("意图=%s ｜ system=%d + tools=%d + 本轮=%d token ｜ 本轮装载工具 %s",
                  intent, _estimate_tokens(messages[0].get("content", "")), _reserve,
                  _estimate_tokens(_current),
