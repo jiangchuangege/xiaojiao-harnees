@@ -32,7 +32,8 @@ def main():
     REAL_IDS = {"xiaojiao", "qwopus3.5-4b-coder-mtp-q5_k_m.gguf", "coder", "deepseek-v4"}
 
     def reset():
-        MR.STATE.update({"tier": "fast", "model": "", "at": 0.0})
+        # 连"切换预算"一起清：不清的话，上一组用例刚切过的记录会吃掉这一组的预算
+        MR.STATE.update({"tier": "fast", "model": "", "at": 0.0, "switches": []})
 
     def fake_ids(ids):
         MR.available_models = lambda force=False: set(ids)
@@ -51,6 +52,14 @@ def main():
     ck("很长的普通描述 → strong（长度判据）",
        MR.pick_tier("x" * (MR._HEAVY_LEN + 5))[0] == "strong")
     ck("意图=code 也走 code 档", MR.pick_tier("随便什么", intent="code")[0] == "code")
+    # strong 档：判据还在（pick_tier 认得），但 route 默认**不启用**（实测无收益）
+    ck("判据仍认得「重推理 + 够长」", MR.pick_tier("为什么这个架构要拆成微服务，对比一下两种方案的利弊")[0] == "strong")
+    if not MR._strong_enabled():
+        reset()
+        fake_ids(REAL_IDS)
+        _m, _t, _w = MR.route("为什么这个架构要拆成微服务，对比一下两种方案的利弊", now=900.0)
+        ck("默认不启用 strong（实测 deepseek-v4 无准确率收益、还要冷启动）",
+           _t == "fast" and "不启用" in _w, (_m, _t, _w))
 
     # ---------------- 二、粘性 ----------------
     print("\n[二] 粘性：同一档在有效期内不换（切模型要冷启动 20~50 秒）")

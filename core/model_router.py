@@ -126,6 +126,24 @@ def pick_tier(text, intent=""):
     return "fast", "普通问题"
 
 
+def _strong_enabled():
+    """strong 档要不要启用？**默认不启用**，依据是实测（`docs/routing-bench.json`）：
+
+        重推理题（3 题）：xiaojiao 100% / 2.8s ｜ deepseek-v4 100% / 2.4s
+        → 准确率一样，只快 0.4 秒，而**切过去要冷启动 20~50 秒**，整体是亏的。
+
+    所以默认不切 strong；想开就在 xiaojiao_control.json 里加 `"routing": {"strong": true}`。
+    这条不是我拍脑袋删的 —— 是"实现了、实测发现没用，就默认关掉"，并把依据留在文档里。
+    """
+    try:
+        p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "xiaojiao_control.json")
+        c = json.load(open(p, encoding="utf-8"))
+        return bool(((c.get("routing") or {}).get("strong")))
+    except Exception:      # noqa: silent-ok — 读不到配置就按默认（不启用）
+        return False
+
+
 def route(text, intent="", now=None):
     """给这一句挑模型。返回 (model_id 或 "", tier, 理由)。
 
@@ -136,6 +154,9 @@ def route(text, intent="", now=None):
     """
     now = time.time() if now is None else now
     tier, why = pick_tier(text, intent)
+    # strong 档默认不启用（实测无准确率收益、切过去还要冷启动），按需在配置里打开
+    if tier == "strong" and not _strong_enabled():
+        tier, why = "fast", why + "（strong 档实测无收益，默认不启用）"
 
     ids = available_models()
     if not ids:

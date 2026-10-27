@@ -3,7 +3,7 @@
 > 这份文件是 `tools/gen_tool_catalog.py` **自动生成**的，别手改 —— 
 > 改了工具描述就重跑一次；`tools/test_tool_contract.py` 会校验它和实际工具表是否一致。
 
-**全部工具：101 个 ｜ 契约合格：101 个 ｜ 不合格：0 个**
+**全部工具：103 个 ｜ 契约合格：103 个 ｜ 不合格：0 个**
 
 ## 怎么读这张表
 
@@ -22,11 +22,11 @@
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `ask_user` | 向用户提问并给出选项，等待用户选择。用于需要用户拍板时。question=问题, options=选项列表(逗号分隔)。 | `ask_user({"question": "值"})` | ✅ |
-| `background` | 在后台运行一条命令(不阻塞)，立即返回任务id。稍后用 background_result 查结果。用于耗时任务。 | `background({"command": "dir"})` | ✅ |
-| `background_result` | 查询后台任务(background启动的)的结果。job_id=任务id。 | `background_result({"job_id": "值"})` | ✅ |
-| `check_env` | 检测电脑环境装没装东西(只读): 检查 python/git/node/ffmpeg 等是否安装及版本。 | `check_env({})` | ✅ |
-| `edit_file` | 在文本文件里精准替换一段内容(第一次出现的)。 | `edit_file({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "old_string": "值", "new_string": "值"})` | ✅ |
+| `ask_user` | 向用户提问并给选项，等你拍板。什么时候用：需要你决定时；输入 question/options；输出 你的选择 | `ask_user({"question": "值"})` | ✅ |
+| `background` | 后台跑命令，立即返回 job_id。什么时候用：任务耗时长等不了；输入 command；输出 任务号 | `background({"command": "dir"})` | ✅ |
+| `background_result` | 查后台任务结果。什么时候用：拿到 job_id 之后要看结果；输入 job_id；输出 输出文本 | `background_result({"job_id": "值"})` | ✅ |
+| `check_env` | 查电脑装没装 python/git/node/ffmpeg（只读）。什么时候用：问环境/能不能跑； | `check_env({})` | ✅ |
+| `edit_file` | 在文本文件里替换首次出现的一段。什么时候用：改代码/配置的小改；输入 path/old/new；输出 结果 | `edit_file({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "old_string": "值", "new_string": "值"})` | ✅ |
 | `fetch_url` | 直接读一个网址/接口的返回内容(纯HTTP，最轻)。什么时候用：只想快速拿文本/JSON，不需要渲染或过风控； | `fetch_url({"url": "https://example.com"})` | ✅ |
 | `grep_files` | 在文件**内容**里搜关键词/正则。什么时候用：找某段代码/配置在哪； | `grep_files({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "pattern": "值"})` | ✅ |
 | `list_files` | 列目录里有什么。什么时候用：要知道某目录下的文件清单；输入 path；输出 条目列表(不含内容) | `list_files({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe"})` | ✅ |
@@ -34,7 +34,7 @@
 | `read_file` | 读文本文件内容。什么时候用：查看文件写了什么； | `read_file({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe"})` | ✅ |
 | `run_command` | 跑一条系统命令并回显输出(PowerShell 语法)。什么时候用：要真的执行程序/脚本/安装/查系统信息； | `run_command({"command": "dir"})` | ✅ |
 | `search_files` | 按文件名找文件(glob)。什么时候用：找某个文件在哪； | `search_files({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "pattern": "值"})` | ✅ |
-| `suggest_organize` | 整理文件建议(只读): 扫描一个目录, 按类型/日期给出整理到哪里的建议。 | `suggest_organize({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe"})` | ✅ |
+| `suggest_organize` | 扫目录给出整理建议（只读，不移动文件）。什么时候用：想整理桌面/文件夹；输入 path；输出 建议清单 | `suggest_organize({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe"})` | ✅ |
 | `write_file` | 新建/覆盖写入文件(自动建目录)。什么时候用：要产出文件(代码/网页/文档/配置)； | `write_file({"path": "C:\\\\Windows\\\\System32\\\\notepad.exe", "content": "值"})` | ✅ |
 
 ### 插件 · archify（15 个工具）
@@ -120,6 +120,18 @@
 | `ebook_grab` | 把公开电子书的文件下载到本地，遇付费墙跳过并说明。什么时候用：要成批存书；输入 url+out_dir | `ebook_grab({"url": "https://example.com", "out_dir": "值", "limit": 1})` | ✅ |
 | `ebook_manifest` | 解析公开书站目录页成书目清单（可存 CSV/MD）。什么时候用：要书目一览；输入 url；输出清单 | `ebook_manifest({"url": "https://example.com", "out": "值", "limit": 1})` | ✅ |
 
+### 插件 · forge（1 个工具）
+
+| 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
+| --- | --- | --- | --- |
+| `forge_plugin` | 你说要什么能力，它自己写插件补上。什么时候用：现有工具做不到的新能力；输入 need；输出 校验结果 | `forge_plugin({"need": "值"})` | ✅ |
+
+### 插件 · gen_cap_20261027_173718（1 个工具）
+
+| 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
+| --- | --- | --- | --- |
+| `cn_num_to_int` | 把中文数字（一百零五、两千三百、十五）转成阿拉伯数字。什么时候用：文本里的中文数字要参与计算；输入 text；输出 数字 | `cn_num_to_int({"text": "你好"})` | ✅ |
+
 ### 插件 · ip（2 个工具）
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
@@ -164,11 +176,11 @@
 
 | 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
 | --- | --- | --- | --- |
-| `rea_call` | REA 逆向引擎：按工具名精确调用（tool+args）。不确定用哪个就先用 rea_do | `rea_call({"tool": "open_binary"})` | ✅ |
-| `rea_do` | REA 逆向：用一句话说想干什么（如 反编译 main、看哈希、列出字符串），载体自己选工具并调 | `rea_do({"intent": "反编译 main 函数"})` | ✅ |
-| `rea_help` | REA 逆向：查某个工具要哪些参数（不知道 rea_do 选对了没、或要精确调时用） | `rea_help({"tool": "open_binary"})` | ✅ |
-| `rea_status` | REA 逆向引擎：查它在不在线、版本、可用工具数（不启动任何程序） | `rea_status({})` | ✅ |
-| `rea_tools` | REA 逆向引擎：搜它能做哪些分析（pe、apk、反编译、frida、gguf 等） | `rea_tools({})` | ✅ |
+| `rea_call` | 按工具名精确调用 REA。什么时候用：已知工具名与参数；输入 tool/args(JSON)；输出 结果 | `rea_call({"tool": "open_binary"})` | ✅ |
+| `rea_do` | 一句话说想逆向什么，载体自己选工具。什么时候用：只说目标不说工具；输入 task；输出 结果 | `rea_do({"intent": "反编译 main 函数"})` | ✅ |
+| `rea_help` | 查 REA 某工具要哪些参数。什么时候用：调之前确认参数；输入 tool；输出 参数表 | `rea_help({"tool": "open_binary"})` | ✅ |
+| `rea_status` | REA 逆向引擎在线状态与工具数。什么时候用：先确认它活着；输入 无；输出 版本/工具数 | `rea_status({})` | ✅ |
+| `rea_tools` | 按关键词搜 REA 能做什么（229 个工具目录）。什么时候用：不确定用哪个工具；输入 keyword；输出 清单 | `rea_tools({})` | ✅ |
 
 ### 插件 · scrapling_bridge（18 个工具）
 

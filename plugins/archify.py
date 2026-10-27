@@ -833,7 +833,14 @@ class ArchifyPlugin:
         return self._render_common(p, mode="deliver")
 
     def _do_preview(self, p):
-        return self._render_common(p, mode="preview")
+        """预览 = **生成 HTML 并把路径给你**，不调 CLI 的 `preview` 子命令。
+
+        【为什么改】实测（2026-10-17 体检）：`archify_preview` 走 CLI 的 `preview` 子命令，
+        而那个子命令在没有交互终端时会**阻塞到超时**（实测挂满 240 秒），
+        同一个 spec 用 `deliver` 只要 0.3 秒就出图 —— 说明生成能力没问题，是 preview 那一步在等东西。
+        预览要的本质就是"看看长什么样"，生成 HTML 拿路径即可，不必去调一个会挂起的子命令。
+        """
+        return self._render_common(p, mode="render")
 
     def _render_common(self, p, mode):
         t = p.get("diagram_type", "architecture")

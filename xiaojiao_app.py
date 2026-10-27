@@ -6829,6 +6829,29 @@ def _scrape_save_body(url, body, target):
         return "", "存盘失败：%s: %s" % (type(e).__name__, str(e)[:120])
 
 
+def _forge_intent(text):
+    """这一轮是不是要让小焦**给自己长一个新能力**？返回 need 原文，或 None。
+
+    【为什么要载体判】"加个能力"这件事，模型自己不会想到去调 forge_plugin
+    （4B 更容易回一句"我做不到"）。所以由载体认这句话，直接推它一把。
+    【为什么判据要窄】"加/新增"太泛（加个文件、加一行代码都是"加"），
+    必须同时命中"能力/工具/插件/技能"这类词，才认为是要长能力。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return None
+    _words = ("能力", "工具", "插件", "技能", "本领", "功能")
+    _verbs = ("加个", "加一个", "增加", "新增", "添个", "添加", "写个", "写一个", "做个",
+              "做一个", "长个", "长出", "自己写", "自己加", "扩展一个")
+    if not any(w in t for w in _words):
+        return None
+    if not any(v in t for v in _verbs):
+        return None
+    if any(k in t for k in ("下载", "安装", "装个软件", "卸载")):
+        return None
+    return t
+
+
 def _ebook_intent(text):
     """这一轮是不是要"采电子书"？返回 (工具名, 参数) 或 None。
 
@@ -12415,6 +12438,23 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             else:
                 answer = "💻 **已执行**：`%s`\n\n```\n%s\n```" % (_sh, _r.strip()[:1500])
 
+    # ③0a 能力自增长：用户说「给我加个能 XX 的能力/工具/插件」→ 直接走 forge_plugin。
+    #   【为什么放模型之前】模型（尤其 4B）遇到"给我加个能力"十有八九回一句"我做不到"，
+    #   而载体这边其实有完整闭环（生成→静态检查→沙箱试跑→落地）。能力在，别让它白说不会。
+    if answer is None and CAP.get("run_tools", True):
+        _fneed = _forge_intent(user_input)
+        if _fneed:
+            try:
+                _fres = _tool_result_str(run_tool("forge_plugin",
+                                                  {"need": user_input}, force=True))
+                if _fres and not _fres.startswith("⚠️"):
+                    LOG.info("能力自增长：用户要新能力 → 走 forge_plugin")
+                    tool_trace.append(_trace_entry("forge_plugin", {"need": _fneed[:40]}, _fres))
+                    _note_tool_path(tool_trace, path="forge")
+                    answer = _fres
+            except Exception as _f_e:      # noqa: silent-ok — 自增长挂了不能拖垮整轮
+                LOG.debug("能力自增长路由失败（忽略）：%s", _f_e)
+
     # ③0 电子书采集：句子里有网址 + 「电子书/电子版/书」 + 「书目/清单」或「下载到 <目录>」
     #    → 直接打专用工具，**不交给模型挑**。
     # 【为什么必须放在直通前面】实测：说「用 ebook_manifest 解析一下这个书页」时，
@@ -14826,42 +14866,46 @@ def api_chat():
     answer_final = answer
     if not answer_final:
         answer_final = "🤖 大脑没有应答，这一问没答上。请确认模型配置正确、端口可达。" + llm_error_suffix()
-    # ---- 时效性事实：**没有可核实的来源就不许当成事实说出来**（2026-10-17 加，评测逼出来的）----
-    # 【实测现场】问「2026年世界杯谁是冠军」，它答得极其具体：
-    #   「西班牙 1-0 阿根廷 · 2026年7月20日 · 纽约大都会人寿体育场 · 费兰·托雷斯第106分钟」
-    #   —— 检索结果里根本支撑不了这些细节。这就是"编得像真的"，比不答更坏。
-    # 【做法】命中时效性事实时，把回答里的**关键实体**（人名/队名/数字）拿去和本轮工具结果比：
-    #   一个都对不上 → 明说"网上没有可核实的官方结果，以下未经核实"；对上一部分 → 只提示"部分未核实"。
-    #   这一层改的是**用户看到的话**，不改模型、不改工具。
+    # ---- 出口闸门①：通用答案核查（`core/answer_gate`）----
+    # 【这一层管什么】把回答里**可以被核查的断言**（数值+单位、比分、日期、网址、路径）
+    #   逐条拿到"本轮材料"里找依据；找不到就标注，**正文一个字不改**。
+    # 【为什么从"只盯时效性事实"扩成通用】实测的编造从来不止事实类：
+    #   比分/日期/场馆（世界杯那次）、价格、气温、文件路径 —— 都是同一类病：
+    #   说得具体、但没有依据。所以判据要跟着"断言类型"走，而不是跟着"话题"走。
+    # 【为什么只加标注、不改内容】改内容等于载体替用户重写事实；标注把判断权交回用户。
+    _gate_res = {}
     try:
-        if _is_realtime_fact(user_input) and answer_final:
-            _ev = ""
-            for _t in (tool_trace or []):
-                _ev += str((_t or {}).get("result") or "") + " " + str((_t or {}).get("raw_head") or "") + " "
-            _ev += " ".join(str(c) for _a, _b, c in (info or []))
-            _ev = _ev.strip()
-            if _ev:
-                # 抽回答里"像专有名词/数字"的片段（中文连续串、数字串），看检索材料里有没有
-                _claim = re.findall(r"[\u4e00-\u9fff]{2,8}|\d{1,4}", str(answer_final))
-                _skip = {"的", "了", "是", "在", "和", "与", "这", "那", "然后", "因为", "所以",
-                         "世界", "比赛", "时间", "地点", "关键", "信息", "决赛", "结果", "冠军"}
-                _keys = [c for c in set(_claim) if c not in _skip and len(c) >= 2]
-                _hit = [k for k in _keys if k in _ev]
-                _ratio = (len(_hit) / float(len(_keys))) if _keys else 0.0
-                LOG.info("时效性事实核对：答案关键片段 %d 个，检索材料里对上 %d 个（%.0f%%）",
-                         len(_keys), len(_hit), _ratio * 100)
-                if _keys and _ratio < 0.2:
-                    answer_final = ("⚠️ **这条我没法核实**：网上没有可核实的官方结果支撑下面这些细节，"
-                                    "以下是模型的说法，**请自行核实**（我把它标出来，而不是当成事实给你）。\n\n"
-                                    + answer_final)
-                elif _keys and _ratio < 0.5:
-                    answer_final = ("⚠️（部分内容在检索材料里对不上，可能不准，建议核实）\n\n"
-                                    + answer_final)
-            else:
-                answer_final = ("⚠️ **这条我没查到可用来源**（本轮没有任何检索/工具结果），"
-                                "下面是模型凭先验说的，**未经核实**。\n\n" + answer_final)
-    except Exception as _rc_e:      # noqa: silent-ok — 核对挂了不许影响回答
-        LOG.debug("时效性事实核对失败（忽略）：%s", _rc_e)
+        from core import answer_gate as _AG
+        _ev_parts = []
+        for _t in (tool_trace or []):
+            _ev_parts.append(str((_t or {}).get("result") or ""))
+            _ev_parts.append(str((_t or {}).get("raw_head") or ""))
+        _ev_parts += [str(c) for _a, _b, c in (info or [])]
+        _ev_parts += [str(_a) for _a, _b, _c in (info or [])]
+        _ev_text = " ".join(p for p in _ev_parts if p)
+        answer_final, _gate_res = _AG.apply(answer_final, _ev_text, user_input)
+        if _gate_res.get("unverified"):
+            LOG.info("答案核查：可核查断言 %d 处，未核实 %d 处（依据来源 %d 字）",
+                     _gate_res["claims"], len(_gate_res["unverified"]), len(_ev_text))
+    except Exception as _ag_e:      # noqa: silent-ok — 闸门挂了不许影响回答
+        LOG.debug("答案核查失败（忽略）：%s", _ag_e)
+    # ---- 出口闸门②：双模型交叉审校（`core/dual_check`）----
+    # 只在"高风险"时花一次模型调用：答案里有 ≥2 处可核查断言，或问题涉及钱/医疗/法律/时间承诺。
+    # 审校用的是**另一个模型**（不是自己给自己打分），判"不一致"才加标注，一致时什么都不加。
+    try:
+        from core import dual_check as _DC
+        _risky, _why_risk = _DC.is_risky(user_input, answer_final, _gate_res)
+        if _risky:
+            _am = str((_CTX.get("route") or {}).get("model") or "")
+            _dc = _DC.review(user_input, answer_final, answer_model=_am)
+            _CTX["dual_check"] = _dc
+            if _dc.get("verdict") == "diff":
+                answer_final = _DC.annotate(answer_final, _dc)
+                LOG.info("双模型审校：判为不一致（%s）→ 已标注", str(_dc.get("why"))[:40])
+        else:
+            LOG.debug("双模型审校：跳过（%s）", _why_risk)
+    except Exception as _dc_e:      # noqa: silent-ok — 审校挂了不许影响回答
+        LOG.debug("双模型审校失败（忽略）：%s", _dc_e)
     # ---- 第 5 步：工具结果隔离 —— 用户拿到的 `answer` 一个字不动，**进历史的只留摘要**。
     #      真实缺陷：抓回来的原始 JSON/HTML 整段写进会话，下一轮又被当上下文发回模型，
     #      于是"先画图再抓网页"，第 2 轮把第 1 轮的 JSON 原样吐了回来（串台）。

@@ -1,6 +1,6 @@
 {
- "total": 101,
- "ok": 101,
+ "total": 103,
+ "ok": 103,
  "bad": 0,
  "tools": [
   {
@@ -270,8 +270,8 @@
    "plugin": "内置",
    "kind": "内置",
    "name": "ask_user",
-   "description": "向用户提问并给出选项，等待用户选择。用于需要用户拍板时。question=问题, options=选项列表(逗号分隔)。",
-   "full_description": "向用户提问并给出选项，等待用户选择。用于需要用户拍板时。question=问题, options=选项列表(逗号分隔)。",
+   "description": "向用户提问并给选项，等你拍板。什么时候用：需要你决定时；输入 question/options；输出 你的选择",
+   "full_description": "向用户提问并给选项，等你拍板。什么时候用：需要你决定时；输入 question/options；输出 你的选择",
    "required": [
     "question"
    ],
@@ -332,8 +332,8 @@
    "plugin": "内置",
    "kind": "内置",
    "name": "background",
-   "description": "在后台运行一条命令(不阻塞)，立即返回任务id。稍后用 background_result 查结果。用于耗时任务。",
-   "full_description": "在后台运行一条命令(不阻塞)，立即返回任务id。稍后用 background_result 查结果。用于耗时任务。",
+   "description": "后台跑命令，立即返回 job_id。什么时候用：任务耗时长等不了；输入 command；输出 任务号",
+   "full_description": "后台跑命令，立即返回 job_id。什么时候用：任务耗时长等不了；输入 command；输出 任务号",
    "required": [
     "command"
    ],
@@ -349,8 +349,8 @@
    "plugin": "内置",
    "kind": "内置",
    "name": "background_result",
-   "description": "查询后台任务(background启动的)的结果。job_id=任务id。",
-   "full_description": "查询后台任务(background启动的)的结果。job_id=任务id。",
+   "description": "查后台任务结果。什么时候用：拿到 job_id 之后要看结果；输入 job_id；输出 输出文本",
+   "full_description": "查后台任务结果。什么时候用：拿到 job_id 之后要看结果；输入 job_id；输出 输出文本",
    "required": [
     "job_id"
    ],
@@ -724,8 +724,8 @@
    "plugin": "内置",
    "kind": "内置",
    "name": "check_env",
-   "description": "检测电脑环境装没装东西(只读): 检查 python/git/node/ffmpeg 等是否安装及版本。",
-   "full_description": "检测电脑环境装没装东西(只读): 检查 python/git/node/ffmpeg 等是否安装及版本。",
+   "description": "查电脑装没装 python/git/node/ffmpeg（只读）。什么时候用：问环境/能不能跑；",
+   "full_description": "查电脑装没装 python/git/node/ffmpeg（只读）。什么时候用：问环境/能不能跑；",
    "required": [],
    "properties": [
     "items"
@@ -801,6 +801,22 @@
     "session_id"
    ],
    "example": "close_session({\"session_id\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "gen_cap_20261027_173718",
+   "kind": "插件",
+   "name": "cn_num_to_int",
+   "description": "把中文数字（一百零五、两千三百、十五）转成阿拉伯数字。什么时候用：文本里的中文数字要参与计算；输入 text；输出 数字",
+   "full_description": "把中文数字（一百零五、两千三百、十五）转成阿拉伯数字。什么时候用：文本里的中文数字要参与计算；输入 text；输出 数字",
+   "required": [
+    "text"
+   ],
+   "properties": [
+    "text"
+   ],
+   "example": "cn_num_to_int({\"text\": \"你好\"})",
    "test": "通过",
    "problems": []
   },
@@ -928,8 +944,8 @@
    "plugin": "内置",
    "kind": "内置",
    "name": "edit_file",
-   "description": "在文本文件里精准替换一段内容(第一次出现的)。",
-   "full_description": "在文本文件里精准替换一段内容(第一次出现的)。",
+   "description": "在文本文件里替换首次出现的一段。什么时候用：改代码/配置的小改；输入 path/old/new；输出 结果",
+   "full_description": "在文本文件里替换首次出现的一段。什么时候用：改代码/配置的小改；输入 path/old/new；输出 结果",
    "required": [
     "path",
     "old_string",
@@ -994,6 +1010,23 @@
     "url"
    ],
    "example": "fetch_url({\"url\": \"https://example.com\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "forge",
+   "kind": "插件",
+   "name": "forge_plugin",
+   "description": "你说要什么能力，它自己写插件补上。什么时候用：现有工具做不到的新能力；输入 need；输出 校验结果",
+   "full_description": "你说要什么能力，它自己写插件补上。什么时候用：现有工具做不到的新能力；输入 need；输出 校验结果",
+   "required": [
+    "need"
+   ],
+   "properties": [
+    "need",
+    "dry_run"
+   ],
+   "example": "forge_plugin({\"need\": \"值\"})",
    "test": "通过",
    "problems": []
   },
@@ -1340,8 +1373,8 @@
    "plugin": "rea",
    "kind": "插件",
    "name": "rea_call",
-   "description": "REA 逆向引擎：按工具名精确调用（tool+args）。不确定用哪个就先用 rea_do",
-   "full_description": "REA 逆向引擎：按工具名精确调用（tool+args）。不确定用哪个就先用 rea_do",
+   "description": "按工具名精确调用 REA。什么时候用：已知工具名与参数；输入 tool/args(JSON)；输出 结果",
+   "full_description": "按工具名精确调用 REA。什么时候用：已知工具名与参数；输入 tool/args(JSON)；输出 结果",
    "required": [
     "tool"
    ],
@@ -1357,8 +1390,8 @@
    "plugin": "rea",
    "kind": "插件",
    "name": "rea_do",
-   "description": "REA 逆向：用一句话说想干什么（如 反编译 main、看哈希、列出字符串），载体自己选工具并调",
-   "full_description": "REA 逆向：用一句话说想干什么（如 反编译 main、看哈希、列出字符串），载体自己选工具并调",
+   "description": "一句话说想逆向什么，载体自己选工具。什么时候用：只说目标不说工具；输入 task；输出 结果",
+   "full_description": "一句话说想逆向什么，载体自己选工具。什么时候用：只说目标不说工具；输入 task；输出 结果",
    "required": [
     "intent"
    ],
@@ -1375,8 +1408,8 @@
    "plugin": "rea",
    "kind": "插件",
    "name": "rea_help",
-   "description": "REA 逆向：查某个工具要哪些参数（不知道 rea_do 选对了没、或要精确调时用）",
-   "full_description": "REA 逆向：查某个工具要哪些参数（不知道 rea_do 选对了没、或要精确调时用）",
+   "description": "查 REA 某工具要哪些参数。什么时候用：调之前确认参数；输入 tool；输出 参数表",
+   "full_description": "查 REA 某工具要哪些参数。什么时候用：调之前确认参数；输入 tool；输出 参数表",
    "required": [
     "tool"
    ],
@@ -1391,8 +1424,8 @@
    "plugin": "rea",
    "kind": "插件",
    "name": "rea_status",
-   "description": "REA 逆向引擎：查它在不在线、版本、可用工具数（不启动任何程序）",
-   "full_description": "REA 逆向引擎：查它在不在线、版本、可用工具数（不启动任何程序）",
+   "description": "REA 逆向引擎在线状态与工具数。什么时候用：先确认它活着；输入 无；输出 版本/工具数",
+   "full_description": "REA 逆向引擎在线状态与工具数。什么时候用：先确认它活着；输入 无；输出 版本/工具数",
    "required": [],
    "properties": [],
    "example": "rea_status({})",
@@ -1403,8 +1436,8 @@
    "plugin": "rea",
    "kind": "插件",
    "name": "rea_tools",
-   "description": "REA 逆向引擎：搜它能做哪些分析（pe、apk、反编译、frida、gguf 等）",
-   "full_description": "REA 逆向引擎：搜它能做哪些分析（pe、apk、反编译、frida、gguf 等）",
+   "description": "按关键词搜 REA 能做什么（229 个工具目录）。什么时候用：不确定用哪个工具；输入 keyword；输出 清单",
+   "full_description": "按关键词搜 REA 能做什么（229 个工具目录）。什么时候用：不确定用哪个工具；输入 keyword；输出 清单",
    "required": [],
    "properties": [
     "keyword",
@@ -1594,8 +1627,8 @@
    "plugin": "内置",
    "kind": "内置",
    "name": "suggest_organize",
-   "description": "整理文件建议(只读): 扫描一个目录, 按类型/日期给出整理到哪里的建议。",
-   "full_description": "整理文件建议(只读): 扫描一个目录, 按类型/日期给出整理到哪里的建议。",
+   "description": "扫目录给出整理建议（只读，不移动文件）。什么时候用：想整理桌面/文件夹；输入 path；输出 建议清单",
+   "full_description": "扫目录给出整理建议（只读，不移动文件）。什么时候用：想整理桌面/文件夹；输入 path；输出 建议清单",
    "required": [
     "path"
    ],

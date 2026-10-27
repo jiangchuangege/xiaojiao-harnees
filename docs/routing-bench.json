@@ -1,0 +1,468 @@
+{
+ "at": "2026-10-27T17:04:02",
+ "base": "http://127.0.0.1:9292/v1",
+ "rows": [
+  {
+   "model": "xiaojiao",
+   "q": "用一句话说明你是谁",
+   "kind": "闲聊",
+   "sec": 2.7,
+   "ok": true,
+   "err": "",
+   "len": 58,
+   "head": "我是 Qwen3.5，阿里巴巴最新推出的通义千问大语言模型，具备逻辑推理、代码生成、多语言交互及长上下文理解等能力。"
+  },
+  {
+   "model": "xiaojiao",
+   "q": "你好呀",
+   "kind": "闲聊",
+   "sec": 0.7,
+   "ok": true,
+   "err": "",
+   "len": 32,
+   "head": "你好呀！👋 很高兴见到你。今天有什么想聊的，或者需要我帮忙的吗？"
+  },
+  {
+   "model": "xiaojiao",
+   "q": "3.11 和 3.9 哪个大？只说结论",
+   "kind": "简单事实",
+   "sec": 0.3,
+   "ok": true,
+   "err": "",
+   "len": 6,
+   "head": "3.11 大"
+  },
+  {
+   "model": "xiaojiao",
+   "q": "17 乘以 23 等于多少？只给数字",
+   "kind": "简单事实",
+   "sec": 0.2,
+   "ok": true,
+   "err": "",
+   "len": 3,
+   "head": "391"
+  },
+  {
+   "model": "xiaojiao",
+   "q": "把 hello world 转成大写，只给结果",
+   "kind": "简单事实",
+   "sec": 0.4,
+   "ok": true,
+   "err": "",
+   "len": 11,
+   "head": "HELLO WORLD"
+  },
+  {
+   "model": "xiaojiao",
+   "q": "写一个 Python 函数把字符串反转，只给代码",
+   "kind": "代码",
+   "sec": 0.8,
+   "ok": true,
+   "err": "",
+   "len": 67,
+   "head": "```python def reverse_string(s: str) -> str:     return s[::-1] ```"
+  },
+  {
+   "model": "xiaojiao",
+   "q": "用 Python 写快速排序，只给代码",
+   "kind": "代码",
+   "sec": 4.2,
+   "ok": true,
+   "err": "",
+   "len": 428,
+   "head": "```python def quick_sort(arr: list) -> list:     if len(arr) <= 1:    "
+  },
+  {
+   "model": "xiaojiao",
+   "q": "为什么微服务要把数据库按服务拆开？用三句话说明",
+   "kind": "重推理",
+   "sec": 2.8,
+   "ok": true,
+   "err": "",
+   "len": 196,
+   "head": "1. 将数据库按服务拆分是为了实现**数据隔离与独立扩展**，避免单一数据库成为所有服务的性能瓶颈，使每个服务能根据自身负载独立扩容。 2."
+  },
+  {
+   "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+   "q": "用一句话说明你是谁",
+   "kind": "闲聊",
+   "sec": 14.2,
+   "ok": true,
+   "err": "",
+   "len": 58,
+   "head": "我是 Qwen3.5，阿里巴巴最新推出的通义千问大语言模型，具备强大的语言理解、逻辑推理、代码生成及多模态分析能力。"
+  },
+  {
+   "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+   "q": "你好呀",
+   "kind": "闲聊",
+   "sec": 0.5,
+   "ok": true,
+   "err": "",
+   "len": 25,
+   "head": "你好呀！👋 今天有什么想聊的，或者需要我帮忙的吗？"
+  },
+  {
+   "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+   "q": "3.11 和 3.9 哪个大？只说结论",
+   "kind": "简单事实",
+   "sec": 0.3,
+   "ok": true,
+   "err": "",
+   "len": 6,
+   "head": "3.11 大"
+  },
+  {
+   "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+   "q": "17 乘以 23 等于多少？只给数字",
+   "kind": "简单事实",
+   "sec": 0.2,
+   "ok": true,
+   "err": "",
+   "len": 3,
+   "head": "391"
+  },
+  {
+   "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+   "q": "把 hello world 转成大写，只给结果",
+   "kind": "简单事实",
+   "sec": 0.2,
+   "ok": true,
+   "err": "",
+   "len": 11,
+   "head": "HELLO WORLD"
+  },
+  {
+   "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+   "q": "写一个 Python 函数把字符串反转，只给代码",
+   "kind": "代码",
+   "sec": 0.5,
+   "ok": true,
+   "err": "",
+   "len": 67,
+   "head": "```python def reverse_string(s: str) -> str:     return s[::-1] ```"
+  },
+  {
+   "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+   "q": "用 Python 写快速排序，只给代码",
+   "kind": "代码",
+   "sec": 1.8,
+   "ok": true,
+   "err": "",
+   "len": 290,
+   "head": "```python def quick_sort(arr):     if len(arr) <= 1:         return ar"
+  },
+  {
+   "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+   "q": "为什么微服务要把数据库按服务拆开？用三句话说明",
+   "kind": "重推理",
+   "sec": 1.2,
+   "ok": true,
+   "err": "",
+   "len": 122,
+   "head": "将数据库按服务拆分是为了避免单一数据库成为所有服务的瓶颈，确保每个服务都能独立扩展和承受高并发压力。这种架构消除了跨服务的数据库事务依赖，显"
+  },
+  {
+   "model": "coder",
+   "q": "用一句话说明你是谁",
+   "kind": "闲聊",
+   "sec": 24.4,
+   "ok": true,
+   "err": "",
+   "len": 55,
+   "head": "我是通义千问，是通义实验室自主研发的超大规模语言模型，能够帮助用户进行多种任务，如回答问题、创作文字、编程等。"
+  },
+  {
+   "model": "coder",
+   "q": "你好呀",
+   "kind": "闲聊",
+   "sec": 0.5,
+   "ok": true,
+   "err": "",
+   "len": 23,
+   "head": "你好呀！😊 今天过得怎么样呀？有什么想聊的吗？"
+  },
+  {
+   "model": "coder",
+   "q": "3.11 和 3.9 哪个大？只说结论",
+   "kind": "简单事实",
+   "sec": 0.3,
+   "ok": false,
+   "err": "",
+   "len": 6,
+   "head": "3.9 大。"
+  },
+  {
+   "model": "coder",
+   "q": "17 乘以 23 等于多少？只给数字",
+   "kind": "简单事实",
+   "sec": 0.2,
+   "ok": true,
+   "err": "",
+   "len": 3,
+   "head": "391"
+  },
+  {
+   "model": "coder",
+   "q": "把 hello world 转成大写，只给结果",
+   "kind": "简单事实",
+   "sec": 0.2,
+   "ok": true,
+   "err": "",
+   "len": 11,
+   "head": "HELLO WORLD"
+  },
+  {
+   "model": "coder",
+   "q": "写一个 Python 函数把字符串反转，只给代码",
+   "kind": "代码",
+   "sec": 0.4,
+   "ok": true,
+   "err": "",
+   "len": 55,
+   "head": "```python def reverse_string(s):     return s[::-1] ```"
+  },
+  {
+   "model": "coder",
+   "q": "用 Python 写快速排序，只给代码",
+   "kind": "代码",
+   "sec": 2.0,
+   "ok": true,
+   "err": "",
+   "len": 287,
+   "head": "```python def quicksort(arr):     if len(arr) <= 1:         return arr"
+  },
+  {
+   "model": "coder",
+   "q": "为什么微服务要把数据库按服务拆开？用三句话说明",
+   "kind": "重推理",
+   "sec": 1.3,
+   "ok": true,
+   "err": "",
+   "len": 85,
+   "head": "微服务架构将数据库按服务拆开，是为了实现服务的独立部署和扩展。每个服务拥有自己的数据库，可以降低服务间的耦合度。这样能提升系统的灵活性和可维"
+  },
+  {
+   "model": "deepseek-v4",
+   "q": "用一句话说明你是谁",
+   "kind": "闲聊",
+   "sec": 24.2,
+   "ok": true,
+   "err": "",
+   "len": 59,
+   "head": "我是 Qwen3.5，阿里巴巴最新推出的超大规模语言模型，具备强大的逻辑推理、代码生成、多语言交互及长上下文理解能力。"
+  },
+  {
+   "model": "deepseek-v4",
+   "q": "你好呀",
+   "kind": "闲聊",
+   "sec": 0.5,
+   "ok": true,
+   "err": "",
+   "len": 16,
+   "head": "你好呀！有什么我可以帮你的吗？😊"
+  },
+  {
+   "model": "deepseek-v4",
+   "q": "3.11 和 3.9 哪个大？只说结论",
+   "kind": "简单事实",
+   "sec": 0.3,
+   "ok": true,
+   "err": "",
+   "len": 6,
+   "head": "3.11 大"
+  },
+  {
+   "model": "deepseek-v4",
+   "q": "17 乘以 23 等于多少？只给数字",
+   "kind": "简单事实",
+   "sec": 0.2,
+   "ok": true,
+   "err": "",
+   "len": 3,
+   "head": "391"
+  },
+  {
+   "model": "deepseek-v4",
+   "q": "把 hello world 转成大写，只给结果",
+   "kind": "简单事实",
+   "sec": 0.3,
+   "ok": true,
+   "err": "",
+   "len": 11,
+   "head": "HELLO WORLD"
+  },
+  {
+   "model": "deepseek-v4",
+   "q": "写一个 Python 函数把字符串反转，只给代码",
+   "kind": "代码",
+   "sec": 0.7,
+   "ok": true,
+   "err": "",
+   "len": 64,
+   "head": "```python def reverse_string(s: str) -> str:  return s[::-1] ```"
+  },
+  {
+   "model": "deepseek-v4",
+   "q": "用 Python 写快速排序，只给代码",
+   "kind": "代码",
+   "sec": 2.2,
+   "ok": true,
+   "err": "",
+   "len": 265,
+   "head": "```python def quick_sort(arr):  if len(arr) <= 1:  return arr  pivot ="
+  },
+  {
+   "model": "deepseek-v4",
+   "q": "为什么微服务要把数据库按服务拆开？用三句话说明",
+   "kind": "重推理",
+   "sec": 2.4,
+   "ok": true,
+   "err": "",
+   "len": 165,
+   "head": "将数据库按服务拆分是为了实现**数据隔离与高内聚低耦合**，避免单一数据库成为多个服务的瓶颈或单点故障源。  这种架构能显著提升系统的**可"
+  }
+ ],
+ "summary": {
+  "xiaojiao": {
+   "闲聊": {
+    "acc": 100.0,
+    "avg_s": 1.7
+   },
+   "简单事实": {
+    "acc": 100.0,
+    "avg_s": 0.3
+   },
+   "代码": {
+    "acc": 100.0,
+    "avg_s": 2.5
+   },
+   "重推理": {
+    "acc": 100.0,
+    "avg_s": 2.8
+   }
+  },
+  "qwopus3.5-4b-coder-mtp-q5_k_m.gguf": {
+   "闲聊": {
+    "acc": 100.0,
+    "avg_s": 7.3
+   },
+   "简单事实": {
+    "acc": 100.0,
+    "avg_s": 0.2
+   },
+   "代码": {
+    "acc": 100.0,
+    "avg_s": 1.1
+   },
+   "重推理": {
+    "acc": 100.0,
+    "avg_s": 1.2
+   }
+  },
+  "coder": {
+   "闲聊": {
+    "acc": 100.0,
+    "avg_s": 12.4
+   },
+   "简单事实": {
+    "acc": 66.7,
+    "avg_s": 0.2
+   },
+   "代码": {
+    "acc": 100.0,
+    "avg_s": 1.2
+   },
+   "重推理": {
+    "acc": 100.0,
+    "avg_s": 1.3
+   }
+  },
+  "deepseek-v4": {
+   "闲聊": {
+    "acc": 100.0,
+    "avg_s": 12.3
+   },
+   "简单事实": {
+    "acc": 100.0,
+    "avg_s": 0.3
+   },
+   "代码": {
+    "acc": 100.0,
+    "avg_s": 1.5
+   },
+   "重推理": {
+    "acc": 100.0,
+    "avg_s": 2.4
+   }
+  }
+ },
+ "verdict": {
+  "fast": {
+   "model": "xiaojiao",
+   "acc": 100.0,
+   "avg_s": 0.9,
+   "alts": [
+    {
+     "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+     "acc": 100.0,
+     "avg_s": 3.1
+    },
+    {
+     "model": "coder",
+     "acc": 80.0,
+     "avg_s": 5.1
+    },
+    {
+     "model": "deepseek-v4",
+     "acc": 100.0,
+     "avg_s": 5.1
+    }
+   ]
+  },
+  "code": {
+   "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+   "acc": 100.0,
+   "avg_s": 1.1,
+   "alts": [
+    {
+     "model": "xiaojiao",
+     "acc": 100.0,
+     "avg_s": 2.5
+    },
+    {
+     "model": "coder",
+     "acc": 100.0,
+     "avg_s": 1.2
+    },
+    {
+     "model": "deepseek-v4",
+     "acc": 100.0,
+     "avg_s": 1.5
+    }
+   ]
+  },
+  "strong": {
+   "model": "deepseek-v4",
+   "acc": 100.0,
+   "avg_s": 2.4,
+   "alts": [
+    {
+     "model": "xiaojiao",
+     "acc": 100.0,
+     "avg_s": 2.8
+    },
+    {
+     "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+     "acc": 100.0,
+     "avg_s": 1.2
+    },
+    {
+     "model": "coder",
+     "acc": 100.0,
+     "avg_s": 1.3
+    }
+   ]
+  }
+ }
+}

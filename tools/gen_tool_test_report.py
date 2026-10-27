@@ -19,6 +19,9 @@ JS = os.path.join(ROOT, "docs", "tool-catalog.json")
 TESTS = [
     ("tools/test_tool_contract.py", "工具调用契约（说明 / 参数 / 执行入口 / 清单一致性）"),
     ("tools/test_model_router.py", "难度路由（换档判据 / 粘性 / 升档立即 / 兜底不发 404）"),
+    ("tools/test_answer_gate.py", "答案闸门（可核查断言 / 有依据不标 / 正文不动）"),
+    ("tools/test_dual_check.py", "双模型交叉审校（谁该被审 / 审的人不是自己 / 失败即跳过）"),
+    ("tools/test_plugin_forge.py", "能力自增长（静态检查 / 子进程沙箱 / 自修 / 只加不删）"),
     ("tools/test_tool_isolation.py", "通用与专用工具的隔离（这一轮摆哪几个）"),
     ("tools/test_scrape_save.py", "抓取 + 落盘（爬下来存到本地这条链）"),
     ("tools/test_ebook_plugin.py", "公开电子书采集插件（本地假站：公开能下、付费跳过、robots 遵守）"),

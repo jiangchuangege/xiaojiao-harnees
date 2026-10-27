@@ -470,13 +470,29 @@ def _route(intent, tools, target="", focus=""):
 
 
 def _fill_args(doc, target="", focus="", extra=None):
-    """载体替模型拼参数：能填的填上，填不了的**列出来问**（绝不瞎编）。"""
+    """载体替模型拼参数：能填的填上，填不了的**列出来问**（绝不瞎编）。
+
+    【2026-10-17 修一处真缺陷：相对路径会被 REA 的 schema 直接拒】
+    实测：`rea_call open_binary {"path": "logs/x.txt"}` → 「arguments do not match its
+    advertised input schema」—— 看着像"参数名写错了"，其实是**路径写法**不被接受；
+    同一个文件换成**绝对路径**就过了，报的才是真正的原因「unsupported binary format」。
+    所以这里统一把路径类参数转成绝对路径，免得把一个"路径写法"问题误诊成"参数错"。
+    """
+    import os as _os
     args = dict(extra or {})
-    have_target = bool(target) or (bool(_SESSION["opened"]) and not target)
-    if target and any(p.lower() in ("path", "file", "target", "artifact") for p in doc["props"]):
+    _pathish = ("path", "file", "target", "artifact", "snapshot_path")
+    if target:
+        _abs = str(target) if _os.path.isabs(str(target)) else _os.path.abspath(str(target))
         for p in doc["props"]:
-            if p.lower() in ("path", "file", "target", "artifact"):
-                args.setdefault(p, target)
+            if p.lower() in _pathish:
+                args.setdefault(p, _abs)
+    for k, v in list(args.items()):          # 上层塞进来的相对路径也一起转
+        if k.lower() in _pathish and isinstance(v, str) and v and not _os.path.isabs(v):
+            try:
+                args[k] = _os.path.abspath(v)
+            except Exception:      # noqa: silent-ok — 转不了就原样发，让 REA 自己报错
+                pass
+    have_target = bool(target) or (bool(_SESSION["opened"]) and not target)
     if focus:
         for p in doc["props"]:
             if p.lower() in ("symbol", "name", "address", "pattern", "procedure", "query"):
@@ -485,7 +501,7 @@ def _fill_args(doc, target="", focus="", extra=None):
     for r in doc["required"]:
         if str(r).lower() in [k.lower() for k in args]:
             continue
-        if str(r).lower() in ("path", "file", "target", "artifact") and have_target:
+        if str(r).lower() in _pathish and have_target:
             # REA 里"已经打开过目标"时，path 可以不给
             continue
         missing.append(str(r))

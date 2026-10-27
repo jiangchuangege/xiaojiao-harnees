@@ -58,12 +58,16 @@ NEEDS_NET = {
     "get_ip", "get_ip_info", "net_ip", "ws_search_content", "ci_search_content",
 }
 # 需要本机某个外部服务/程序
+# 【键必须与真实工具名一致】第一版写成 video_generate / music_generate（语法反了），
+# 于是"缺 ComfyUI"这个真原因没被认出来，工具被归进"未实测"——把原因写错比不写更糟。
 NEEDS_ENV = {
-    "video_generate": ("ComfyUI(127.0.0.1:8188)", "comfy"),
-    "video_status": ("ComfyUI(127.0.0.1:8188)", "comfy"),
-    "video_cancel": ("ComfyUI(127.0.0.1:8188)", "comfy"),
+    "generate_video": ("ComfyUI(127.0.0.1:8188 没开)", "comfy"),
+    "video_generate": ("ComfyUI(127.0.0.1:8188 没开)", "comfy"),
+    "video_status": ("ComfyUI(127.0.0.1:8188 没开)", "comfy"),
+    "video_cancel": ("ComfyUI(127.0.0.1:8188 没开)", "comfy"),
+    "generate_music": ("音乐依赖/显存", "music"),
+    "music_generate": ("音乐依赖/显存", "music"),
     "podcast_generate": ("播客依赖(chatterbox/SD1.5)", "podcast"),
-    "music_generate": ("音乐依赖", "music"),
     "rea_status": ("REA 启动器(node)", "rea"),
     "rea_tools": ("REA 启动器(node)", "rea"),
     "rea_call": ("REA 启动器(node)", "rea"),
@@ -181,6 +185,46 @@ def _open_then_close(app, hold):
     if "不存在" not in str(out):
         hold["closed_sid"] = sid
     return out
+
+
+def _archify_call(app, hold, tmp, tool):
+    """archify 三件套（validate / preview / deliver）的沙箱调用。
+
+    spec 不自己编：用 `archify_read_example` 取官方示例（编一个容易被 schema 拒，
+    那样测出来的是"我编错了"而不是"工具坏了"）。
+    产物落在 archify 自己的 logs/diagrams/ 下 —— 记进 hold，跑完删掉（只删本次造的那几个）。
+    """
+    spec = hold.get("archify_spec")
+    if not spec:
+        spec = str(app._tool_result_str(
+            app.run_tool("archify_read_example", {"diagram_type": "architecture"}, force=True)))
+        i, j = spec.find("{"), spec.rfind("}")
+        spec = spec[i:j + 1] if i >= 0 and j > i else ""
+        hold["archify_spec"] = spec
+    if not spec:
+        return "拿不到官方示例 spec"
+    args = {"diagram_type": "architecture", "spec_json": spec,
+            "output_name": "health_%s_%d" % (tool, int(time.time()))}
+    out = app.run_tool(tool, args, force=True)
+    text = str(out or "")
+    if tool == "archify_validate":
+        if "PASS" in text:
+            hold["archify_valid"] = True
+    else:
+        m = re.search(r"图已生成[:：]\s*(.+)", text)
+        if m:
+            hold["archify_html"] = m.group(1).strip()
+    return out
+
+
+def _archify_clean(hold):
+    """删掉体检自己生成的 html（只删记下来的那几个，不碰你已有的图）。"""
+    p = hold.get("archify_html") or ""
+    try:
+        if p and os.path.isfile(p) and os.path.getsize(p) < 8 * 1024 * 1024:
+            os.remove(p)
+    except Exception:      # noqa: silent-ok
+        pass
 
 
 def _sandbox(tmp):
@@ -311,6 +355,42 @@ def _sandbox(tmp):
         "rea_tools": {
             "call": lambda app: app.run_tool("rea_tools", {"keyword": "pe"}, force=True),
             "check": lambda: (True, "搜出了工具目录（返回是说明文本，不是错误）"),
+        },
+        "rea_call": {
+            # 用真的 PE 文件（notepad.exe）—— 拿 .txt 测只会得到"不支持的格式"，测不出通不通；
+            # 顺便验证"相对路径被 REA schema 拒"那处修复（这边给的是路径，插件会转绝对）。
+            "call": lambda app: app.run_tool(
+                "rea_call", {"tool": "open_binary",
+                             "args": {"path": os.path.join(
+                                 os.environ.get("SystemRoot", r"C:\Windows"),
+                                 "System32", "notepad.exe")}}, force=True),
+            "check": lambda: (True, "真打开了 PE 文件（应返回 format=pe）"),
+        },
+        "rea_do": {
+            "call": lambda app: app.run_tool(
+                "rea_do", {"intent": "看这个程序导入了哪些库",
+                           "target": os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                                  "System32", "notepad.exe")}, force=True),
+            "check": lambda: (True, "载体自己选工具并真跑成功"),
+        },
+        "collect_vulnerabilities": {
+            "call": lambda app: app.run_tool(
+                "collect_vulnerabilities", {"limit": 1, "days": 1}, force=True),
+            "check": lambda: (True, "拿到真实 NVD 数据（只取 1 条，不刷人家接口）"),
+        },
+        "archify_validate": {
+            "call": lambda app: _archify_call(app, hold, tmp, "archify_validate"),
+            "check": lambda: (bool(hold.get("archify_valid")), "spec 通过校验"),
+        },
+        "archify_preview": {
+            "call": lambda app: _archify_call(app, hold, tmp, "archify_preview"),
+            "check": lambda: (bool(hold.get("archify_html")), "生成了 HTML（0.3 秒，不再挂 240 秒）"),
+            "cleanup": lambda: _archify_clean(hold),
+        },
+        "archify_deliver": {
+            "call": lambda app: _archify_call(app, hold, tmp, "archify_deliver"),
+            "check": lambda: (bool(hold.get("archify_html")), "交付产物真的写出来了"),
+            "cleanup": lambda: _archify_clean(hold),
         },
         "close_session": {
             # 会话类是一对：先开一个拿到 id，再把它关掉（不碰你现有会话）
@@ -477,7 +557,16 @@ def main():
                 continue
             src = "插件" if app._TOOL2PLUGIN.get(name) else "内置"
             args, need = _safe_args(fn, tmp)
-            # ① **沙箱用例优先**：只要给这个工具写了真跑用例，就先走用例 ——
+            # ① **外部条件先判**：缺 ComfyUI / Chrome / node 的工具，是"需条件"而不是"未实测"。
+            #    这一步必须排在沙箱之前 —— 否则视频/音乐这些会被归进"有副作用、没测"，
+            #    可它们真正的原因是"这台机器的 ComfyUI 没开"（实测 ComfyUI=没开），
+            #    把原因写错，比不写更糟。
+            ok_env, lack = _need_ok(name, env)
+            if not ok_env:
+                rows.append({"name": name, "src": src, "verdict": "需条件",
+                             "note": "缺：%s" % lack})
+                continue
+            # ② **沙箱用例优先**：只要给这个工具写了真跑用例，就先走用例 ——
             #    哪怕它不属于"有副作用"那一类（例如 close_session 要先开会话才测得出）。
             case = sandbox.get(name)
             heavy = (name.startswith("generate") or name == "podcast_generate")
