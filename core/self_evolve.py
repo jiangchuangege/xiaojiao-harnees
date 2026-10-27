@@ -177,10 +177,10 @@ def _dup_generated():
             except Exception:      # noqa: silent-ok
                 continue
             for name in re.findall(r'"name"\s*:\s*"([A-Za-z][A-Za-z0-9_]{2,40})"', src):
-                base = re.sub(r"(_v\d+)+$", "", name.lower())          # 去掉 _v2/_v3 后缀
-                base = re.sub(r"^gen_[0-9a-f]{6,}$", "gen_hash", base)  # hash 名归一堆
-                base = base.replace("cn_num_to_int", "num_convert") \
-                           .replace("int_to_cn_num", "num_convert")
+                # 【只按"去版本后缀后是否同名"判重复】第一版还做了语义归一
+                # （把 cn_num_to_int 和 int_to_cn_num 都映射成 num_convert）→ 把两个
+                # **互补**能力误报成"重叠"。互补不是重复，撤回那套归一。
+                base = re.sub(r"(_v\d+)+$", "", name.lower())
                 buckets.setdefault(base or name, []).append((name, fn))
         for base, items in buckets.items():
             if len(items) > 1:

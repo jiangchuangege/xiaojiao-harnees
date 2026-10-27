@@ -14907,17 +14907,31 @@ def api_chat():
     _gate_res = {}
     try:
         from core import answer_gate as _AG
-        _ev_parts = []
+        # 【载体直答要放过】实测：问「哪里最弱」时，载体用 evolve_report 把诊断报告原样返回，
+        #   闸门却把它当成"模型编的细节"，在开头加了「有 3 处细节我无法核实」——
+        #   可那些数字本身就来自工具返回。判据：答案与某条工具结果高度重合 → 这就是工具给的，
+        #   不需要再核查（否则每一条"载体直答"都会被自己加一层怀疑，反而是噪声）。
+        _from_tool = False
+        _ans_strip = str(answer_final or "").strip()
         for _t in (tool_trace or []):
-            _ev_parts.append(str((_t or {}).get("result") or ""))
-            _ev_parts.append(str((_t or {}).get("raw_head") or ""))
-        _ev_parts += [str(c) for _a, _b, c in (info or [])]
-        _ev_parts += [str(_a) for _a, _b, _c in (info or [])]
-        _ev_text = " ".join(p for p in _ev_parts if p)
-        answer_final, _gate_res = _AG.apply(answer_final, _ev_text, user_input)
-        if _gate_res.get("unverified"):
-            LOG.info("答案核查：可核查断言 %d 处，未核实 %d 处（依据来源 %d 字）",
-                     _gate_res["claims"], len(_gate_res["unverified"]), len(_ev_text))
+            _r = str((_t or {}).get("result") or "").strip()
+            if _r and _ans_strip and (_r[:60] in _ans_strip or _ans_strip[:60] in _r):
+                _from_tool = True
+                break
+        if _from_tool:
+            LOG.info("答案核查：本条是载体直答（与工具结果一致）→ 跳过核查")
+        else:
+            _ev_parts = []
+            for _t in (tool_trace or []):
+                _ev_parts.append(str((_t or {}).get("result") or ""))
+                _ev_parts.append(str((_t or {}).get("raw_head") or ""))
+            _ev_parts += [str(c) for _a, _b, c in (info or [])]
+            _ev_parts += [str(_a) for _a, _b, _c in (info or [])]
+            _ev_text = " ".join(p for p in _ev_parts if p)
+            answer_final, _gate_res = _AG.apply(answer_final, _ev_text, user_input)
+            if _gate_res.get("unverified"):
+                LOG.info("答案核查：可核查断言 %d 处，未核实 %d 处（依据来源 %d 字）",
+                         _gate_res["claims"], len(_gate_res["unverified"]), len(_ev_text))
     except Exception as _ag_e:      # noqa: silent-ok — 闸门挂了不许影响回答
         LOG.debug("答案核查失败（忽略）：%s", _ag_e)
     # ---- 出口闸门②：双模型交叉审校（`core/dual_check`）----
