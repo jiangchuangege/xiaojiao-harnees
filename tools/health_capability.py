@@ -112,11 +112,16 @@ def _env_state():
     st["chrome"] = bool(st["chrome_path"])
     import shutil
     st["node"] = bool(shutil.which("node"))
+    # 外网/代理是否真通：不能只看能不能 import requests（那只是装了库）。
+    # 实测：代理抽风时 requests 能 import，但所有抓取都会 ERR_PROXY_CONNECTION_FAILED。
     try:
         import requests
-        st["net"] = True
-    except Exception:                      # noqa: silent-ok
+        r = requests.head("https://example.com", timeout=6, allow_redirects=True)
+        st["net"] = (r.status_code < 500)
+        st["net_note"] = "HTTP %s" % r.status_code
+    except Exception as e:      # noqa: silent-ok — 探不通就按"不通"处理（工具会标需条件）
         st["net"] = False
+        st["net_note"] = "%s" % type(e).__name__
     st["podcast"] = True                   # 依赖模块缺失会在真调时报错，这里不预判
     st["music"] = True
     st["rea"] = st["node"]
@@ -495,8 +500,15 @@ def _verdict(out, sec, name=""):
             st = d.get("status")
             content = str(d.get("content") or "").strip()
             if err:
-                # 有些插件把 error 写成布尔、原因放 reason 里（例：{"error": true, "reason": "RateLimited"}）
+                # 有些插件把 error 写成布尔、原因放 reason/message 里（例：{"error": true, "reason": "RateLimited"}）
                 txt = reason or (err if isinstance(err, str) else str(d.get("message") or err))
+                _low_all = (txt + " " + content).lower()
+                # 先看是不是网络/代理：download 那类工具会把"网络失败"包装成"写入失败"，
+                # 只看它自己的文案会误判成磁盘/权限问题（实测就这么误报过）。
+                if any(w in _low_all for w in ("proxyerror", "max retries", "connection aborted",
+                                               "err_proxy", "timed out", "timeout",
+                                               "connection refused", "network is unreachable")):
+                    return "需条件", "网络/代理不可用：%s" % txt[:60]
                 if any(k in txt.lower() for k in ("rate limit", "ratelimit", "sign up",
                                                   "quota", "额度", "too many")):
                     return "需条件", "免费额度/限流：%s" % txt[:60]
@@ -519,6 +531,15 @@ def _verdict(out, sec, name=""):
             return "fail", "报错：%s" % s[:60].replace("\n", " ")
     if "rate limit" in low or "sign up for a paid" in low:
         return "需条件", "免费额度/限流"
+    # 网络/代理层失败：这是**环境**问题，不是工具坏了。
+    # 实测踩到：本机代理(127.0.0.1:65532)抽风时，7 个抓取类工具全被判"坏了"，
+    # 可它们本身没问题 —— 把环境问题记成工具坏，比不测更误导。
+    _net_words = ("err_proxy_connection_failed", "proxyerror", "max retries",
+                  "connection refused", "getaddrinfo", "name or service not known",
+                  "err_internet_disconnected", "network is unreachable",
+                  "connection aborted", "timed out", "timeout")
+    if any(w in low for w in _net_words):
+        return "需条件", "网络/代理不可用：%s" % s[:60].replace("\n", " ")
     if any(k in s for k in ("需要提供", "没识别到", "没有匹配到", "必填", "请提供")):
         return "需参数", "参数不合适：%s" % s[:70].replace("\n", " ")
     # 「需要 … Key」「一个都没配」= 缺配置，不是工具坏了
@@ -618,9 +639,13 @@ def main():
                 rows.append({"name": name, "src": src, "verdict": "需条件",
                              "note": "缺：%s" % lack})
                 continue
-            if env.get("net") is False or (a.no_net and name in NEEDS_NET):
-                rows.append({"name": name, "src": src, "verdict": "跳过",
-                             "note": "没外网 / --no-net"})
+            # 网络类工具：外网/代理不通时才跳过（且归类为"需条件"，因为那是环境问题）。
+            # 【别写成 `if env.get("net") is False` 单独一条】第一版就是这么写的 →
+            # 外网一断，**所有**工具都被跳过（实测 75 个），报告直接失去意义。
+            if name in NEEDS_NET and (a.no_net or env.get("net") is False):
+                rows.append({"name": name, "src": src, "verdict": "需条件",
+                             "note": "网络/代理当时不通（%s）%s"
+                                     % (env.get("net_note") or "?", " ／ --no-net" if a.no_net else "")})
                 continue
             # ③ 真调一次（read-only 类）
             t0 = time.time()

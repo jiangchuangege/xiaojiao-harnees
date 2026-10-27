@@ -1,6 +1,6 @@
 {
- "total": 105,
- "ok": 105,
+ "total": 106,
+ "ok": 106,
  "bad": 0,
  "tools": [
   {
@@ -1192,6 +1192,22 @@
     "pattern"
    ],
    "example": "grep_files({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\", \"pattern\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "gen_x_20261027_191800",
+   "kind": "插件",
+   "name": "int_to_cn_num",
+   "description": "把阿拉伯数字（3020、105）转成中文数字（三千零二十）。什么时候用：要按中文习惯念数字；",
+   "full_description": "把阿拉伯数字（3020、105）转成中文数字（三千零二十）。什么时候用：要按中文习惯念数字；输入 text；输出 中文数字",
+   "required": [
+    "text"
+   ],
+   "properties": [
+    "text"
+   ],
+   "example": "int_to_cn_num({\"text\": \"你好\"})",
    "test": "通过",
    "problems": []
   },

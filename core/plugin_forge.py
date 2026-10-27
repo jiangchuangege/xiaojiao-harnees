@@ -146,6 +146,42 @@ def _ensure_contract_phrases(code, need):
     return "".join(out), fixed["n"]
 
 
+def _existing_tool_names():
+    """仓库里**现存的工具名集合**（扫 plugins/*.py 里声明的 name）。
+
+    【为什么必须有这道检查】实测踩到：自增长生成的新插件声明了一个**和已有插件同名**的工具
+    （`cn_num_to_int`），而它的 execute 里分派的是另一个名字 —— 结果调用时被别人的插件接住，
+    返回"这里没有这个工具"。用户侧看到的就是"明明装了却调不通"。
+    这个项目"只加不删"，所以撞名不会覆盖旧文件，但会让工具表与实现错位，必须挡在落地之前。
+    """
+    names = set()
+    try:
+        for fn in os.listdir(_PLUGINS):
+            if not fn.endswith(".py"):
+                continue
+            try:
+                src = io.open(os.path.join(_PLUGINS, fn), encoding="utf-8").read()
+            except Exception:      # noqa: silent-ok — 单个文件读不了就跳过
+                continue
+            names.update(re.findall(r'"name"\s*:\s*"([A-Za-z][A-Za-z0-9_]{2,40})"', src))
+    except Exception as e:      # noqa: silent-ok — 扫不出来就不拦（宁可漏拦也不误杀）
+        LOG.debug("自增长：扫现有工具名失败（忽略）：%s", e)
+    return names
+
+
+def _tool_names_in(code):
+    """这份代码里声明的工具名。"""
+    return set(re.findall(r'"name"\s*:\s*"([A-Za-z][A-Za-z0-9_]{2,40})"', str(code or "")))
+
+
+def _conflicts(code):
+    """和现有工具撞名了吗？返回撞上的名字列表。"""
+    try:
+        return sorted(_tool_names_in(code) & _existing_tool_names())
+    except Exception:      # noqa: silent-ok
+        return []
+
+
 def static_check(code):
     """静态检查。返回 (ok, 问题列表)。问题用中文写，直接能给人看。"""
     problems = []
@@ -436,6 +472,20 @@ def forge(need, generator=None, dry_run=False, timeout=30, max_repair=2):
                     continue
             break
         LOG.info("自增长：静态检查通过（第 %d 次）", attempt)
+
+        # 撞名检查（撞了就没法安全落地：调用会被别人的插件接住）
+        _cf = _conflicts(code)
+        if _cf:
+            last = {"ok": False, "stage": "conflict",
+                    "why": "工具名和已有的撞了：%s（换个名字，例如加后缀 _v2 或用更准确的名字）"
+                           % "、".join(_cf[:3]), "code": code}
+            if can_repair and attempt < attempts:
+                LOG.info("自增长：工具名撞车（%s）→ 第 %d 次自修", ",".join(_cf[:2]), attempt)
+                fix = _ask_model_fix(need, code, last["why"])
+                if fix.strip():
+                    code = _ensure_contract_phrases(_strip_fence(fix), need)[0]
+                    continue
+            break
 
         module = _sanitize_module_name(need)
         target = os.path.join(_PLUGINS, module + ".py")
