@@ -34,9 +34,12 @@ def main():
     ck("普通闲聊 → 不审", ok1 is False, why1)
     ok2, why2 = DC.is_risky("这个药一天吃几次", "通常一天两次，每次一片。", {"claims": 1})
     ck("问药 → 审（命中高风险领域）", ok2 is True, why2)
-    ok3, why3 = DC.is_risky("总结一下", "价格 199 元，有效期 2026年7月20日",
-                            {"claims": 2})
-    ck("答案里有 2 处可核查断言 → 审", ok3 is True, why3)
+    ok3, why3 = DC.is_risky("总结一下", "价格 199 元，有效期 2026年7月20日，库存 3 件",
+                            {"claims": 3})
+    ck("答案里有 3 处可核查断言 → 审", ok3 is True, why3)
+    ok3b, why3b = DC.is_risky("总结一下", "价格 199 元，有效期 2026年7月20日", {"claims": 2})
+    ck("只有 2 处断言 → 不审（天气那种答案不该触发审校，否则每条慢 20~30 秒）",
+       ok3b is False, why3b)
     ok4, _ = DC.is_risky("在吗", "在")
     ck("太短的回答不审", ok4 is False)
 
