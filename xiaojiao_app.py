@@ -6829,6 +6829,22 @@ def _scrape_save_body(url, body, target):
         return "", "存盘失败：%s: %s" % (type(e).__name__, str(e)[:120])
 
 
+def _skill_intent(text):
+    """这一轮是不是在问「你都会哪些成套的本事」？
+
+    【为什么要载体认】实测：问「你都会哪些成套的本事」，模型自己编了一段"我的技能包"清单
+    （读网页、读 PDF、读代码…），全是从先验里编的，工具轨迹是空的。
+    而它手里有 `skill_list`（真实固化下来的做法）。这种"问自己会什么"的话必须由载体接，
+    否则用户看到的是模型的自吹，不是它实际学到的东西。
+    """
+    t = str(text or "").strip()
+    if not t or len(t) > 40:
+        return False
+    hits = ("成套的本事", "哪些本事", "会哪些", "都会什么", "学会了什么", "学到什么",
+            "学过什么", "技能库", "你的技能", "哪些技能", "哪些做法", "你都会")
+    return any(w in t for w in hits)
+
+
 def _evolve_intent(text):
     """这一轮是不是在问"它自己哪儿弱、下一步改什么"？
 
@@ -12458,6 +12474,16 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     # ③0a2 自我诊断：问"哪儿最弱 / 下一步改什么"→ 直接走 evolve_report。
     #   模型会把这种问题理解成"你项目哪里弱"从而反问要线索；而它自己是有诊断能力的。
     if answer is None:
+        if _skill_intent(user_input):
+            try:
+                _skres = _tool_result_str(run_tool("skill_list", {"limit": 8}, force=True))
+                if _skres and not _skres.startswith("⚠️"):
+                    LOG.info("技能库：用户问它会什么 → 走 skill_list（不让模型自吹）")
+                    tool_trace.append(_trace_entry("skill_list", {"limit": 8}, _skres))
+                    _note_tool_path(tool_trace, path="skill")
+                    answer = _skres
+            except Exception as _sk_i:      # noqa: silent-ok — 挂了不能拖垮整轮
+                LOG.debug("技能库路由失败（忽略）：%s", _sk_i)
         if _evolve_intent(user_input):
             try:
                 _evres = _tool_result_str(run_tool("evolve_report", {"limit": 8}, force=True))
@@ -14933,6 +14959,10 @@ def api_chat():
                 break
         if _from_tool:
             LOG.info("答案核查：本条是载体直答（与工具结果一致）→ 跳过核查")
+        elif re.search(r"(你会|你能|都会|本事|技能|介绍.{0,3}自己|你是谁|叫什么)", str(user_input or "")):
+            # 自我介绍/能力清单类：里面全是"我能做 X"的描述，没有可核查的硬断言，
+            # 核查只会加一层无意义的"请自行核实"（实测就是这么误伤的）。
+            LOG.info("答案核查：自我介绍/能力清单类 → 跳过核查")
         else:
             _ev_parts = []
             for _t in (tool_trace or []):
@@ -14967,10 +14997,12 @@ def api_chat():
     # ---- 技能库：这一轮如果做成了多步任务，就把它固化下来（下次同类问题可照抄）----
     # 判据在 `skill_memory.remember_task` 里：≥2 个工具、且没有失败痕迹才记；
     # 单工具调用不算技能（那叫"调一下"）。失败也不记 —— 不把错的路径固化成"经验"。
+    # 【耗时这里传 0.0】这段代码在 `api_chat` 的出口，而 `_t_round` 是 `agent_run` 的局部变量，
+    #   在这里根本不存在（第一版直接引用它 → NameError 被 except 吞掉 → 技能库一直是空的，
+    #   而日志里只看得到 debug 级，等于静默失效）。取不到精确耗时就如实记 0.0，不编。
     try:
         from core import skill_memory as _SKr
-        _sk_ok, _sk_why = _SKr.remember_task(user_input, tool_trace, answer_final,
-                                            seconds=(time.time() - _t_round))
+        _sk_ok, _sk_why = _SKr.remember_task(user_input, tool_trace, answer_final, seconds=0.0)
         if _sk_ok:
             LOG.info("技能库：%s", _sk_why)
     except Exception as _skr_e:      # noqa: silent-ok — 记技能失败不许影响回答
