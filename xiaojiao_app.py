@@ -3118,6 +3118,8 @@ _LLM_STAT = {"ok": 0, "fail": 0, "recent": []}
 # 云端熔断：连续被拒就先"歇一会儿"用本地大脑，别继续硬打（人家的免费档有频率限制，
 # 打越猛越全是 401，用户还得干等 —— 实测就是"连打 5 次全 401，静默两分钟后单发就通了"）
 _CLOUD_BREAK = {"fails": 0, "until": 0.0, "cooldown": 60.0}
+# 难度路由的日志去重：只在大脑档位/模型**变化**时打一条，避免每轮（一轮里会调很多次模型）刷屏
+_LAST_ROUTE_LOG = {"key": None}
 # 本次请求是不是"云端授权失败、自动改用本地大脑"答的（回答里会如实说明）
 _USED_LOCAL_FALLBACK = {"on": False, "model": "", "reason": ""}
 _LOCAL_PROBE = {"at": 0.0, "model": ""}
@@ -3180,9 +3182,36 @@ def _llm_targets():
 
     云端**连续被拒**时会先"歇一会儿"（熔断 60 秒）：这段时间直接走本地大脑，不再硬打 ——
     人家的免费档有频率限制，越打越全是 401，用户还要干等；歇够了自动放行再试云端。
+
+    【2026-10-17 接上难度路由】原来所有请求都打配置里那一个模型。实测四个模型后发现
+    "换更大的模型 ≠ 更强"（coder 把小数字比反了、deepseek-v4 慢 30 秒），
+    真正划算的是**按题换档 + 粘性**（详见 `core/model_router.py` 的实测表）。
+    这里只改"用哪个 model 名"，其它（地址/密钥/兜底/熔断）一个字不动。
     """
     primary = {"url": (LLM_BASE or "").rstrip("/") + "/chat/completions",
                "key": LLM_KEY, "model": LLM_MODEL, "local": _is_local_base(LLM_BASE)}
+    # ---- 难度路由：只在"本机 llama-swap 提供多个模型"时生效，探不到就完全不动 ----
+    try:
+        from core import model_router as _MR
+        _probe_text = str(_CTX.get("user_input") or "")
+        _probe_intent = str(_CTX.get("intent") or "")
+        _rmodel, _rtier, _rwhy = _MR.route(_probe_text, _probe_intent)
+        if _rmodel and primary["local"]:
+            if _rmodel != primary["model"]:
+                LOG.info("难度路由：句%d字 → %s 档，改用 %s（%s）｜原 %s",
+                         len(_probe_text), _rtier, _rmodel, _rwhy, primary["model"])
+            primary["model"] = _rmodel
+            # 记进 _CTX：界面/复盘/评测都能看到"这一轮到底用了哪档哪模型"，
+            # 而不是只有"换过才留痕"（之前没换就不打日志，核查时看不出路由活没活）。
+            _CTX["route"] = {"tier": _rtier, "model": _rmodel, "why": _rwhy}
+            _rk = (_rtier, _rmodel)
+            if _LAST_ROUTE_LOG.get("key") != _rk:
+                _LAST_ROUTE_LOG["key"] = _rk
+                LOG.info("大脑路由：%s 档 → %s（%s）", _rtier, _rmodel, _rwhy)
+        elif _rmodel:
+            LOG.info("难度路由：云端大脑不做本地换档（%s 档 / %s，%s）", _rtier, _rmodel, _rwhy)
+    except Exception as _r_e:      # noqa: silent-ok — 路由挂了必须退回"照旧用一个模型"
+        LOG.debug("难度路由不可用（按原配置）：%s", _r_e)
     out = [primary]
     if not primary["local"]:
         _lm = _local_brain_model()
@@ -14797,6 +14826,42 @@ def api_chat():
     answer_final = answer
     if not answer_final:
         answer_final = "🤖 大脑没有应答，这一问没答上。请确认模型配置正确、端口可达。" + llm_error_suffix()
+    # ---- 时效性事实：**没有可核实的来源就不许当成事实说出来**（2026-10-17 加，评测逼出来的）----
+    # 【实测现场】问「2026年世界杯谁是冠军」，它答得极其具体：
+    #   「西班牙 1-0 阿根廷 · 2026年7月20日 · 纽约大都会人寿体育场 · 费兰·托雷斯第106分钟」
+    #   —— 检索结果里根本支撑不了这些细节。这就是"编得像真的"，比不答更坏。
+    # 【做法】命中时效性事实时，把回答里的**关键实体**（人名/队名/数字）拿去和本轮工具结果比：
+    #   一个都对不上 → 明说"网上没有可核实的官方结果，以下未经核实"；对上一部分 → 只提示"部分未核实"。
+    #   这一层改的是**用户看到的话**，不改模型、不改工具。
+    try:
+        if _is_realtime_fact(user_input) and answer_final:
+            _ev = ""
+            for _t in (tool_trace or []):
+                _ev += str((_t or {}).get("result") or "") + " " + str((_t or {}).get("raw_head") or "") + " "
+            _ev += " ".join(str(c) for _a, _b, c in (info or []))
+            _ev = _ev.strip()
+            if _ev:
+                # 抽回答里"像专有名词/数字"的片段（中文连续串、数字串），看检索材料里有没有
+                _claim = re.findall(r"[\u4e00-\u9fff]{2,8}|\d{1,4}", str(answer_final))
+                _skip = {"的", "了", "是", "在", "和", "与", "这", "那", "然后", "因为", "所以",
+                         "世界", "比赛", "时间", "地点", "关键", "信息", "决赛", "结果", "冠军"}
+                _keys = [c for c in set(_claim) if c not in _skip and len(c) >= 2]
+                _hit = [k for k in _keys if k in _ev]
+                _ratio = (len(_hit) / float(len(_keys))) if _keys else 0.0
+                LOG.info("时效性事实核对：答案关键片段 %d 个，检索材料里对上 %d 个（%.0f%%）",
+                         len(_keys), len(_hit), _ratio * 100)
+                if _keys and _ratio < 0.2:
+                    answer_final = ("⚠️ **这条我没法核实**：网上没有可核实的官方结果支撑下面这些细节，"
+                                    "以下是模型的说法，**请自行核实**（我把它标出来，而不是当成事实给你）。\n\n"
+                                    + answer_final)
+                elif _keys and _ratio < 0.5:
+                    answer_final = ("⚠️（部分内容在检索材料里对不上，可能不准，建议核实）\n\n"
+                                    + answer_final)
+            else:
+                answer_final = ("⚠️ **这条我没查到可用来源**（本轮没有任何检索/工具结果），"
+                                "下面是模型凭先验说的，**未经核实**。\n\n" + answer_final)
+    except Exception as _rc_e:      # noqa: silent-ok — 核对挂了不许影响回答
+        LOG.debug("时效性事实核对失败（忽略）：%s", _rc_e)
     # ---- 第 5 步：工具结果隔离 —— 用户拿到的 `answer` 一个字不动，**进历史的只留摘要**。
     #      真实缺陷：抓回来的原始 JSON/HTML 整段写进会话，下一轮又被当上下文发回模型，
     #      于是"先画图再抓网页"，第 2 轮把第 1 轮的 JSON 原样吐了回来（串台）。

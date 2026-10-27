@@ -73,6 +73,10 @@ OFFLINE = [
     ("出口：⏳__pending__ 不许当回答返回", "t_answer_sane"),
     ("回灌：上一轮的失败句不进事实块", "t_mind_no_fail"),
     ("契约：每个工具都有「什么时候用」", "t_tool_desc"),
+    ("路由：闲聊走最快档", "t_route_fast"),
+    ("路由：写代码走 coder 档", "t_route_code"),
+    ("路由：重推理且够长走 strong 档", "t_route_strong"),
+    ("路由：换档有冷却（不来回切模型）", "t_route_cooldown"),
 ]
 
 
@@ -216,6 +220,42 @@ def t_mind_no_fail(app):
     return "暂时不可用" not in blk["text"] and "阴天 +13°C" in blk["text"]
 
 
+def t_route_fast(app):
+    from core import model_router as MR
+    MR.STATE.update({"tier": "fast", "model": "", "at": 0.0})
+    return MR.pick_tier("你好呀")[0] == "fast"
+
+
+def t_route_code(app):
+    from core import model_router as MR
+    return MR.pick_tier("帮我写一个 Python 快速排序函数")[0] == "code"
+
+
+def t_route_strong(app):
+    from core import model_router as MR
+    return MR.pick_tier("为什么这个架构要拆成微服务，对比两种方案的利弊")[0] == "strong"
+
+
+def t_route_cooldown(app):
+    """换档冷却：刚切过档，短时间内换成别的档也不切（否则 llama-swap 反复冷启动）。"""
+    from core import model_router as MR
+    MR.STATE.update({"tier": "code", "model": "qwopus3.5-4b-coder-mtp-q5_k_m.gguf",
+                     "at": 1000.0})
+    ok = True
+    try:
+        ids_backup = MR.available_models
+        MR.available_models = lambda force=False: {"xiaojiao", "coder",
+                                                   "qwopus3.5-4b-coder-mtp-q5_k_m.gguf"}
+        m, t, _ = MR.route("你好呀", now=1010.0)      # 10 秒后问闲话
+        ok = (t == "code")                            # 仍在 code 档，没切
+        m2, t2, _ = MR.route("你好呀", now=1000.0 + MR._SWITCH_S + 5)
+        ok = ok and (t2 == "fast")                    # 冷却过了才切回
+    finally:
+        MR.available_models = ids_backup
+        MR.STATE.update({"tier": "fast", "model": "", "at": 0.0})
+    return ok
+
+
 def t_tool_desc(app):
     for t in app._build_tools():
         fn = t.get("function") or {}
@@ -254,8 +294,9 @@ ONLINE = [
      "note": "画图要走 archify 链"},
     {"q": "帮我查一下 https://www.gutenberg.org/ebooks/1342 这本书的电子书清单",
      "any_tool": ["ebook_manifest"], "note": "电子书清单要走 ebook_manifest"},
-    {"q": "2026年世界杯谁是冠军", "answer_any": ["查不到", "没有", "不确定", "无法", "不知道"],
-     "note": "时效性事实：查不到就如实说，不许编"},
+    {"q": "2026年世界杯谁是冠军",
+     "answer_any": ["查不到", "没有", "不确定", "无法", "不知道", "没法核实", "未经核实", "自行核实"],
+     "note": "时效性事实：查不到/无法核实就必须标出来，不许把比分球场编成事实"},
     {"q": "我昨天跟你说过的那件事你还记得吗", "answer_any": ["没有", "不记得", "没记录", "没印象"],
      "note": "没记忆就如实说，不许编"},
 ]
@@ -351,6 +392,28 @@ def report(save=False):
         for x in HALF:
             print("      %-46s %s" % (str(x["case"])[:46], str(x["note"])[:80]))
     print("=" * 96)
+    # ---- 趋势记录：每次跑都追加一行，下一次就能看出涨了还是退了 ----
+    try:
+        hist = os.path.join(_ROOT, "docs", "eval-history.jsonl")
+        row = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "total": n,
+               "pass": len(PASS), "half": len(HALF), "fail": len(FAIL),
+               "score": round(100.0 * (len(PASS) + 0.5 * len(HALF)) / max(1, n), 1),
+               "failed": [x.get("case") for x in FAIL][:10]}
+        io.open(hist, "a", encoding="utf-8").write(json.dumps(row, ensure_ascii=False) + "\n")
+        prev = None
+        try:
+            lines = [x for x in io.open(hist, encoding="utf-8").read().split("\n") if x.strip()]
+            if len(lines) >= 2:
+                prev = json.loads(lines[-2])
+        except Exception:      # noqa: silent-ok
+            prev = None
+        if prev:
+            d = row["score"] - float(prev.get("score") or 0)
+            print("  📈 趋势：上一次 %.1f%% → 本次 %.1f%%（%+.1f）"
+                  % (float(prev.get("score") or 0), row["score"], d))
+    except Exception as e:      # noqa: silent-ok — 趋势写不进去不影响评测结论
+        print("  （趋势记录失败：%s）" % type(e).__name__)
+
     if save:
         path = os.path.join(_ROOT, "docs", "eval-baseline.md")
         lines = ["# 小焦端到端评测基线", "",
