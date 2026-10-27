@@ -3,7 +3,7 @@
 > 这份文件是 `tools/gen_tool_catalog.py` **自动生成**的，别手改 —— 
 > 改了工具描述就重跑一次；`tools/test_tool_contract.py` 会校验它和实际工具表是否一致。
 
-**全部工具：103 个 ｜ 契约合格：103 个 ｜ 不合格：0 个**
+**全部工具：105 个 ｜ 契约合格：105 个 ｜ 不合格：0 个**
 
 ## 怎么读这张表
 
@@ -119,6 +119,13 @@
 | --- | --- | --- | --- |
 | `ebook_grab` | 把公开电子书的文件下载到本地，遇付费墙跳过并说明。什么时候用：要成批存书；输入 url+out_dir | `ebook_grab({"url": "https://example.com", "out_dir": "值", "limit": 1})` | ✅ |
 | `ebook_manifest` | 解析公开书站目录页成书目清单（可存 CSV/MD）。什么时候用：要书目一览；输入 url；输出清单 | `ebook_manifest({"url": "https://example.com", "out": "值", "limit": 1})` | ✅ |
+
+### 插件 · evolve（2 个工具）
+
+| 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
+| --- | --- | --- | --- |
+| `evolve_report` | 看它现在最弱的是哪几处、下一步该改什么。什么时候用：想知道短板/怎么变强；输入 limit；输出 改进清单 | `evolve_report({})` | ✅ |
+| `experience_stats` | 看它踩过哪些坑、能力自增长成功了多少次。什么时候用：想知道它学过什么；输入 无；输出 统计 | `experience_stats({})` | ✅ |
 
 ### 插件 · forge（1 个工具）
 

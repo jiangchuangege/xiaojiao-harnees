@@ -1,6 +1,6 @@
 {
- "total": 103,
- "ok": 103,
+ "total": 105,
+ "ok": 105,
  "bad": 0,
  "tools": [
   {
@@ -957,6 +957,32 @@
     "new_string"
    ],
    "example": "edit_file({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\", \"old_string\": \"值\", \"new_string\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "evolve",
+   "kind": "插件",
+   "name": "evolve_report",
+   "description": "看它现在最弱的是哪几处、下一步该改什么。什么时候用：想知道短板/怎么变强；输入 limit；输出 改进清单",
+   "full_description": "看它现在最弱的是哪几处、下一步该改什么。什么时候用：想知道短板/怎么变强；输入 limit；输出 改进清单",
+   "required": [],
+   "properties": [
+    "limit"
+   ],
+   "example": "evolve_report({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "evolve",
+   "kind": "插件",
+   "name": "experience_stats",
+   "description": "看它踩过哪些坑、能力自增长成功了多少次。什么时候用：想知道它学过什么；输入 无；输出 统计",
+   "full_description": "看它踩过哪些坑、能力自增长成功了多少次。什么时候用：想知道它学过什么；输入 无；输出 统计",
+   "required": [],
+   "properties": [],
+   "example": "experience_stats({})",
    "test": "通过",
    "problems": []
   },

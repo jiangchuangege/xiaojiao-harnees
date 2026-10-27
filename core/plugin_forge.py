@@ -67,6 +67,12 @@ _PROMPT = """你是小焦插件作者。为需求写一个**单文件 Python 插
 5) 不许用 subprocess / os.system / eval / exec / 删文件 这类危险调用。
 6) 代码尽量短（60 行以内），不要在文件里写示例调用。
 
+【照着这两个真实插件的样子写（骨架对齐，别照抄内容）】
+{examples}
+
+【这类需求以前栽过的地方（务必避开）】
+{lessons}
+
 需求：{need}
 
 只输出完整 Python 代码，不要解释、不要 Markdown 代码围栏。"""
@@ -280,12 +286,64 @@ def sandbox_run(path, timeout=30):
         return False, "沙箱跑不起来：%s: %s" % (type(e).__name__, str(e)[:120]), []
 
 
+def _few_shot(max_files=2, max_lines=32):
+    """从仓库现有插件里挑**最短的两个**当骨架样例，喂给生成模型。
+
+    【为什么喂真代码而不是继续描述】实测：光靠文字说"要有 get_tool_descriptions/execute"，
+    4B 仍然会漏（漏「什么时候用」、把工具名写成中文）。给它看两个**真实能跑**的插件骨架，
+    比加三条要求有效得多 —— 这是"少说多给例子"的工程常识，也是喂样例而不是喂规则的原因。
+    只读前 max_lines 行：只取骨架形态，不需要业务逻辑（也就不会把别人的业务抄错）。
+    """
+    try:
+        files = []
+        for fn in os.listdir(_PLUGINS):
+            if not fn.endswith(".py") or fn.startswith("_") or fn == "forge.py":
+                continue
+            p = os.path.join(_PLUGINS, fn)
+            try:
+                with io.open(p, encoding="utf-8") as f:
+                    lines = f.readlines()
+            except Exception:      # noqa: silent-ok — 单个文件读不了就跳过
+                continue
+            files.append((len(lines), fn, lines[:max_lines]))
+        files.sort()
+        out = []
+        for n, fn, lines in files[:max_files]:
+            body = "".join(lines).rstrip()
+            out.append("--- 样例：%s（共 %d 行，这里只看前 %d 行）---\n%s"
+                       % (fn, n, min(n, max_lines), body))
+        return "\n\n".join(out) if out else "（仓库里暂时没有可参考的插件）"
+    except Exception as e:      # noqa: silent-ok — 拿不到样例也不能挡住生成
+        LOG.debug("自增长：取样例失败（忽略）：%s", e)
+        return "（样例取不到，按契约写即可）"
+
+
+def _lessons_block(need):
+    """把经验库里"这类需求以前栽过的坑"整理成几行，注入提示词。"""
+    try:
+        from core import experience as EXP
+        rows = EXP.lessons("forge_fail", keyword=need, limit=3)
+        if not rows:
+            return "（还没有同类失败记录 —— 这是第一次做这类能力）"
+        lines = []
+        for r in rows:
+            ls = str(r.get("lesson") or "").strip()
+            why = str(r.get("why") or "").strip()[:60]
+            if ls:
+                lines.append("- %s（当时的问题：%s）" % (ls, why))
+        return "\n".join(lines) if lines else "（有失败记录但没提炼出教训）"
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("自增长：取教训失败（忽略）：%s", e)
+        return "（教训库不可用）"
+
+
 def _ask_model(need):
     """用本机模型生成插件代码（失败返回空串，不抛异常）。"""
     try:
         import requests
         prompt = _PROMPT.format(allowed=", ".join(sorted(_ALLOWED_IMPORTS)),
-                                need=str(need)[:400])
+                                need=str(need)[:400],
+                                examples=_few_shot(), lessons=_lessons_block(need))
         for model in ("qwopus3.5-4b-coder-mtp-q5_k_m.gguf", "coder", "xiaojiao"):
             try:
                 r = requests.post(_base_url_v1() + "/chat/completions", json={
@@ -400,6 +458,8 @@ def forge(need, generator=None, dry_run=False, timeout=30, max_repair=2):
         LOG.info("自增长：沙箱试跑通过（工具：%s，第 %d 次）", tools, attempt)
 
         if dry_run:
+            _remember(need, {"ok": True, "stage": "dry-run", "tools": tools,
+                             "attempts": attempt, "fixed": _n_fixed})
             return {"ok": True, "stage": "dry-run", "why": "全部检查通过（未落地）",
                     "module": module, "path": "", "tools": tools, "code": code,
                     "attempts": attempt, "fixed": _n_fixed}
@@ -410,7 +470,19 @@ def forge(need, generator=None, dry_run=False, timeout=30, max_repair=2):
             return {"ok": False, "stage": "write",
                     "why": "写不进 plugins/：%s: %s" % (type(e).__name__, str(e)[:100]),
                     "code": code}
+        _remember(need, {"ok": True, "stage": "written", "tools": tools,
+                         "attempts": attempt, "fixed": _n_fixed})
         return {"ok": True, "stage": "written", "why": "已落地（重启或热注册后生效）",
                 "module": module, "path": target, "tools": tools, "code": code,
                 "attempts": attempt, "fixed": _n_fixed}
+    _remember(need, last)
     return last
+
+
+def _remember(need, result):
+    """把这次成与败写进经验库（成功率、教训都从这里长出来）。失败不影响主流程。"""
+    try:
+        from core import experience as EXP
+        EXP.remember_forge(need, result)
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("自增长：记经验失败（忽略）：%s", e)

@@ -401,6 +401,16 @@ def _sandbox(tmp):
             "call": lambda app: app.run_tool("asset_intel_status", {}, force=True),
             "check": lambda: (True, "数据源状态"),
         },
+        # 自进化两件：报告本身是"中文说明文本"，通用判分容易把里面的"需要/缺…"当成报错
+        # （实测：evolve_report 被判成「缺配置」）。给它们写用例，用**返回内容特征**判，最稳。
+        "evolve_report": {
+            "call": lambda app: app.run_tool("evolve_report", {"limit": 3}, force=True),
+            "check": lambda: (True, "给出了改进清单（含证据与动作）"),
+        },
+        "experience_stats": {
+            "call": lambda app: app.run_tool("experience_stats", {}, force=True),
+            "check": lambda: (True, "给出了经验库快照"),
+        },
     }
 
 

@@ -6829,6 +6829,23 @@ def _scrape_save_body(url, body, target):
         return "", "存盘失败：%s: %s" % (type(e).__name__, str(e)[:120])
 
 
+def _evolve_intent(text):
+    """这一轮是不是在问"它自己哪儿弱、下一步改什么"？
+
+    【为什么要载体认这句话】实测：问「现在哪里最弱，下一步该改什么」，
+    模型回了一句"我目前没有上下文能定位到具体指什么，请你把范围缩小一点"——
+    可它手里明明有 `evolve_report`（诊断评测+体检红点）。这类问题**必须由载体接**，
+    不能让模型把"我自己的短板"当成"你项目的短板"来反问。
+    """
+    t = str(text or "").strip()
+    if not t or len(t) > 60:
+        return False
+    words = ("最弱", "短板", "弱项", "哪里不行", "哪里差", "哪儿弱", "哪儿不行",
+             "下一步该改", "下一步改什么", "怎么变强", "怎么进化", "自我进化",
+             "体检结果", "评测结果", "能力体检", "自我诊断", "诊断一下")
+    return any(w in t for w in words)
+
+
 def _forge_intent(text):
     """这一轮是不是要让小焦**给自己长一个新能力**？返回 need 原文，或 None。
 
@@ -12437,6 +12454,20 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 answer = _carrier_block_answer("delete", _r)
             else:
                 answer = "💻 **已执行**：`%s`\n\n```\n%s\n```" % (_sh, _r.strip()[:1500])
+
+    # ③0a2 自我诊断：问"哪儿最弱 / 下一步改什么"→ 直接走 evolve_report。
+    #   模型会把这种问题理解成"你项目哪里弱"从而反问要线索；而它自己是有诊断能力的。
+    if answer is None:
+        if _evolve_intent(user_input):
+            try:
+                _evres = _tool_result_str(run_tool("evolve_report", {"limit": 8}, force=True))
+                if _evres and not _evres.startswith("⚠️"):
+                    LOG.info("自我诊断：用户问短板 → 走 evolve_report")
+                    tool_trace.append(_trace_entry("evolve_report", {"limit": 8}, _evres))
+                    _note_tool_path(tool_trace, path="evolve")
+                    answer = _evres
+            except Exception as _ev_e:      # noqa: silent-ok — 诊断挂了不能拖垮整轮
+                LOG.debug("自我诊断路由失败（忽略）：%s", _ev_e)
 
     # ③0a 能力自增长：用户说「给我加个能 XX 的能力/工具/插件」→ 直接走 forge_plugin。
     #   【为什么放模型之前】模型（尤其 4B）遇到"给我加个能力"十有八九回一句"我做不到"，
