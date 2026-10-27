@@ -33,9 +33,10 @@ import re
 LOG = logging.getLogger(__name__)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_EVAL_HIST = os.path.join(_ROOT, "docs", "eval-history.jsonl")
-_EVAL_MD = os.path.join(_ROOT, "docs", "eval-baseline.md")
-_HEALTH_MD = os.path.join(_ROOT, "docs", "capability-health.md")
+_DOCS = os.path.join(_ROOT, "docs")          # 抽出来是为了自测能指到临时目录
+_EVAL_HIST = os.path.join(_DOCS, "eval-history.jsonl")
+_EVAL_MD = os.path.join(_DOCS, "eval-baseline.md")
+_HEALTH_MD = os.path.join(_DOCS, "capability-health.md")
 
 # 病情 → 优先级（数字小 = 先修）与能否自动
 _KINDS = {
@@ -47,6 +48,7 @@ _KINDS = {
     "health_param":{"pri": 6, "auto": False, "name": "体检参数不合适（工具本身没坏）"},
     "health_untested": {"pri": 7, "auto": False, "name": "没测过"},
     "env":         {"pri": 8, "auto": False, "name": "缺外部条件"},
+    "doc":         {"pri": 6, "auto": False, "name": "文档和事实对不上"},
     "capability":  {"pri": 3, "auto": True,  "name": "缺能力（可自动生成插件）"},
 }
 
@@ -104,6 +106,95 @@ def _kind_of_eval(item):
     return "answer", "看这条属于哪条链，先复现一次再动手"
 
 
+def _doc_checks():
+    """文档与事实是否对得上（目标里的"文档类"改进项）。
+
+    查的都是**能自动比对**的东西，不猜：
+      ① `docs/tool-catalog.md` 里写的工具数 vs 真实工具表；
+      ② `docs/eval-baseline.md` 的分数 vs `eval-history.jsonl` 最后一行；
+      ③ `docs/capability-health.md` 的合计数字 vs 表格里实际行数。
+    这三样一旦对不上，读者看到的就是过期数据 —— 比没有文档更误导。
+    """
+    out = []
+    try:
+        real_n = None
+        try:
+            import xiaojiao_app as _app
+            real_n = len(_app.all_tool_names())
+        except Exception:      # noqa: silent-ok — 拿不到真实工具表就跳过这条
+            real_n = None
+        cat = _read(os.path.join(_DOCS, "tool-catalog.md"))
+        m = re.search(r"工具总数[：:]\s*(\d+)", cat) or re.search(r"工具表\s*(\d+)\s*个", cat)
+        if real_n and m and int(m.group(1)) != real_n:
+            out.append({"target": "docs/tool-catalog.md",
+                        "evidence": "文档写 %s 个，实际 %d 个" % (m.group(1), real_n),
+                        "action": "跑 `python tools/gen_tool_catalog.py` 重生成（别手改）"})
+        # 评测基线 vs 趋势最后一行
+        base = _read(_EVAL_MD)
+        mb = re.search(r"得分\s*([\d.]+)%|(\d+\.\d)%", base or "")
+        last = _last_eval()
+        if last.get("score") is not None and mb:
+            doc_score = float(mb.group(1) or mb.group(2))
+            if abs(doc_score - float(last["score"])) > 0.05:
+                out.append({"target": "docs/eval-baseline.md",
+                            "evidence": "文档写 %.1f%%，趋势最后一行是 %s%%"
+                                        % (doc_score, last["score"]),
+                            "action": "跑 `python tools/eval_xiaojiao.py --save` 刷新"})
+        # 体检合计 vs 表格行数
+        health = _read(_HEALTH_MD)
+        mh = re.search(r"合计\s*(\d+)\s*个?", health)
+        if mh:
+            rows = sum(1 for ln in health.split("\n")
+                       if ln.strip().startswith("|") and "`" in ln)
+            if rows and int(mh.group(1)) != rows:
+                out.append({"target": "docs/capability-health.md",
+                            "evidence": "合计写 %s，表格实际 %d 行" % (mh.group(1), rows),
+                            "action": "跑 `python tools/health_capability.py --save` 刷新"})
+    except Exception as e:      # noqa: silent-ok — 文档检查失败不许影响诊断
+        LOG.debug("自进化：文档检查失败（忽略）：%s", e)
+    return out
+
+
+def _dup_generated():
+    """自生成插件里**功能重复**的（只提示，不代删 —— 本项目只加不删）。
+
+    【为什么这条要进诊断】实测膨胀：同一类需求被反复要，自增长长出了
+    `cn_num_to_int` / `int_to_cn_num` / `cn_num_to_int_v2` / `int_to_cn_num_v2` / `gen_9dd4e461`
+    五个重叠工具。工具表越堆越乱，模型选工具更难 —— 这类"自己给自己添乱"必须能看见。
+    处理方式只提示：移不移进隔离区由人决定。
+    """
+    out = []
+    try:
+        plugins_dir = os.path.join(_ROOT, "plugins")
+        if not os.path.isdir(plugins_dir):
+            return out
+        buckets = {}
+        for fn in os.listdir(plugins_dir):
+            if not (fn.startswith("gen_") and fn.endswith(".py")):
+                continue
+            try:
+                src = io.open(os.path.join(plugins_dir, fn), encoding="utf-8").read()
+            except Exception:      # noqa: silent-ok
+                continue
+            for name in re.findall(r'"name"\s*:\s*"([A-Za-z][A-Za-z0-9_]{2,40})"', src):
+                base = re.sub(r"(_v\d+)+$", "", name.lower())          # 去掉 _v2/_v3 后缀
+                base = re.sub(r"^gen_[0-9a-f]{6,}$", "gen_hash", base)  # hash 名归一堆
+                base = base.replace("cn_num_to_int", "num_convert") \
+                           .replace("int_to_cn_num", "num_convert")
+                buckets.setdefault(base or name, []).append((name, fn))
+        for base, items in buckets.items():
+            if len(items) > 1:
+                names = "、".join(sorted({n for n, _f in items}))
+                files = "、".join(sorted({f for _n, f in items}))
+                out.append({"target": "plugins/ 自生成插件",
+                            "evidence": "功能重叠 %d 个：%s（文件 %s）" % (len(items), names, files),
+                            "action": "确认后把多余的移进 logs/quarantine/（本项目不删文件），"
+                                      "只留最有用的那个；以后同类需求会被 forge 的重复闸门直接拦下"})
+    except Exception as e:      # noqa: silent-ok — 查不出来不影响诊断
+        LOG.debug("自进化：重复插件检查失败（忽略）：%s", e)
+    return out
+
+
 def diagnose(limit=8):
     """返回改进项列表（已排序）。每项：kind/pri/auto/target/evidence/action。"""
     items = []
@@ -148,6 +239,15 @@ def diagnose(limit=8):
                                     "同类需求可直接走 forge_plugin 再试一次"})
     except Exception:      # noqa: silent-ok
         pass
+
+    # ---- ④ 文档类：文档写的和事实对不对得上 ----
+    for it in _doc_checks():
+        items.append({"kind": "doc", "target": it["target"],
+                      "evidence": it["evidence"], "action": it["action"]})
+    # ---- ⑤ 自生成插件重复（自己给自己添乱，只提示不代删）----
+    for it in _dup_generated():
+        items.append({"kind": "doc", "target": it["target"],
+                      "evidence": it["evidence"], "action": it["action"]})
 
     for it in items:
         meta = _KINDS.get(it["kind"], {"pri": 9, "auto": False, "name": it["kind"]})

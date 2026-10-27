@@ -129,6 +129,44 @@ def main():
         SE._EVAL_HIST, SE._EVAL_MD, SE._HEALTH_MD = hist_backup, md_backup, health_backup
         shutil.rmtree(tmpdir, ignore_errors=True)
 
+    # ---------------- 五、文档类：文档和事实对不上要能查出来 ----------------
+    print("\n[五] 文档类：文档写的和事实不一致时要报出来")
+    docs_backup = SE._DOCS
+    try:
+        d2 = tempfile.mkdtemp()
+        SE._DOCS = d2
+        io.open(os.path.join(d2, "tool-catalog.md"), "w", encoding="utf-8").write(
+            "# 工具清单\n\n工具总数：999 个\n")            # 故意写错
+        io.open(os.path.join(d2, "eval-baseline.md"), "w", encoding="utf-8").write(
+            "# 评测\n\n得分 42.0%\n")
+        io.open(os.path.join(d2, "capability-health.md"), "w", encoding="utf-8").write(
+            "# 体检\n\n**合计 999 ｜ 可用 1**\n\n| 工具 | 来源 | 结论 | 说明 |\n"
+            "| --- | --- | --- | --- |\n| `a` | 内置 | ok | x |\n")
+        SE._EVAL_HIST = os.path.join(d2, "eval-history.jsonl")
+        io.open(SE._EVAL_HIST, "w", encoding="utf-8").write(json.dumps(
+            {"score": 100.0, "total": 41, "pass": 41, "half": 0, "fail": 0},
+            ensure_ascii=False) + "\n")
+        SE._EVAL_MD = os.path.join(d2, "eval-baseline.md")
+        SE._HEALTH_MD = os.path.join(d2, "capability-health.md")
+        docs = SE._doc_checks()
+        ck("查出工具数与实际不符", any("tool-catalog" in x["target"] for x in docs),
+           [x["target"] for x in docs])
+        ck("查出评测基线与趋势不一致", any("eval-baseline" in x["target"] for x in docs),
+           [x["target"] for x in docs])
+        ck("查出体检合计与表格行数不符",
+           any("capability-health" in x["target"] for x in docs),
+           [x["target"] for x in docs])
+        ck("每条文档问题都给了重生成命令",
+           all("python tools/" in x["action"] for x in docs), [x["action"][:20] for x in docs])
+        st2 = SE.stats()
+        ck("文档问题计入诊断（kind=doc）", st2["by_kind"].get("doc", 0) >= 1, st2["by_kind"])
+    finally:
+        SE._DOCS = docs_backup
+        SE._EVAL_HIST = os.path.join(_ROOT, "docs", "eval-history.jsonl")
+        SE._EVAL_MD = os.path.join(_ROOT, "docs", "eval-baseline.md")
+        SE._HEALTH_MD = os.path.join(_ROOT, "docs", "capability-health.md")
+        shutil.rmtree(d2, ignore_errors=True)
+
     print("\n" + "=" * 80)
     print("  通过 %d / 共 %d%s" % (len(PASS), len(PASS) + len(FAIL),
                                   ("（失败：%s）" % "、".join(FAIL)) if FAIL else ""))

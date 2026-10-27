@@ -1,6 +1,6 @@
 {
- "total": 106,
- "ok": 106,
+ "total": 109,
+ "ok": 109,
  "bad": 0,
  "tools": [
   {
@@ -821,6 +821,22 @@
    "problems": []
   },
   {
+   "plugin": "gen_x_20261027_200342",
+   "kind": "插件",
+   "name": "cn_num_to_int_v2",
+   "description": "中文数字转整数。什么时候用：用户问「三十四」这种纯中文数字；输入数字汉字；输出整数。",
+   "full_description": "中文数字转整数。什么时候用：用户问「三十四」这种纯中文数字；输入数字汉字；输出整数。",
+   "required": [
+    "num"
+   ],
+   "properties": [
+    "num"
+   ],
+   "example": "cn_num_to_int_v2({\"num\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
    "plugin": "scrapling_bridge",
    "kind": "插件",
    "name": "collect_vulnerabilities",
@@ -1057,6 +1073,22 @@
    "problems": []
   },
   {
+   "plugin": "gen_x_20261027_202438",
+   "kind": "插件",
+   "name": "gen_9dd4e461",
+   "description": "x。什么时候用：x",
+   "full_description": "x。什么时候用：x",
+   "required": [
+    "text"
+   ],
+   "properties": [
+    "text"
+   ],
+   "example": "gen_9dd4e461({\"text\": \"你好\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
    "plugin": "music_generation",
    "kind": "插件",
    "name": "generate_music",
@@ -1208,6 +1240,22 @@
     "text"
    ],
    "example": "int_to_cn_num({\"text\": \"你好\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "gen_x_20261027_200342",
+   "kind": "插件",
+   "name": "int_to_cn_num_v2",
+   "description": "整数转中文数字。什么时候用：用户问「三十四」这种纯中文数字；输入整数；输出中文数字。",
+   "full_description": "整数转中文数字。什么时候用：用户问「三十四」这种纯中文数字；输入整数；输出中文数字。",
+   "required": [
+    "num"
+   ],
+   "properties": [
+    "num"
+   ],
+   "example": "int_to_cn_num_v2({\"num\": 1})",
    "test": "通过",
    "problems": []
   },

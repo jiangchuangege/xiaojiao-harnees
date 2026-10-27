@@ -182,6 +182,42 @@ def _conflicts(code):
         return []
 
 
+def _similar_existing(need):
+    """**同类能力是不是已经有了**？有就返回已有工具名（提示别重复生成）。
+
+    【为什么必须有这道闸】实测膨胀：连着几次要"中文数字↔阿拉伯数字"这类能力，
+    自增长就长出了 `cn_num_to_int`、`int_to_cn_num`、`cn_num_to_int_v2`、
+    `int_to_cn_num_v2`、`gen_9dd4e461` —— 五个功能重叠的工具。工具表越堆越乱，
+    模型选工具反而更难（这正是"能力越多越不好用"的典型翻车）。
+    判据刻意保守（只在**高度重合**时才拦）：把需求切成 2 字词，和"已成功落地的需求"比覆盖率，
+    ≥60% 才算重复；判不准就放行 —— 宁可多长一个，也不误杀真新需求。
+    """
+    try:
+        from core import experience as EXP
+
+        def toks(s):
+            t = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", str(s or ""))
+            return set(t[i:i + 2] for i in range(len(t) - 1))
+
+        want = toks(need)
+        if not want:
+            return ""
+        for row in EXP.load(limit=400):
+            if row.get("kind") != "forge_ok":
+                continue
+            old_tools = str((row.get("extra") or {}).get("tools") or "")
+            if not old_tools:
+                continue
+            ot = toks(row.get("need"))
+            if not ot:
+                continue
+            if len(want & ot) / float(len(want)) >= 0.6:
+                return old_tools.split(",")[0]
+    except Exception as e:      # noqa: silent-ok — 判不了就放行（不误杀新需求）
+        LOG.debug("自增长：查同类能力失败（忽略）：%s", e)
+    return ""
+
+
 def static_check(code):
     """静态检查。返回 (ok, 问题列表)。问题用中文写，直接能给人看。"""
     problems = []
@@ -426,15 +462,33 @@ def _strip_fence(code):
     return re.sub(r"\s*```$", "", t).strip()
 
 
-def forge(need, generator=None, dry_run=False, timeout=30, max_repair=2):
+def forge(need, generator=None, dry_run=False, timeout=30, max_repair=2, template_first=True):
     """完整闭环：生成 → 静态检查 →（不过则自修）→ 沙箱试跑 → 落地（或如实失败）。
 
     `generator`：callable(need) -> code；给了就**只**用它（自测打桩，不回落真调模型）。
     `dry_run=True`：走完全部检查但不写文件（评测/自测用）。
+    `template_first=True`：先走**模板路径**（契约由载体写死、模型只填业务函数），
+        失败再退回"整份插件自由生成"。实测这条路成功率高得多 —— 见 `forge_template`。
     """
     need = str(need or "").strip()
     if not need:
         return {"ok": False, "stage": "input", "why": "没说清要什么能力", "code": ""}
+
+    # ---- 模板优先：契约错不了，模型只写一小段业务函数 ----
+    if generator is None and template_first:
+        # 先查同类能力：有了就别再长一个（防止工具表膨胀）
+        _dup = _similar_existing(need)
+        if _dup:
+            msg = ("已经有这个能力了：`%s`（不重复生成）。直接用它，或把需求说得更具体一点。"
+                   % _dup)
+            LOG.info("自增长：%s 需求=「%s」", msg, need[:40])
+            _remember(need, {"ok": True, "stage": "duplicate", "tools": [_dup]})
+            return {"ok": True, "stage": "duplicate", "why": msg, "module": "",
+                    "path": "", "tools": [_dup], "code": "", "via": "reuse"}
+        tr = forge_template(need, dry_run=dry_run, timeout=timeout, max_repair=max_repair)
+        if tr.get("ok"):
+            return tr
+        LOG.info("自增长：模板路径没成（%s）→ 退回整份自由生成", str(tr.get("why"))[:60])
 
     if generator is not None:
         try:
@@ -525,6 +579,219 @@ def forge(need, generator=None, dry_run=False, timeout=30, max_repair=2):
         return {"ok": True, "stage": "written", "why": "已落地（重启或热注册后生效）",
                 "module": module, "path": target, "tools": tools, "code": code,
                 "attempts": attempt, "fixed": _n_fixed}
+    _remember(need, last)
+    return last
+
+
+_TEMPLATE_PROMPT = """你要给小焦补一个能力。**不要写整个插件**，只写一段"业务函数"。
+
+【需求】{need}
+
+请在下面几种形态里选一个（照抄它的函数签名），只输出**这个函数**（含 import 如果需要）：
+1) 单输入文本/数字 → 文本：
+def transform(text):
+    # 你的实现
+    return "结果字符串"
+2) 两个输入 → 文本：
+def transform(a, b):
+    return "结果字符串"
+3) 无输入（查本机状态之类）：
+def transform():
+    return "结果字符串"
+
+硬要求：
+· 只输出函数（和它需要的 import），**不要**写 class、不要写 get_plugin、不要写说明文字；
+· 返回值必须是字符串（用户看到的就是它）；
+· 用 try/except 兜住异常，出错也要返回中文说明，**绝不抛异常**；
+· 只许用这些 import：{allowed}
+
+{lessons}
+"""
+
+_TEMPLATE_PLUGIN = '''# 小焦 · 模板化生成的能力（2026-10-27，契约由载体写死、业务由模型填写）
+"""小焦 · 自动生成的能力 · {cn_name}
+
+【需求】{need}
+【怎么来的】`core/plugin_forge.py` 的模板优先路径：契约（类/两个方法/get_plugin）
+  由载体按仓库规范写死，模型只负责填 `transform()` 的业务实现 ——
+  这样"契约写错/漏「什么时候用」/工具名用中文"这类失败从源头上就不存在了。
+"""
+{imports}
+
+{body}
+
+
+_TOOLS = [
+    {{
+        "name": "{tool_name}",
+        "description": "{desc}",
+        "parameters": {{
+            "type": "object",
+            "properties": {{
+{propsdoc}
+            }},
+            "required": [{required}],
+        }},
+    }},
+]
+
+
+class GenPlugin:
+    def get_tool_descriptions(self):
+        return list(_TOOLS)
+
+    def execute(self, tool_name, params):
+        try:
+            if tool_name != "{tool_name}":
+                return "这个插件只有 {tool_name}（{cn_name}）。"
+            return transform({call_args})
+        except Exception as e:      # noqa: silent-ok — 插件异常一律转成中文
+            return "执行时出错：%s" % str(e)[:100]
+
+
+_PLUGIN = GenPlugin()
+
+
+def get_plugin():
+    return _PLUGIN
+'''
+
+
+def _pick_signature(body):
+    """从模型给的函数体里认出它选了哪种形态：0/1/2 个参数。"""
+    m = re.search(r"def\s+transform\s*\(([^)]*)\)", str(body or ""))
+    if not m:
+        return None
+    args = [a.strip() for a in m.group(1).split(",") if a.strip()]
+    return [a.split("=")[0].strip() for a in args]
+
+
+def _mk_english_name(need):
+    """给工具起一个合规英文名：优先用需求里的英文，否则按 hash 生成（稳定可复现）。"""
+    words = re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", str(need or ""))
+    if words:
+        name = "_".join(w.lower() for w in words[:3])
+    else:
+        import hashlib
+        name = "gen_%s" % hashlib.md5(str(need or "").encode("utf-8")).hexdigest()[:8]
+    name = re.sub(r"[^a-z0-9_]", "_", name.lower()).strip("_")
+    if not re.match(r"^[a-z]", name):
+        name = "gen_" + name
+    return name[:40]
+
+
+def forge_template(need, dry_run=False, timeout=30, max_repair=2):
+    """模板优先路径：模型只写业务函数，契约由载体拼。成功率高得多。
+
+    返回结构与 `forge()` 一致（ok/stage/why/module/path/tools/code）。
+    """
+    need = str(need or "").strip()
+    if not need:
+        return {"ok": False, "stage": "input", "why": "没说清要什么能力", "code": ""}
+    try:
+        import requests
+    except Exception:
+        return {"ok": False, "stage": "generate", "why": "环境里没有 requests", "code": ""}
+
+    prompt = _TEMPLATE_PROMPT.format(allowed=", ".join(sorted(_ALLOWED_IMPORTS)),
+                                     need=need[:300], lessons=_lessons_block(need))
+    body = ""
+    for model in ("qwopus3.5-4b-coder-mtp-q5_k_m.gguf", "coder", "xiaojiao"):
+        try:
+            r = requests.post(_base_url_v1() + "/chat/completions", json={
+                "model": model, "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 1200, "temperature": 0.2,
+            }, timeout=180)
+            if r.status_code == 200:
+                body = _strip_fence(((r.json().get("choices") or [{}])[0].get("message") or {})
+                                    .get("content") or "")
+                if "def transform" in body:
+                    break
+                body = ""
+        except Exception:      # noqa: silent-ok — 换下一个模型
+            continue
+    if not body:
+        return {"ok": False, "stage": "generate", "why": "模型没写出业务函数", "code": ""}
+
+    args = _pick_signature(body)
+
+    def _assemble(b):
+        """把业务函数 + 载体写死的契约拼成完整插件。"""
+        sig = _pick_signature(b) or []
+        props, docs, req = [], [], []
+        for a in sig:
+            props.append('                "%s": {"type": "string", "description": "参数 %s"}'
+                         % (a, a))
+            req.append('"%s"' % a)
+        imports = "\n".join(l for l in b.split("\n")
+                            if re.match(r"\s*(import|from)\s", l))
+        body_only = "\n".join(l for l in b.split("\n")
+                              if not re.match(r"\s*(import|from)\s", l))
+        tool = _mk_english_name(need)
+        desc = ("%s" % need)[:40].replace('"', "")
+        return _TEMPLATE_PLUGIN.format(
+            cn_name=need[:40].replace('"', ""), need=need[:200].replace('"', ""),
+            imports=imports, body=body_only.strip(),
+            tool_name=tool, desc=desc + "。什么时候用：" + need[:24].replace('"', ""),
+            propsdoc="\n".join(props), required=", ".join(req),
+            call_args=", ".join('(params or {}).get("%s")' % a for a in sig),
+        )
+
+    code = _assemble(body)
+    module = _sanitize_module_name(need)
+    target = os.path.join(_PLUGINS, module + ".py")
+    if os.path.exists(target):
+        module = "%s_%d" % (module, int(time.time()))
+        target = os.path.join(_PLUGINS, module + ".py")
+
+    last = {"ok": False, "stage": "unknown", "why": "没走到检查", "code": code}
+    attempts = 1 + max(0, max_repair)
+    for attempt in range(1, attempts + 1):
+        ok, problems = static_check(code)
+        if not ok:
+            last = {"ok": False, "stage": "static", "why": "；".join(problems[:5]), "code": code}
+            if attempt < attempts:
+                fix = _ask_model_fix(need, code, last["why"])
+                if fix.strip():
+                    body = _strip_fence(fix)
+                    if "def transform" in body:
+                        code = _assemble(body)
+                        continue
+            break
+        _cf = _conflicts(code)
+        if _cf:
+            last = {"ok": False, "stage": "conflict", "why": "工具名撞车：%s" % ",".join(_cf[:2]),
+                    "code": code}
+            break
+        tmpdir = tempfile.mkdtemp(prefix="xj_forge_tpl_")
+        tmp_path = os.path.join(tmpdir, module + ".py")
+        io.open(tmp_path, "w", encoding="utf-8").write(code)
+        ok2, why2, tools = sandbox_run(tmp_path, timeout=timeout)
+        if not ok2:
+            last = {"ok": False, "stage": "sandbox", "why": why2, "code": code}
+            if attempt < attempts:
+                fix = _ask_model_fix(need, code, why2)
+                if fix.strip():
+                    body = _strip_fence(fix)
+                    if "def transform" in body:
+                        code = _assemble(body)
+                        continue
+            break
+        if dry_run:
+            _remember(need, {"ok": True, "stage": "dry-run", "tools": tools, "attempts": attempt})
+            return {"ok": True, "stage": "dry-run", "why": "模板路径全部检查通过（未落地）",
+                    "module": module, "path": "", "tools": tools, "code": code,
+                    "attempts": attempt, "fixed": 0, "via": "template"}
+        try:
+            os.makedirs(_PLUGINS, exist_ok=True)
+            io.open(target, "w", encoding="utf-8").write(code)
+        except Exception as e:
+            return {"ok": False, "stage": "write",
+                    "why": "写不进 plugins/：%s" % str(e)[:100], "code": code}
+        _remember(need, {"ok": True, "stage": "written", "tools": tools, "attempts": attempt})
+        return {"ok": True, "stage": "written", "why": "已落地（重启或热注册后生效）",
+                "module": module, "path": target, "tools": tools, "code": code,
+                "attempts": attempt, "fixed": 0, "via": "template"}
     _remember(need, last)
     return last
 

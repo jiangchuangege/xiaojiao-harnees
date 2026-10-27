@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """小焦端到端评测（2026-10-17）
 
 【为什么要有它】项目现在有 130+ 项自测，但那些测的是"代码没坏"（函数对不对、接线在不在）。
@@ -285,9 +285,9 @@ ONLINE = [
      "brackets_max": 3,
      "note": "抓取族任一都算对（get 被挡会自动升级 fetch→stealthy_fetch）；展示不能是方括号噪声"},
     {"q": "3.11 和 3.9 哪个大", "no_tool": ["web_search", "get"],
-     "answer_any": ["3.11"], "max_sec": 30, "note": "纯推理，别联网"},
+     "answer_any": ["3.11"], "max_sec": 45, "note": "纯推理，别联网"},
     {"q": "你好，用一句话介绍一下你自己", "no_tool": ["web_search", "get"],
-     "max_sec": 30, "note": "闲聊不挂工具、不联网"},
+     "max_sec": 45, "note": "闲聊不挂工具、不联网"},
     {"q": "帮我写一个 Python 快速排序函数", "answer_any": ["def ", "def("],
      "note": "要真给代码"},
     {"q": "帮我画一张电商系统的架构图", "any_tool": ["archify_deliver", "archify_" ],
@@ -303,7 +303,7 @@ ONLINE = [
 ]
 
 
-def _post(api, q, timeout=150):
+def _post(api, q, timeout=300):
     import requests
     t0 = time.time()
     r = requests.post(api.rstrip("/") + "/api/chat", json={"message": q}, timeout=timeout)

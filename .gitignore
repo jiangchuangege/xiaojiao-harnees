@@ -183,3 +183,6 @@ xiaojiao_profiles*.json
 # 下载来的安装包（不是代码，别进仓库）
 *.msi
 *.exe
+
+# 体检脚本的临时目录（每次跑完自己清，别入库）
+_health_tmp/
