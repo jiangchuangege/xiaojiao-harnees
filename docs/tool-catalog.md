@@ -3,7 +3,7 @@
 > 这份文件是 `tools/gen_tool_catalog.py` **自动生成**的，别手改 —— 
 > 改了工具描述就重跑一次；`tools/test_tool_contract.py` 会校验它和实际工具表是否一致。
 
-**全部工具：106 个 ｜ 契约合格：106 个 ｜ 不合格：0 个**
+**全部工具：108 个 ｜ 契约合格：108 个 ｜ 不合格：0 个**
 
 ## 怎么读这张表
 
@@ -217,6 +217,13 @@
 | `session_fetch` | 在**已开浏览器会话**里抓页面(保持登录态/已过验证)。什么时候用：先 open_session 再抓； | `session_fetch({"url": "https://example.com"})` | ✅ |
 | `session_make_request` | 什么时候用：open_request_session 之后； | `session_make_request({"url": "https://example.com"})` | ✅ |
 | `stealthy_fetch` | 什么时候用：get 和 fetch 都失败(403/挑战页)才用，开销最大； | `stealthy_fetch({"url": "https://example.com"})` | ✅ |
+
+### 插件 · skill（2 个工具）
+
+| 工具 | 什么时候用（说明） | 精准调用（必填参数已填示例） | 契约 |
+| --- | --- | --- | --- |
+| `skill_list` | 看它固化了哪些成套做法（多步任务的工具序列）。什么时候用：想知道它学会了什么；输入 limit；输出 技能清单 | `skill_list({})` | ✅ |
+| `skill_recall` | 问「这类事以前怎么做的」，返回当时的工具序列。什么时候用：想复用或核验旧路径；输入 question；输出 序列与耗时 | `skill_recall({"question": "值"})` | ✅ |
 
 ### 插件 · video_generation（1 个工具）
 

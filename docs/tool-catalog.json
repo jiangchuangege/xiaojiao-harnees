@@ -1,6 +1,6 @@
 {
- "total": 106,
- "ok": 106,
+ "total": 108,
+ "ok": 108,
  "bad": 0,
  "tools": [
   {
@@ -1643,6 +1643,36 @@
     "ignore_robots"
    ],
    "example": "session_make_request({\"url\": \"https://example.com\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "skill",
+   "kind": "插件",
+   "name": "skill_list",
+   "description": "看它固化了哪些成套做法（多步任务的工具序列）。什么时候用：想知道它学会了什么；输入 limit；输出 技能清单",
+   "full_description": "看它固化了哪些成套做法（多步任务的工具序列）。什么时候用：想知道它学会了什么；输入 limit；输出 技能清单",
+   "required": [],
+   "properties": [
+    "limit"
+   ],
+   "example": "skill_list({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "skill",
+   "kind": "插件",
+   "name": "skill_recall",
+   "description": "问「这类事以前怎么做的」，返回当时的工具序列。什么时候用：想复用或核验旧路径；输入 question；输出 序列与耗时",
+   "full_description": "问「这类事以前怎么做的」，返回当时的工具序列。什么时候用：想复用或核验旧路径；输入 question；输出 序列与耗时",
+   "required": [
+    "question"
+   ],
+   "properties": [
+    "question"
+   ],
+   "example": "skill_recall({\"question\": \"值\"})",
    "test": "通过",
    "problems": []
   },

@@ -602,6 +602,16 @@ def main():
     # 5. 启动 Web 服务（阻塞在这里）
     # 以前这里写死 host="0.0.0.0" —— 把任务 1 的「默认只听本机 + 令牌鉴权」整个绕过去了，
     # 实测同网段无令牌就能打开小焦（安全第一批·任务 A 修）。
+    # 【2026-10-28 加】无人值守的自我改进要起在**这里**：真正被执行的启动脚本是本文件，
+    #   它最后直接 `app.app.run(...)`，**不会走 `xiaojiao_app.main()`** ——
+    #   所以放在那边的启动块永远不会执行（实测：启动日志里没有"自我改进：已起"这一行）。
+    try:
+        from core import auto_evolve as _ae
+        if _ae.start_in_background():
+            print("  🔧 自我改进：已起（每 %s 小时看一次；缺能力自动补，其余只出改进卡）"
+                  % _ae._cfg()["interval_h"])
+    except Exception as _ae_e:      # noqa: silent-ok — 起不来不能挡住启动
+        print("  🔧 自我改进：起不来（%s）—— 如实说明，不假装在跑" % _ae_e)
     try:
         app.app.run(host=_host, port=port, debug=False, use_reloader=False)
     finally:

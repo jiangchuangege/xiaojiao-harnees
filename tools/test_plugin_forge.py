@@ -136,16 +136,20 @@ def main():
     ck("模块名是 gen_ 开头（不会撞到人工写的插件）", str(r.get("module", "")).startswith("gen_"),
        r.get("module"))
 
-    r2 = PF.forge("跑个命令", generator=lambda need: DANGEROUS, dry_run=True)
+    # 需求要 ≥6 字：forge 现在会直接拒过短需求（实测踩过：自动改进把需求取成 x 生成垃圾插件）
+    r2 = PF.forge("帮我跑一条命令看看系统状态", generator=lambda need: DANGEROUS, dry_run=True)
     ck("危险代码在静态检查就被挡下", r2.get("ok") is False and r2.get("stage") == "static",
        (r2.get("stage"), str(r2.get("why"))[:40]))
 
     r3 = PF.forge("", generator=lambda need: GOOD)
     ck("需求为空 → 直接拒（不浪费模型调用）", r3.get("ok") is False, r3.get("why"))
 
-    r4 = PF.forge("统计", generator=lambda need: "", dry_run=True)
+    r4 = PF.forge("统计这段文字有多少个字", generator=lambda need: "", dry_run=True)
     ck("模型没产出代码 → 如实失败", r4.get("ok") is False and r4.get("stage") == "generate",
        r4.get("why"))
+    r5 = PF.forge("x", generator=lambda need: GOOD, dry_run=True)
+    ck("需求过短（<6 字）→ 直接拒，不生成", r5.get("ok") is False and r5.get("stage") == "input",
+       r5.get("why"))
 
     # ---------------- 四、只加不删 ----------------
     print("\n[四] 重名不覆盖（这个项目只加不删）")

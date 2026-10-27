@@ -12726,6 +12726,19 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 _mind_material = ""
             sys_text = (_wake_text + _eyc_text + system_for_intent(intent, user_input=user_input)
                         + _self_material + _raw_text + _inner_material + _mind_material)
+            # ================== 技能库：把「上次这类事怎么做的」摆给它看 ==================
+            # 【为什么值得接在 system 里】实测过的错误几乎都是"选工具 + 拼参数"这一步重复犯错
+            #   （问天气去搜网页、爬书去截图、写代码挑错模型）。把它自己踩出来的正确序列
+            #   摆到眼前，比让它每次重新试一遍强得多 —— 这是"越用越快"的物理来源。
+            # 【为什么只给一句、不给整套】序列一句话就够照着做了；塞整套进去会挤掉真正的问题。
+            try:
+                from core import skill_memory as _SK
+                _sk_hint = _SK.plan_for(user_input)
+                if _sk_hint:
+                    sys_text += "\n\n" + _sk_hint
+                    LOG.info("技能库：命中同类问题 → 已把旧工具序列摆进 system")
+            except Exception as _sk_e:      # noqa: silent-ok — 技能库不可用不许影响回答
+                LOG.debug("技能库注入失败（忽略）：%s", _sk_e)
             # ================== 极限补刀（模块 10）· 真正接入 ==================
             # 【为什么必须在这里接 —— 接入验收发现的真问题】
             #   `core/boost/` 七个模块各自写好了、自测全绿（195/195），
@@ -14951,6 +14964,17 @@ def api_chat():
             LOG.debug("双模型审校：跳过（%s）", _why_risk)
     except Exception as _dc_e:      # noqa: silent-ok — 审校挂了不许影响回答
         LOG.debug("双模型审校失败（忽略）：%s", _dc_e)
+    # ---- 技能库：这一轮如果做成了多步任务，就把它固化下来（下次同类问题可照抄）----
+    # 判据在 `skill_memory.remember_task` 里：≥2 个工具、且没有失败痕迹才记；
+    # 单工具调用不算技能（那叫"调一下"）。失败也不记 —— 不把错的路径固化成"经验"。
+    try:
+        from core import skill_memory as _SKr
+        _sk_ok, _sk_why = _SKr.remember_task(user_input, tool_trace, answer_final,
+                                            seconds=(time.time() - _t_round))
+        if _sk_ok:
+            LOG.info("技能库：%s", _sk_why)
+    except Exception as _skr_e:      # noqa: silent-ok — 记技能失败不许影响回答
+        LOG.debug("技能库固化失败（忽略）：%s", _skr_e)
     # ---- 第 5 步：工具结果隔离 —— 用户拿到的 `answer` 一个字不动，**进历史的只留摘要**。
     #      真实缺陷：抓回来的原始 JSON/HTML 整段写进会话，下一轮又被当上下文发回模型，
     #      于是"先画图再抓网页"，第 2 轮把第 1 轮的 JSON 原样吐了回来（串台）。
@@ -18448,6 +18472,16 @@ def main():
         print("  💓 心跳已开始：每 %ss 一下（%s）" % (_hb.BEAT_INTERVAL, _hb.path()))
     else:
         print("  💓 心跳模块不可用（core/heartbeat.py 没加载上）—— 如实说明，不假装在跳")
+    # 无人值守的自我改进：起一个 daemon 线程（每 6 小时最多动 3 次；
+    # 只有「缺能力」类会真的走 forge 动手，其余类型只写改进卡，不动源码）。
+    # 【为什么放启动块】它是"它自己的事"，不随某一句对话起落；关掉用 auto_evolve.on=false。
+    try:
+        from core import auto_evolve as _AE
+        if _AE.start_in_background():
+            print("  🔧 自我改进：已起（每 %s 小时看一次；缺能力自动补，其余只出改进卡）"
+                  % _AE._cfg()["interval_h"])
+    except Exception as _ae_e:      # noqa: silent-ok — 起不来不能挡住启动
+        print("  🔧 自我改进：起不来（%s）—— 如实说明，不假装在跑" % _ae_e)
     # 监听地址：走 bind_host()（与 start_xiaojiao.py 共用同一套规则，见该函数说明）。
     _host, _host_lines = bind_host(port)
     for _line in _host_lines:

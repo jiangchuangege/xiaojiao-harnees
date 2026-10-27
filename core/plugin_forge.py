@@ -182,15 +182,34 @@ def _conflicts(code):
         return []
 
 
+def _capability_keywords(need):
+    """从需求里挑「能力内核词」：去掉"帮我/写个/小工具/然后/告诉我"这些外壳。
+
+    【为什么需要】实测漏网：两条需求
+      「把中文数字（一、二…十、百、千）转成阿拉伯数字」
+      「帮我写个小工具，把'九亿零五万'转换成纯阿拉伯数字，然后告诉我结果」
+    说的是同一件事，可 2 字词覆盖率只有 40% 左右 → 被判"新需求"，于是又长了一个重复工具。
+    外壳词是噪声，先把它们剔掉，再比"内核词"，重合度才反映真实能力是否重复。
+    """
+    s = str(need or "")
+    for w in ("帮我", "帮忙", "给我", "写个", "写一个", "做一个", "做个", "小工具", "工具",
+              "然后", "告诉", "我", "结果", "一下", "能够", "可以", "实现", "一个", "个",
+              "纯", "的", "把", "将", "并", "再", "请"):
+        s = s.replace(w, "")
+    return re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", s)
+
+
 def _similar_existing(need):
     """**同类能力是不是已经有了**？有就返回已有工具名（提示别重复生成）。
 
-    【为什么必须有这道闸】实测膨胀：连着几次要"中文数字↔阿拉伯数字"这类能力，
-    自增长就长出了 `cn_num_to_int`、`int_to_cn_num`、`cn_num_to_int_v2`、
-    `int_to_cn_num_v2`、`gen_9dd4e461` —— 五个功能重叠的工具。工具表越堆越乱，
-    模型选工具反而更难（这正是"能力越多越不好用"的典型翻车）。
-    判据刻意保守（只在**高度重合**时才拦）：把需求切成 2 字词，和"已成功落地的需求"比覆盖率，
-    ≥60% 才算重复；判不准就放行 —— 宁可多长一个，也不误杀真新需求。
+    【为什么必须有这道闸】实测膨胀：连着几次要「中文数字↔阿拉伯数字」这类能力，
+    自增长就长出了 `cn_num_to_int`、`int_to_cn_num`、`cn_num_to_int_v2` 等重叠工具。
+    工具表越堆越乱，模型选工具反而更难（典型的"越强越不好用"）。
+
+    【两道判据，任一命中就算重复】
+      ① 需求内核词重合度 ≥0.6（先剔掉"帮我/写个小工具/然后"这些外壳词）；
+      ② 需求与**已有工具的说明**里，能力内核词有 ≥2 个相同（覆盖"措辞完全不同的同一件事"）。
+    判不准就放行 —— 宁可多长一个，也不误杀真新需求。
     """
     try:
         from core import experience as EXP
@@ -199,20 +218,39 @@ def _similar_existing(need):
             t = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", str(s or ""))
             return set(t[i:i + 2] for i in range(len(t) - 1))
 
-        want = toks(need)
+        core_need = _capability_keywords(need)
+        want = toks(core_need) or toks(need)
         if not want:
             return ""
+        # 已有工具的说明（从插件文件里扫 description）
+        desc_toks = []
+        try:
+            for fn in os.listdir(_PLUGINS):
+                if not fn.endswith(".py"):
+                    continue
+                try:
+                    src = io.open(os.path.join(_PLUGINS, fn), encoding="utf-8").read()
+                except Exception:      # noqa: silent-ok
+                    continue
+                for d in re.findall(r'"description"\s*:\s*"([^"]{4,200})"', src):
+                    desc_toks.append(toks(d))
+        except Exception:      # noqa: silent-ok
+            desc_toks = []
+
         for row in EXP.load(limit=400):
             if row.get("kind") != "forge_ok":
                 continue
             old_tools = str((row.get("extra") or {}).get("tools") or "")
             if not old_tools:
                 continue
-            ot = toks(row.get("need"))
-            if not ot:
-                continue
-            if len(want & ot) / float(len(want)) >= 0.6:
+            ot = toks(_capability_keywords(row.get("need")))
+            if ot and len(want & ot) / float(len(want)) >= 0.6:
                 return old_tools.split(",")[0]
+            # 判据②：内核词与已有工具说明有两个以上相同的 2 字词
+            if len(want) >= 4 and any(len(want & dt) >= 2 for dt in desc_toks):
+                hit = max(desc_toks, key=lambda dt: len(want & dt)) if desc_toks else set()
+                if len(want & hit) >= 3:        # 再收一道，避免"数字/转换"这种泛词误判
+                    return old_tools.split(",")[0]
     except Exception as e:      # noqa: silent-ok — 判不了就放行（不误杀新需求）
         LOG.debug("自增长：查同类能力失败（忽略）：%s", e)
     return ""
@@ -473,6 +511,14 @@ def forge(need, generator=None, dry_run=False, timeout=30, max_repair=2, templat
     need = str(need or "").strip()
     if not need:
         return {"ok": False, "stage": "input", "why": "没说清要什么能力", "code": ""}
+    # 需求太短 / 全是无意义字符 → 直接拒。
+    # 实测踩到：自动改进那条链把需求取成了一个 `x`，模型拿它胡乱写了一份插件，
+    # 而沙箱只校验「不抛异常、返回字符串」，于是垃圾居然落了地。
+    # 判据：至少 6 个字符，且里面有汉字或英文字母（纯符号不算需求）。
+    if len(need) < 6 or not re.search(r"[\u4e00-\u9fffA-Za-z]", need):
+        return {"ok": False, "stage": "input",
+                "why": "需求太短或没有实际含义（%r）—— 不生成，避免产出垃圾插件" % need[:20],
+                "code": ""}
 
     # ---- 模板优先：契约错不了，模型只写一小段业务函数 ----
     if generator is None and template_first:
