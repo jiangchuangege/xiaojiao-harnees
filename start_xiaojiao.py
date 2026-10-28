@@ -632,6 +632,17 @@ def main():
                   % len(_paused))
     except Exception as _pr_e:      # noqa: silent-ok
         print("  🗂 长时项目：状态复位失败（%s）—— 如实说明" % _pr_e)
+    # 【2026-10-28 加】自审循环：把「账本 → 审计 → 改进闸门」接成自己会转的环。
+    #   不接这一条，账本里"有据率掉到 57%"这个事实就没有任何机制去动手 —— 可核查成了摆设。
+    try:
+        from core import self_audit as _SA
+        if _SA.start_in_background():
+            print("  🧾 自审：已起（每 %s 小时审一次最近的账本；发现弱就提候选，过闸才落地）"
+                  % _SA._cfg()["interval_h"])
+        else:
+            print("  🧾 自审：没起（配置里关掉了，或已经在跑）")
+    except Exception as _sa_e:      # noqa: silent-ok — 起不来不能挡住启动
+        print("  🧾 自审：起不来（%s）—— 如实说明，不假装在跑" % _sa_e)
     try:
         app.app.run(host=_host, port=port, debug=False, use_reloader=False)
     finally:

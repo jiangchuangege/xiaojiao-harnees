@@ -2180,6 +2180,16 @@ _TIME_ASK = re.compile(
 _TIME_ASK2 = re.compile(r"(今天|今日)\s*(是|星期|周|几)")
 
 
+def _selfaudit_intent(text):
+    """这一轮是不是在问「你自己查过没有 / 自审一下」？"""
+    t = str(text or "").strip()
+    if not t or len(t) > 40:
+        return False
+    hits = ("自审", "自查", "你自己查过", "自己检查", "自我审计", "跑一次审计",
+            "最近靠不靠得住", "最近可靠吗", "你自己复核")
+    return any(w in t for w in hits)
+
+
 def _audit_intent(text):
     """这一轮是不是在问「你刚才那句有依据吗 / 把最近几轮审一遍」？返回 (工具名, 参数)。
 
@@ -2357,6 +2367,13 @@ def _perception_skippable(text):
             re.search(r"(哪个|谁)(更)?(大|小)", t):
         return True
     if re.search(r"https?://", t) and re.search(r"(抓|爬|下载|存)", t):
+        return True
+    # 【2026-10-28 补】自证/自审/任务/项目这些**本身就是载体直答**的问法，也不需要先"感知"。
+    #   实测：「你的证据账本有多少东西」11 个字，就因为没命中上面的规则，多花了 4 次调用（10 秒）。
+    #   判据只认"这句话在问载体自己的账/自己的状态"，语义判断类的句子一律不在此列。
+    if re.search(r"(依据|凭据|账本|自证|自审|审计|核实|可核查|快照|哈希链|旋钮|参数|过闸|"
+                 r"交叉核验|交叉验证|等价|换模型|换火种|火种|裸模型|任务|项目|技能|本事)", t) and \
+            not re.search(r"(为什么|怎么才能|如何|为什么说|是不是因为)", t):
         return True
     return False
 
@@ -13017,6 +13034,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     #   能查的先查（账本在磁盘、旋钮在内存、项目在磁盘），查不到才让它正常回答。
     for _ftool, _fargs in (
             _audit_intent(user_input) or (None, None),
+            ("self_audit", {}) if (answer is None and _selfaudit_intent(user_input)) else (None, None),
             ("parity_report", {}) if (answer is None and _parity_intent(user_input)) else (None, None),
             ("evolve_gate", {}) if (answer is None and _gate_intent(user_input)) else (None, None),
             # 项目进度查询放在这里（启动/接续已在上面的 ③0a0b 先处理，避免被"长任务"抢走）
@@ -14542,7 +14560,7 @@ def _close_turn_lane(exc=None):
     """
     try:
         from core import turn_lane as _TL3
-        _TL3.end()
+        _TL3.end()          # 只允许持有者收回；轮询请求不会把用户轮的车道清掉（见 turn_lane.end）
     except Exception:      # noqa: silent-ok — 收不回来也不许影响响应
         pass
     return None
@@ -15555,6 +15573,12 @@ def api_chat():
     _CTX["timings"] = {}
     _CTX["_llm_sec"] = 0.0
     _CTX["_llm_calls"] = 0
+    # 【必须每轮清空的两个标记】它们是"这一轮"的状态，可 `_CTX` 是**模块级全局**。
+    #   实测事故：某一轮是载体直答（标记置 True）之后，下一轮「你好」**主回答那次模型调用被跳过**，
+    #   用户看到的是「🤖 大脑没有应答」——这正是"优化把功能弄坏了"的典型。
+    #   所以每轮开头一律清掉，后面按本轮事实重新置位。
+    _CTX.pop("answer_from_carrier", None)
+    _CTX["brief_turn"] = False
     # 短问句（问候/问时间/问IP/算术/抓取指令）→ 收额度、跳过感知与自评的模型调用。
     # 这是「回得快」这件事唯一的物理来源：少调一次模型 + 少生成一大段。全由载体规则判定。
     try:
@@ -17321,17 +17345,29 @@ def _video_holds_vram():
     本地视频这条路的设计本来就是"把显存让给它"（见 `docs/video.md` 的显存让位策略），
     所以这期间：① 看门狗不重启大脑；② 内部模型调用直接跳过（返回 None，等同"它在忙别的"）。
     读不到视频模块时返回 False —— 不许因为它坏了就把大脑也锁死。
+
+    【2026-10-28 加缓存：2 秒内只问一次】
+      实测：「现在几点了」这一轮**零次模型调用**，却还花了 12 秒。查下来这种"本地服务检查"
+      （视频占用查询要 import 视频模块 + 可能读文件）在每轮里被调用好几次，每次都真去问。
+      视频是否在跑，2 秒内的答案不会变 —— 缓存它，别让用户为一次"顺口一问"等。
+      （判据仍然实时：超过 2 秒就重新问，不会拿旧状态糊弄。）
     """
+    now = time.time()
+    _c = globals().get("_VIDEO_BUSY_CACHE") or {}
+    if _c and (now - float(_c.get("at") or 0)) < 2.0:
+        return bool(_c.get("busy"))
     try:
         import sys as _sys
         vdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "video_service")
         if vdir not in _sys.path:
             _sys.path.insert(0, vdir)
         import video_api as _va
-        return bool(_va.video_busy())
+        busy = bool(_va.video_busy())
     except Exception as e:      # noqa: silent-ok — 读不到就当作"没有视频在跑"
         LOG.debug("查视频占用失败（忽略）：%s", e)
-        return False
+        busy = False
+    globals()["_VIDEO_BUSY_CACHE"] = {"at": now, "busy": busy}
+    return busy
 
 
 def _brain_watchdog_round():

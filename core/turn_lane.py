@@ -48,12 +48,21 @@ def begin():
         _STATE["turns"] = int(_STATE["turns"]) + 1
 
 
-def end():
-    """用户轮结束（无论成功失败都要调，放 finally 里）。"""
+def end(force=False):
+    """用户轮结束。**只有持有者能收回**（`force=True` 才无条件清）。
+
+    【为什么要这个约束（实测事故）】界面在回答期间会轮询 `/api/chat/pending` 之类的接口，
+    teardown 对**每个**请求都会跑；原来它无条件 `end()` —— 于是一次轮询就把
+    "用户正在等"这件事清掉了，后台线程立刻开始抢模型（正是要避免的情况）。
+    现在：只有当初 `begin()` 的那个线程（或显式 force）能收回车道。
+    """
     with _LOCK:
+        if not force and _STATE["active"] and _STATE["tid"] != threading.get_ident():
+            return False
         _STATE["active"] = False
         _STATE["tid"] = None
         _STATE["since"] = 0.0
+        return True
 
 
 def is_user_turn():

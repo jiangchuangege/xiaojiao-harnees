@@ -1,6 +1,6 @@
 {
- "total": 122,
- "ok": 122,
+ "total": 123,
+ "ok": 123,
  "bad": 0,
  "tools": [
   {
@@ -1769,6 +1769,20 @@
     "pattern"
    ],
    "example": "search_files({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\", \"pattern\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "self_audit",
+   "description": "什么时候用：用户问「你自己查过没有/自审一下/最近靠不靠得住」；",
+   "full_description": "跑一次自审（审最近的账本 → 有据率低就提候选过闸 → 账本自身毛病只出卡）。什么时候用：用户问「你自己查过没有/自审一下/最近靠不靠得住」；输入 可省（window=审几轮）；输出 体检数字与动作",
+   "required": [],
+   "properties": [
+    "window"
+   ],
+   "example": "self_audit({})",
    "test": "通过",
    "problems": []
   },

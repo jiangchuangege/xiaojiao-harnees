@@ -64,6 +64,7 @@ _LEDGER = os.path.join(_DIR, "ledger.jsonl")
 
 _MAX_BLOB = 400 * 1024        # 单份快照上限（400 KB，够一整页正文）
 _MAX_LEDGER = 5000            # 账本行数上限，超了滚动备份（只加不删：改名备份）
+_WRITE_LOCK = __import__("threading").Lock()   # 写账本要串行：哈希链靠"上一条的哈希"
 
 
 # ============================== 基础设施 ==============================
@@ -308,20 +309,25 @@ def save_round(rec):
     if not src and not cl:
         return ""
     _ensure()
-    _rotate()
-    try:
-        _atomic_write(os.path.join(_ROUNDS, rec["id"] + ".json"),
-                      json.dumps(rec, ensure_ascii=False, indent=1))
-    except Exception as e:      # noqa: silent-ok — 单轮文件写不下也要保住账本那一行
-        LOG.debug("证据账本：单轮文件写入失败（%s）", e)
-    try:
-        line = json.dumps({k: rec.get(k) for k in ("id", "at", "question", "answer_sha256",
-                                                  "stats", "prev")}, ensure_ascii=False)
-        with io.open(_LEDGER, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception as e:      # noqa: silent-ok — 记账失败不许影响回答
-        LOG.debug("证据账本：账本行追加失败（%s）", e)
-        return ""
+    # 【必须串行写】哈希链的 `prev` 是"上一条的哈希"：两个线程同时读末条、各自追加，
+    #   就会写出两条 prev 相同的行，链条当场断掉（实测 live 账本第 43 行就是这么断的）。
+    #   账本是**证据**，它自己先得是自洽的。
+    with _WRITE_LOCK:
+        rec["prev"] = _last_hash()
+        _rotate()
+        try:
+            _atomic_write(os.path.join(_ROUNDS, rec["id"] + ".json"),
+                          json.dumps(rec, ensure_ascii=False, indent=1))
+        except Exception as e:      # noqa: silent-ok — 单轮文件写不下也要保住账本那一行
+            LOG.debug("证据账本：单轮文件写入失败（%s）", e)
+        try:
+            line = json.dumps({k: rec.get(k) for k in ("id", "at", "question", "answer_sha256",
+                                                      "stats", "prev")}, ensure_ascii=False)
+            with io.open(_LEDGER, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception as e:      # noqa: silent-ok — 记账失败不许影响回答
+            LOG.debug("证据账本：账本行追加失败（%s）", e)
+            return ""
     LOG.info("证据账本：记下 %s（材料 %d 份，断言 %d 条，有据 %d 条）",
              rec["id"], len(src), len(cl), (rec.get("stats") or {}).get("supported", 0))
     return rec["id"]

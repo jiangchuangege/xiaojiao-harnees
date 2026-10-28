@@ -71,11 +71,18 @@ def collect(limit=12):
         st = _safe(lambda pid=p["id"]: PR.status(pid), None)
         if st:
             proj_rows.append(st)
+    # 自审循环（账本 → 审计 → 闸门 的那个环）
+    try:
+        from core import self_audit as SA
+        audit_stats = _safe(SA.stats, {}) or {}
+        audit_text = _safe(lambda: SA.report_text(limit=3), "") or ""
+    except Exception:      # noqa: silent-ok — 这一块读不到就空着，不影响别的格
+        audit_stats, audit_text = {}, ""
     return {"at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "ledger": ledger_stats, "chain": chain, "audit": audit,
             "gate": gate, "gate_history": gate_hist, "knobs": knobs,
             "parity": parity, "consensus": cn_stats, "consensus_rows": cn_rows,
-            "projects": proj_rows}
+            "projects": proj_rows, "self_audit": audit_stats, "self_audit_text": audit_text}
 
 
 def _parity_summary():
@@ -162,6 +169,9 @@ def render(d=None):
               "回滚 %s 次" % gt.get("rolled_back", 0)),
         _card("交叉核验", "%s 次" % cn.get("total", 0),
               "一致 %s ｜ 有问题 %s" % (cn.get("clean", 0), cn.get("flagged", 0))),
+        _card("自审循环", "%s 次" % ((d.get("self_audit") or {}).get("runs") or 0),
+              "在跑" if (d.get("self_audit") or {}).get("live")
+              else "没在跑（说「自审一下」可手动跑）"),
     ]
     out = ['<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">',
            '<meta name="viewport" content="width=device-width,initial-scale=1">',
@@ -276,6 +286,19 @@ def render(d=None):
         out.append('</table>')
     else:
         out.append('<div class="empty">还没有长时项目</div>')
+
+    # ---- 自审循环 ----
+    out.append('<h2>自审循环（账本 → 审计 → 改进闸门）</h2>')
+    sa = d.get("self_audit") or {}
+    if sa.get("runs"):
+        out.append('<table><tr><th>项</th><th>值</th></tr>')
+        for k, label in (("runs", "已跑次数"), ("last", "最近一次"),
+                         ("current", "最近体检结论"), ("gated", "提过的候选"),
+                         ("accepted", "其中落地"), ("cards", "改进卡张数")):
+            out.append('<tr><td>%s</td><td>%s</td></tr>' % (_esc(label), _esc(sa.get(k) or "—")))
+        out.append('</table>')
+    else:
+        out.append('<div class="empty">还没跑过自审（后台默认每 6 小时一次；说「自审一下」可手动跑）</div>')
 
     out.append('<div class="foot">'
                '判据只有两条：<b>材料字节</b>（能不能对上）和<b>另一颗火种</b>（是不是都这么说）；'

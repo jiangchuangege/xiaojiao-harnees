@@ -86,6 +86,17 @@ _TOOLS = [
         },
     },
     {
+        "name": "self_audit",
+        "description": ("跑一次自审（审最近的账本 → 有据率低就提候选过闸 → 账本自身毛病只出卡）。"
+                        "什么时候用：用户问「你自己查过没有/自审一下/最近靠不靠得住」；"
+                        "输入 可省（window=审几轮）；输出 体检数字与动作"),
+        "parameters": {
+            "type": "object",
+            "properties": {"window": {"type": "integer", "description": "审最近几轮（默认 30）"}},
+            "required": [],
+        },
+    },
+    {
         "name": "cross_check",
         "description": ("换**另一颗火种**把同一个问题重答一遍，再逐条对账（一致 / 单边有据 / 独有无据 / 分歧）。"
                         "什么时候用：用户问「你确定吗」「换个模型看看」「交叉核验一下」，"
@@ -389,6 +400,36 @@ class ProofPlugin:
                                            + "；按 apply=false 已退回，只做了测量")
                     res["ok"] = False
                 return _fmt_gate(res, GE.stats().get("applied"))
+            if tool_name == "self_audit":
+                from core import self_audit as SA
+                try:
+                    w = int(params.get("window") or 30)
+                except Exception:      # noqa: silent-ok
+                    w = 30
+                rec = SA.run_once(window=max(1, min(w, 200)), verbose=False)
+                fit = rec.get("fit") or {}
+                lines = ["🧾 **自审完成**（%s）" % rec.get("at"), "",
+                         "- 审了最近 **%d** 轮：断言 **%d** 条，复算有据 **%d** 条（%.0f%%）" % (
+                             fit.get("rounds") or 0, fit.get("claims") or 0,
+                             fit.get("supported") or 0, float(fit.get("ratio") or 0) * 100),
+                         "- 复算不一致：**%d** 轮 ｜ 产物失效：**%d** 轮 ｜ 哈希链：%s" % (
+                             fit.get("recheck_failed") or 0, fit.get("stale_rounds") or 0,
+                             "完整" if fit.get("chain_ok") else "断了")]
+                acts = rec.get("acts") or []
+                if not acts:
+                    lines.append("- 动作：**没有**（没有低于阈值，也没有需要出卡的事）")
+                for a in acts:
+                    if a.get("action") == "gate":
+                        lines.append("- 动作：提了候选 `%s` %r → %r，闸门结论：**%s**（%s）" % (
+                            a.get("knob"), a.get("from"), a.get("to"),
+                            "落地" if a.get("accepted") else "拒绝", a.get("why")))
+                    elif a.get("action") == "card":
+                        lines.append("- 动作：写了改进卡 `%s`" % a.get("path"))
+                    else:
+                        lines.append("- 动作：%s —— %s" % (a.get("action"), a.get("why")))
+                lines += ["", "—— 这一层只**提候选**，落不落地由配对测量决定；账本自己的毛病只出卡不改"
+                          "（不许让被告当法官）。"]
+                return "\n".join(lines)
             if tool_name == "cross_check":
                 from core import consensus as CN
                 q = str(params.get("question") or "").strip()
