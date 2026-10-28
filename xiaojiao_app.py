@@ -2144,6 +2144,42 @@ def _grounding_note(g):
     return ""
 
 
+# ================== 时间事实：载体兜住，不靠模型记 ==================
+# 【为什么必须有这一手】实测（`tools/test_time_context.py`，2026-10-28）：
+#   系统提示里每轮都注入了「当前时间：2026-10-28 星期三…」，可问「今天几号？」时，
+#   模型这一轮的答案里**没有真实日期**（有时甚至答成 2025 年）。
+#   这就是"火种会忘、载体不会忘"的典型：时间是我们自己知道的事实，
+#   不该押在模型肯不肯抄上。所以答案里缺就由载体补一句，缺了才补、不覆盖模型的话。
+_TIME_ASK = re.compile(
+    r"(今天|今日|现在|此刻|当前|目前|今年|今晚|今早|本周|这周)[^。？！?]{0,8}"
+    r"(几号|几月几号|什么日期|日期是|星期几|周几|礼拜几|几点|什么时间|哪一年|哪年|几年|年份)")
+_TIME_ASK2 = re.compile(r"(今天|今日)\s*(是|星期|周|几)")
+
+
+def _time_guard(question, answer):
+    """问"今天几号/星期几/几点/哪一年"而答案里没有真实时间 → 载体补一句。
+
+    返回 (新答案, 是否补过)。**只补缺**：答案里已经有正确日期就一个字不动。
+    """
+    q = str(question or "")
+    a = str(answer or "")
+    if not a.strip() or not (_TIME_ASK.search(q) or _TIME_ASK2.search(q)):
+        return a, False
+    lt = time.localtime()
+    y, m, d = lt.tm_year, lt.tm_mon, lt.tm_mday
+    iso = "%04d-%02d-%02d" % (y, m, d)
+    cn = "%d年%d月%d日" % (y, m, d)
+    flat = re.sub(r"\s+", "", a)
+    if iso in a or cn in flat:
+        return a, False                     # 已经答对了，不动
+    wk = "一二三四五六日"[lt.tm_wday]
+    note = ("📅 **载体补时**（这条事实由载体给出，不靠模型记）：今天是 **%s 星期%s**，"
+            "现在 %02d:%02d（本地时间）。今年是 %d 年。" % (iso, wk, lt.tm_hour, lt.tm_min, y))
+    if q.strip().endswith(("？", "?")) and not re.search(r"(几点|什么时间)", q):
+        note = note.replace("，现在 %02d:%02d（本地时间）" % (lt.tm_hour, lt.tm_min), "")
+    return a.rstrip() + "\n\n" + note, True
+
+
 # ================== 记忆（自学习） ==================
 def load_memory():
     if os.path.exists(MEMORY_FILE):
@@ -3190,13 +3226,23 @@ def _llm_targets():
     """
     primary = {"url": (LLM_BASE or "").rstrip("/") + "/chat/completions",
                "key": LLM_KEY, "model": LLM_MODEL, "local": _is_local_base(LLM_BASE)}
+    # ---- 有人手动插了火种 → 那颗火种的 model 名不许被难度路由改掉 ----
+    #   【实测缺陷】`BrainRegistry.apply_to_app()` 把 LLM_BASE/LLM_MODEL 换成用户选的那颗之后，
+    #   下面这段难度路由**照样**按句子长度把 model 名换成本地默认档 —— 于是"点了 A，实际跑的是 B"，
+    #   界面上看不到任何提示。手动选择优先于自动换档：只认"当前 base+model 正是手动插上的那颗"。
+    _ap = globals().get("_APPLIED_BRAIN") or {}
+    _manual = bool(_ap) and str(_ap.get("base")) == str(LLM_BASE) \
+        and str(_ap.get("model")) == str(LLM_MODEL)
     # ---- 难度路由：只在"本机 llama-swap 提供多个模型"时生效，探不到就完全不动 ----
     try:
         from core import model_router as _MR
         _probe_text = str(_CTX.get("user_input") or "")
         _probe_intent = str(_CTX.get("intent") or "")
         _rmodel, _rtier, _rwhy = _MR.route(_probe_text, _probe_intent)
-        if _rmodel and primary["local"]:
+        if _rmodel and primary["local"] and _manual:
+            LOG.info("难度路由：当前是手动插上的火种（%s / %s）→ 不换档",
+                     _ap.get("name") or "?", _ap.get("model") or "?")
+        elif _rmodel and primary["local"]:
             if _rmodel != primary["model"]:
                 LOG.info("难度路由：句%d字 → %s 档，改用 %s（%s）｜原 %s",
                          len(_probe_text), _rtier, _rmodel, _rwhy, primary["model"])
@@ -6827,6 +6873,46 @@ def _scrape_save_body(url, body, target):
         return path, ("（目录已自动创建）" if created else "")
     except Exception as e:      # noqa: silent-ok — 落盘失败要如实报原因，不假装成功
         return "", "存盘失败：%s: %s" % (type(e).__name__, str(e)[:120])
+
+
+def _task_query_intent(text):
+    """这一轮是不是在问"任务做到哪了 / 有哪些任务"？返回 (工具名, 参数) 或 None。
+
+    【为什么要载体认】实测：问「查一下最近的任务」，模型自己去搜网页了（轨迹里是 web_search），
+    然后编了一张"最近的任务记录"表格 —— 而真正的任务状态在 `logs/tasks/` 里，一问就能读。
+    "问它自己的进度"这种话必须由载体接，不能让模型拿搜索去凑。
+    判据：含"任务"且含"查/进度/做到哪/列表/最近"，或句子里直接给了任务号。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return None
+    m = re.search(r"\b(20\d{6}_\d{6}_[0-9a-f]{4,8})\b", t)
+    if m:
+        return ("task_status", {"task_id": m.group(1)})
+    if "任务" not in t:
+        return None
+    asks = ("查", "进度", "做到哪", "列表", "最近", "状态", "怎么样了", "完成没")
+    if any(w in t for w in asks):
+        return ("task_list", {"limit": 8})
+    return None
+
+
+def _task_intent(text):
+    """这一轮是不是"把一件复杂的事交给它做完"（而不是问一句）？
+
+    【为什么要载体认】这类话（「把某站的书目都抓下来存好」「帮我把这件事一口气做完」）
+    如果交给模型，它只会回一句"好的，我来帮你抓"然后**什么都不做** ——
+    工具轨迹是空的，用户以为在跑。而载体这边已经有 `task_runner`（多步 + 落盘 + 验收）。
+    判据要窄：必须有"多/都/全部/逐条/挨个/一口气/做完/批量"这类**多步信号**，
+    否则普通的"抓一下这个网页"不该被升级成任务。
+    """
+    t = str(text or "").strip()
+    if len(t) < 6:
+        return False
+    multi = ("都抓", "全抓", "全部", "逐条", "挨个", "批量", "一口气", "做完", "搞定",
+             "批量下", "所有", "每一", "整个", "整套", "打包", "一条龙", "从头到尾")
+    action = ("抓", "爬", "下载", "存", "整理", "收集", "汇总", "导出", "做成", "生成", "分析")
+    return any(w in t for w in multi) and any(w in t for w in action)
 
 
 def _skill_intent(text):
@@ -12471,6 +12557,39 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             else:
                 answer = "💻 **已执行**：`%s`\n\n```\n%s\n```" % (_sh, _r.strip()[:1500])
 
+    # ③0a0 任务进度查询：问"任务做到哪了/有哪些任务"→ 直接读 logs/tasks/，别让模型去搜。
+    if answer is None:
+        _tq = _task_query_intent(user_input)
+        if _tq:
+            try:
+                _tqr = _tool_result_str(run_tool(_tq[0], _tq[1], force=True))
+                if _tqr and not _tqr.startswith("⚠️"):
+                    LOG.info("任务查询：%s", _tq[0])
+                    tool_trace.append(_trace_entry(_tq[0], _tq[1], _tqr))
+                    _note_tool_path(tool_trace, path="task")
+                    answer = _tqr
+            except Exception as _tq_e:      # noqa: silent-ok — 查任务挂了不能拖垮整轮
+                LOG.debug("任务查询路由失败（忽略）：%s", _tq_e)
+
+    # ③0a1 任务级自主：用户把"一件多步的事"交给它 → 走 task_runner（多步 + 落盘 + 验收）。
+    #   如果不接这条，模型会回一句"好的我来帮你抓"就结束，工具轨迹空的 —— 用户以为在跑。
+    #   【2026-10-28 补一条】拆不出步骤时（`task_start` 回「没开成：…」）**必须让它退回普通问答**：
+    #     否则用户说「帮我把这些全部整理一下」会收到一句"没开成：拆不出可执行的步骤"，
+    #     而本来模型是能就着上下文把它讲清楚的。这里只认「真的开了任务」。
+    if answer is None and CAP.get("run_tools", True):
+        if _task_intent(user_input):
+            try:
+                _tres = _tool_result_str(run_tool("task_start", {"goal": user_input}, force=True))
+                if _tres and not _tres.startswith("⚠️") and "没开成" not in _tres:
+                    LOG.info("任务自主：用户交出多步目标 → 已开任务")
+                    tool_trace.append(_trace_entry("task_start", {"goal": user_input[:40]}, _tres))
+                    _note_tool_path(tool_trace, path="task")
+                    answer = _tres
+                else:
+                    LOG.info("任务自主：拆不出步骤 → 退回普通问答（%s）", str(_tres)[:60])
+            except Exception as _t_e:      # noqa: silent-ok — 任务链挂了不能拖垮整轮
+                LOG.debug("任务自主路由失败（忽略）：%s", _t_e)
+
     # ③0a2 自我诊断：问"哪儿最弱 / 下一步改什么"→ 直接走 evolve_report。
     #   模型会把这种问题理解成"你项目哪里弱"从而反问要线索；而它自己是有诊断能力的。
     if answer is None:
@@ -13240,7 +13359,14 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     #     【2026-10-17 加一条】③0 已经用电子书工具答过了就别再抓一遍：实测「把书目整理成清单」
     #     那一轮，ebook_manifest 已经把清单列出来了，却被这条兜底拿"整页 HTML"顶掉 ——
     #     用户看到的是原始网页，而不是他要的清单。载体自己已经答好的内容，兜底不许覆盖。
-    if (not _eb_answered) and not _trace_has_page(tool_trace) \
+    # 【2026-10-28 加】这一轮已经开了任务 → 抓取直通**必须让路**。
+    #   实测：「把这一页内容全部抓下来存到 G:\dzs\task_test3」→ 任务真的跑完了，
+    #   可这条兜底又把同一页**再抓一遍并存成第二个文件**（目录里躺了两份几乎一样的 md），
+    #   还把回答换成了"已保存 <另一个路径>" —— 用户看到的是兜底的路径，不是任务的结果。
+    #   任务已经接了这件事，兜底不许抢。
+    _task_started = any(str((_te or {}).get("tool") or "") == "task_start"
+                        for _te in (tool_trace or []))
+    if (not _eb_answered) and not _task_started and not _trace_has_page(tool_trace) \
             and CAP.get("run_tools", True) and has_llm:
         if _detect_scrape_intent(user_input):
             _sans, _str = _scrape_direct(user_input, tool_trace)
@@ -14994,6 +15120,26 @@ def api_chat():
             LOG.debug("双模型审校：跳过（%s）", _why_risk)
     except Exception as _dc_e:      # noqa: silent-ok — 审校挂了不许影响回答
         LOG.debug("双模型审校失败（忽略）：%s", _dc_e)
+    # ---- 时间事实：问"今天几号/星期几/几点/哪一年"而答案里没有真实时间 → 载体补一句 ----
+    #   （"火种会忘、载体不会忘"：时间是我们自己知道的事实，不押在模型肯不肯抄上）
+    try:
+        answer_final, _tg = _time_guard(user_input, answer_final)
+        if _tg:
+            LOG.info("时间事实：答案里缺真实时间 → 载体已补（%s）",
+                     time.strftime("%Y-%m-%d %H:%M"))
+    except Exception as _tg_e:      # noqa: silent-ok — 补时挂了不许影响回答
+        LOG.debug("时间补时失败（忽略）：%s", _tg_e)
+    # ---- 任务播报：有"你先前开的任务做完了/没做成"就贴在回答最前面（只播一次）----
+    # 【为什么放在出口】任务在后台线程里跑，跑完只落盘没人知道 —— 等于做了没交付。
+    #   `take_notice_text` 取走即打标记，不重复念、不堆积。
+    try:
+        from core import task_runner as _TRn
+        _nt = _TRn.take_notice_text()
+        if _nt:
+            LOG.info("任务播报：%s", _nt.split("\n")[0][:60])
+            answer_final = _nt + "\n\n---\n\n" + answer_final
+    except Exception as _nt_e:      # noqa: silent-ok — 播报挂了不许影响回答
+        LOG.debug("任务播报失败（忽略）：%s", _nt_e)
     # ---- 技能库：这一轮如果做成了多步任务，就把它固化下来（下次同类问题可照抄）----
     # 判据在 `skill_memory.remember_task` 里：≥2 个工具、且没有失败痕迹才记；
     # 单工具调用不算技能（那叫"调一下"）。失败也不记 —— 不把错的路径固化成"经验"。

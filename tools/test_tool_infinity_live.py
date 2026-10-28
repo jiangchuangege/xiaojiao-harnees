@@ -80,7 +80,11 @@ def main():
     _sp = app.compose_system_prompt("你是小焦。")
     _miss = [n for n in names if n not in _sp]
     _infra = ("check_env", "suggest_organize", "open_app", "grep_files", "fetch_url",
-              "ask_user", "background", "background_result")
+              "ask_user", "background", "background_result",
+              # 【2026-10-28 补】任务级自主 + 技能库 + 工作区搜索 + 视频：都由载体按上下文触发，
+              #   不靠模型点名（口径与 ask_user / background 相同）。
+              "skill_recall", "task_start", "task_status", "task_list",
+              "generate_video", "ws_search_files", "ws_search_content", "ws_list_directory")
     ck("**工具目录随 system 下发**（未可见的只能是基础设施类内部工具）",
        all(n in _infra for n in _miss),
        "可见 %d/%d，未可见 %s" % (len(names) - len(_miss), len(names), _miss))

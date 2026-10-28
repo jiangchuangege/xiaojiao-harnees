@@ -142,6 +142,25 @@ try:
 except Exception as e:      # noqa: silent-ok — 拿不到主程序就如实跳过
     print("  ⏭️  跳过（%s）" % e)
 
+print("\n【D】载体补时：模型忘了，载体兜住（离线判据，2026-10-28 加）")
+# 【为什么要这一节】上面 [B] 那条依赖真模型，实测会飘（有时答对、有时答不出日期）。
+#   载体侧的对策是「答案里缺真实时间就补一句」—— 这段判定是纯函数，可以离线钉死。
+try:
+    import time as _t
+    _lt = _t.localtime()
+    _iso = "%04d-%02d-%02d" % (_lt.tm_year, _lt.tm_mon, _lt.tm_mday)
+    _a, _ch = _app._time_guard("今天几号？", "这个我记不清了。")
+    ck("问日期而答案里没有 → 载体补上真实日期", _ch is True and _iso in _a, _a[-60:])
+    ck("补的那句写明「由载体给出、不靠模型记」", "载体" in _a and "不靠模型" in _a, _a[-60:])
+    _b, _ch2 = _app._time_guard("今天几号？", "今天是 %s。" % _iso)
+    ck("答案里已经有正确日期 → 一个字不动", _ch2 is False and _b == "今天是 %s。" % _iso, _b)
+    _c, _ch3 = _app._time_guard("帮我查下明天天气", "好的，我查一下。")
+    ck("不是问时间的问题 → 不插嘴", _ch3 is False and "载体补时" not in _c, _c[-40:])
+    _d, _ch4 = _app._time_guard("今年是哪一年？", "我不确定。")
+    ck("问年份也能兜住", _ch4 is True and str(_lt.tm_year) in _d, _d[-60:])
+except Exception as e:      # noqa: silent-ok — 拿不到补时函数就如实记一条失败
+    ck("载体补时四项（%s）" % e, False, str(e))
+
 print("\n" + "=" * 76)
 print("  通过 %d / 共 %d" % (_C["pass"], _C["total"]))
 if _C["failed"]:

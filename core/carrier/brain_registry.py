@@ -653,6 +653,14 @@ class BrainRegistry:
         _append_jsonl(APPLY_LOG, {"ts": _now(), "brain": b.name, "ok": True, "base_url": base,
                                   "model": tgt["model"], "local": tgt["local"],
                                   "key": "已设置" if b.api_key else ""})
+        # 【2026-10-28 加】记下"这颗火种是**人手动插上**的"。
+        #   实测（`tools/test_carrier.py` 63/64 那条）：插上假火种后 `_llm_targets()` 里
+        #   的**难度路由**又把 model 名换成了本地默认档 —— 用户点的火种被悄悄覆盖。
+        #   这里留一个标记，`_llm_targets()` 见到"当前 base/model 正是手动插上的那颗"就不换档。
+        try:
+            setattr(app, "_APPLIED_BRAIN", {"name": b.name, "base": base, "model": tgt["model"]})
+        except Exception as e:      # noqa: silent-ok — 记不上标记不影响"已应用"
+            logger.debug("apply_to_app：记手动标记失败（忽略）：%s", e)
         logger.info("火种已应用：%s → %s（model=%s）", b.name, base, tgt["model"])
         return True
 

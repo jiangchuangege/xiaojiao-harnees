@@ -1,6 +1,6 @@
 {
- "total": 108,
- "ok": 108,
+ "total": 111,
+ "ok": 111,
  "bad": 0,
  "tools": [
   {
@@ -1708,6 +1708,52 @@
     "path"
    ],
    "example": "suggest_organize({\"path\": \"C:\\\\\\\\Windows\\\\\\\\System32\\\\\\\\notepad.exe\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "task",
+   "kind": "插件",
+   "name": "task_list",
+   "description": "看最近开过哪些任务。什么时候用：忘了任务号；输入 limit；输出 任务清单",
+   "full_description": "看最近开过哪些任务。什么时候用：忘了任务号；输入 limit；输出 任务清单",
+   "required": [],
+   "properties": [
+    "limit"
+   ],
+   "example": "task_list({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "task",
+   "kind": "插件",
+   "name": "task_start",
+   "description": "给一个目标，它自己拆步骤并做完（后台跑）。什么时候用：一件事要好几步；输入 goal；输出 任务号",
+   "full_description": "给一个目标，它自己拆步骤并做完（后台跑）。什么时候用：一件事要好几步；输入 goal；输出 任务号",
+   "required": [
+    "goal"
+   ],
+   "properties": [
+    "goal"
+   ],
+   "example": "task_start({\"goal\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "task",
+   "kind": "插件",
+   "name": "task_status",
+   "description": "查任务做到哪了、每步结果和验收结论。什么时候用：开了长任务要跟进；输入 task_id；输出 进度与每步详情",
+   "full_description": "查任务做到哪了、每步结果和验收结论。什么时候用：开了长任务要跟进；输入 task_id；输出 进度与每步详情",
+   "required": [
+    "task_id"
+   ],
+   "properties": [
+    "task_id"
+   ],
+   "example": "task_status({\"task_id\": \"值\"})",
    "test": "通过",
    "problems": []
   },

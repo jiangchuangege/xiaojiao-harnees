@@ -43,6 +43,9 @@ _MAX_LINES = 2000
 # 这些工具名出现在序列里 → 说明这一轮其实是"失败/兜底"路径，不固化
 _BAD_MARKS = ("error", "traceback", "失败", "不可用", "没有装载", "未知工具")
 
+# 外壳工具：它们只表示"把活交出去了"，本身不是做法，不能当技能序列存
+_WRAPPER_TOOLS = ("task_start",)
+
 
 def _ensure():
     d = os.path.dirname(_PATH)
@@ -103,12 +106,20 @@ def remember_task(question, tool_trace, answer="", seconds=0.0):
             return False, why or "没有工具调用，不算技能"
         if len(steps) < 2:
             return False, "只用了 1 个工具（%s），不值得固化成技能" % steps[0]["tool"]
+        # 【2026-10-28 加】`task_start` 是**外壳**，不是做法。
+        #   实测：live 上同一个目标存了两条技能 —— 一条是任务自己固化的真实序列
+        #   （get → write_file），另一条是出口处把 `task_start` 当步骤存进去的
+        #   （序列 = [task_start]，照它做只会再开一个任务）。外壳不入库。
+        if any(s["tool"] in _WRAPPER_TOOLS for s in steps):
+            return False, "这一轮只是把活交给了任务（%s），真实步骤由任务自己固化" % (
+                ", ".join(sorted({s["tool"] for s in steps if s["tool"] in _WRAPPER_TOOLS})))
         q = str(question or "").strip()
         if not q:
             return False, "没有原话，存了也没法按问题召回"
         _ensure()
         _rotate()
-        row = {"key": _norm_q(q), "question": q[:160],
+        key = _norm_q(q)
+        row = {"key": key, "question": q[:160],
                "steps": steps[:12], "n_steps": len(steps),
                "answer_head": str(answer or "")[:160],
                "sec": round(float(seconds or 0), 1),

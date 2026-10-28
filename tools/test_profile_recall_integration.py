@@ -83,8 +83,11 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--why":
         return _why(" ".join(sys.argv[2:]) or "我养了一只猫")
     if not os.path.exists(STORE):
-        print("❌ 找不到画像库 %s" % STORE)
-        return 2
+        # 【2026-10-28 改】原来这里是 `print(❌) + return 2`，于是"这台机器还没用过它"
+        #   被记成"测试失败"，混进失败清单里 —— 那是**没前提**，不是坏。
+        #   改成明确跳过（退出码 0 + 「跳过」字样），跑测器会把跳过单列，不算通过。
+        print("跳过：本机还没有画像库 %s（这个文件要用过一次才会生成，不是缺陷）" % STORE)
+        return 0
     before = load_store()
     print("画像库开工前：%d 条" % len(before))
     ok = 0

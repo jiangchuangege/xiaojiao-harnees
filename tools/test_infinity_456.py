@@ -103,8 +103,14 @@ def main():
     sp = app.compose_system_prompt("你是小焦。")
     names_all = app.all_tool_names()
     missing = [n for n in names_all if n not in sp]
+    # 【2026-10-28 补】这张表是"不靠模型点名、由载体自己触发"的内部工具清单。
+    #   新加了任务级自主与技能库（task_start / task_status / task_list / skill_recall）——
+    #   它们走的是载体的路由（`_task_intent` / `_skill_intent`），所以和 ask_user、background 同类。
+    #   `ws_*`（工作区搜索）与 generate_video 也一直是这一类：先由载体按上下文触发。
     infra = ("check_env", "suggest_organize", "open_app", "grep_files", "fetch_url",
-             "ask_user", "background", "background_result")
+             "ask_user", "background", "background_result",
+             "skill_recall", "task_start", "task_status", "task_list",
+             "generate_video", "ws_search_files", "ws_search_content", "ws_list_directory")
     ck("**完整工具目录随 system 下发**（≥85% 工具按名字可见）",
        len(missing) <= max(3, len(names_all) * 0.15),
        "可见 %d/%d，未可见 %s" % (len(names_all) - len(missing), len(names_all), missing[:6]))

@@ -22,6 +22,7 @@ TESTS = [
     ("tools/test_answer_gate.py", "答案闸门（可核查断言 / 有依据不标 / 正文不动）"),
     ("tools/test_dual_check.py", "双模型交叉审校（谁该被审 / 审的人不是自己 / 失败即跳过）"),
     ("tools/test_plugin_forge.py", "能力自增长（静态检查 / 子进程沙箱 / 自修 / 只加不删）"),
+    ("tools/test_task_runner.py", "任务级自主（拆解/换路/验收/落盘恢复/部分完成）"),
     ("tools/test_silent_evolve.py", "技能库 + 无人值守自我改进（宁少不脏 / 不空转 / 只走白名单）"),
     ("tools/test_self_evolve.py", "自进化内核 + 经验库（红点归类 / 排序 / 动作 / 只加不删）"),
     ("tools/test_tool_isolation.py", "通用与专用工具的隔离（这一轮摆哪几个）"),
