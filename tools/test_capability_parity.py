@@ -11,7 +11,9 @@
 这样测试是确定性的，也能构造"某个火种就是不诚实"这种极端情形来看结论对不对。
 """
 import os
+import shutil
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -32,6 +34,15 @@ def main():
     print("  载体等价性 自测")
     print("=" * 84)
     from core import capability_parity as CP
+
+    # 【2026-10-28 修】测试**不许污染真实产物**。
+    #   实测踩到：这个用例用假模块跑完 `CP.run()`，把 `docs/capability-parity.json`
+    #   覆盖成了假数据 —— 自证面板上"换模型增量"从此显示一个假数字。
+    #   测试的产出统一写临时目录，跑完还原。
+    _plain = tempfile.mkdtemp(prefix="xj_parity_")
+    _bak_out = (CP._OUT_MD, CP._OUT_JSON)
+    CP._OUT_MD = os.path.join(_plain, "parity.md")
+    CP._OUT_JSON = os.path.join(_plain, "parity.json")
 
     # ---------------- 一、判据 ----------------
     print("\n[一] 判据：判得对，才有资格谈分数")
@@ -159,6 +170,10 @@ def main():
 
     st = CP.stats()
     ck("stats 能报出跑过没有", "ran" in st, st.get("ran"))
+
+    # 还原真实产物路径（测试期间的产出全在临时目录里，跑完就删）
+    CP._OUT_MD, CP._OUT_JSON = _bak_out
+    shutil.rmtree(_plain, ignore_errors=True)
 
     print("\n" + "=" * 84)
     print("  通过 %d / 共 %d%s" % (len(PASS), len(PASS) + len(FAIL),

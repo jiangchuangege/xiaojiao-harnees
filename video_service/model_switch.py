@@ -69,8 +69,13 @@ def _llama_swap_loaded_ids():
         return []
 
 
-def _llama_swap_unload(model_id="xiaojiao"):
+def _llama_swap_unload(model_id="xiaojiao", wipe_all=None, timeout=3.0):
     """让 llama-swap 卸载一个模型(释放显存,进程常驻)。
+
+    `timeout`：**默认只等 3 秒**（原来是 15 秒）。实测：llama-swap 正在加载/正忙时，
+      这个 POST 会一直挂着，而它挂在**用户这一轮**的必经路径上 —— 一句「现在几点了」
+      零次模型调用却花了 12 秒，时间就耗在这种"顺手腾显存"的 HTTP 等待上。
+      腾显存不是用户等的事：给 3 秒，来不及就算了（下次再说，绝不让人等它）。
 
     【2026-10-13 实测补的兜底：**按名字卸不掉时，就把所有加载着的都卸掉**】
       用户反馈"生成视频时卸不掉当前聊天模型"。查下来：卸载接口本身没问题
@@ -78,14 +83,23 @@ def _llama_swap_unload(model_id="xiaojiao"):
       问题出在**名字对不上**：如果控制文件里的模型名不是 llama-swap 的路由键
       （实测踩到过 `C:/llama/xiaojiao1.0-4B.gguf` 这种**文件路径当模型名**的配置），
       卸载请求就打到一个不存在的路由上 → 静默失败 → 显存没腾出来 → 视频起不来。
-      所以这里**卸不掉就退一步**：问 `/v1/models`，把 status=loaded 的全卸掉。
-      （视频生成本来就要独占显存，卸干净是对的；生成完 `start_brain()` 会把聊天模型拉回来。）
+
+    【2026-10-28 修：这条"全卸"兜底**不能默认开着** —— 它把聊天模型也一起卸了】
+      实测（live 日志）：用户每问一句话，日志里就出现**两条**卸载记录
+      （先 coder、再 xiaojiao），因为这一函数本来"卸不掉就把所有 loaded 的都卸掉"。
+      于是**聊天模型每轮都被踢出显存**，下一句要重新读盘加载 —— 用户的评价是
+      「回复慢得要命」（实测一句话 18 秒，其中十几秒是在等模型重新进显存）。
+      这不是功能问题，是把"给视频腾显存专用的兜底"错用在了每轮聊天上。
+      现在：`wipe_all=None` → **只有按名字真的卸不掉时才全卸**（保留原有兜底的意图）；
+      显式 `wipe_all=True` → 视频生成这种"必须独显"的场景照旧全卸。
     """
     import requests as _r
     ok = False
-    for mid in ([model_id] + [i for i in _llama_swap_loaded_ids() if i != model_id]):
+    targets = [model_id]
+    for mid in targets:
         try:
-            r = _r.post(_llama_swap_url() + "/api/models/unload/" + str(mid), timeout=15)
+            r = _r.post(_llama_swap_url() + "/api/models/unload/" + str(mid),
+                       timeout=float(timeout))
             if r.status_code == 200:
                 LOG.info("视频切换：已卸载 llama-swap 模型 %s（腾显存）", mid)
                 ok = True
@@ -93,7 +107,52 @@ def _llama_swap_unload(model_id="xiaojiao"):
                 LOG.warning("视频切换：卸载 %s 失败（HTTP %s）", mid, r.status_code)
         except Exception as e:
             LOG.warning("视频切换：卸载 %s 出异常：%s", mid, e)
+    # 只有"按名字没卸掉"或"明确要求全卸"时，才去卸所有 loaded 的
+    _should_wipe = (wipe_all is True) or (wipe_all is None and not ok)
+    if not _should_wipe:
+        return ok
+    for mid in [i for i in _llama_swap_loaded_ids() if i not in targets]:
+        # 除了明确要求全卸，**绝不碰正在用来回答的那个模型**
+        try:
+            if _chat_in_use() and str(mid) == str(_chat_model_id()) and wipe_all is not True:
+                LOG.info("视频切换：跳过卸载 %s —— 它是刚用过/正在用的聊天模型", mid)
+                continue
+        except Exception as e:      # noqa: silent-ok — 判不出来就按原样处理
+            LOG.debug("判断聊天模型占用失败（忽略）：%s", e)
+        try:
+            r = _r.post(_llama_swap_url() + "/api/models/unload/" + str(mid),
+                       timeout=float(timeout))
+            if r.status_code == 200:
+                LOG.info("视频切换：已卸载 llama-swap 模型 %s（腾显存）", mid)
+                ok = True
+        except Exception as e:      # noqa: silent-ok
+            LOG.debug("视频切换：卸载 %s 出异常（忽略）：%s", mid, e)
     return ok
+
+
+# ================== 聊天模型"正在用"的标记 ==================
+# 【为什么要有】8G 显存上确实只能装一个 llama，但"腾显存"这件事该由**视频生成**发起，
+#   不该由每一轮聊天顺手做掉。这里记一个"刚用过"的时间戳：
+#   凡是刚用过（默认 180 秒内）的聊天模型，任何"顺手卸载"都会被挡下来。
+_CHAT_USE = {"at": 0.0, "model": ""}
+
+
+def mark_chat_use(model_id=""):
+    """聊天这边每次调模型都盖个时间戳（`xiaojiao_app._llm_post` 里调）。"""
+    try:
+        _CHAT_USE["at"] = time.time()
+        if model_id:
+            _CHAT_USE["model"] = str(model_id)
+    except Exception:      # noqa: silent-ok — 打时间戳失败不影响任何事
+        pass
+
+
+def _chat_in_use(window_s=180.0):
+    """聊天模型最近用过吗（用来判断"卸了它会不会立刻又要重载"）。"""
+    try:
+        return (time.time() - float(_CHAT_USE.get("at") or 0.0)) < float(window_s)
+    except Exception:      # noqa: silent-ok
+        return False
 
 
 def get_state():
@@ -155,11 +214,13 @@ def stop_brain(model_id=None):
     """卸载大脑(腾显存)。优先走 llama-swap unload(秒级,进程常驻)；否则兜底杀进程。
 
     `model_id` 不给就按**当前配置的聊天模型**卸（原来写死 "xiaojiao"，换过模型就卸错对象）。
+    【2026-10-28】这里显式 `wipe_all=True`：这条路是**给视频生成腾独显**的，
+    该卸干净（和"每轮聊天顺手卸一个"是两回事，后者在 `_llama_swap_unload` 里已经默认收窄）。
     """
     _set("stop_brain", "正在卸载大脑，腾出显存…")
     _mid = model_id or _chat_model_id()
     # ① 用 llama-swap 卸载(常驻进程,秒级)
-    if _llama_swap_unload(_mid):
+    if _llama_swap_unload(_mid, wipe_all=True):
         # 等上游端口释放
         for _ in range(8):
             time.sleep(0.5)

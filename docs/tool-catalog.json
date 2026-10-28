@@ -1,6 +1,6 @@
 {
- "total": 120,
- "ok": 120,
+ "total": 122,
+ "ok": 122,
  "bad": 0,
  "tools": [
   {
@@ -895,6 +895,21 @@
    "problems": []
   },
   {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "cross_check",
+   "description": "什么时候用：用户问「你确定吗」「换个模型看看」「交叉核验一下」，或答案涉及要害事实；",
+   "full_description": "换**另一颗火种**把同一个问题重答一遍，再逐条对账（一致 / 单边有据 / 独有无据 / 分歧）。什么时候用：用户问「你确定吗」「换个模型看看」「交叉核验一下」，或答案涉及要害事实；输入 question；输出 对账表与结论",
+   "required": [],
+   "properties": [
+    "question",
+    "models"
+   ],
+   "example": "cross_check({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
    "plugin": "db_helper",
    "kind": "插件",
    "name": "describe_table",
@@ -1527,6 +1542,18 @@
     "max_depth"
    ],
    "example": "project_tree({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "proof_panel",
+   "description": "什么时候用：用户问「给我看看你的凭据/自证面板在哪」；",
+   "full_description": "自证面板的地址与关键数字（账本 / 有据率 / 链状态 / 换模型增量 / 闸门 / 项目）。什么时候用：用户问「给我看看你的凭据/自证面板在哪」；输入 无；输出 地址与摘要",
+   "required": [],
+   "properties": [],
+   "example": "proof_panel({})",
    "test": "通过",
    "problems": []
   },

@@ -126,6 +126,31 @@ def _blob_get(sha):
         return ""
 
 
+class _BlobCache(dict):
+    """一轮之内把快照正文读进内存，别让一条断言读一遍盘。
+
+    【2026-10-28 修：这是我自己写出来的性能坑】
+      原来绑定断言是「每条断言 × 每份材料」各读一次文件。一份材料最大 400 KB，
+      一轮若有 20 条断言 × 5 份材料 = **100 次同步文件读**，最坏 40 MB 磁盘 I/O，
+      全压在回答的出口路径上 —— 用户的体感就是"回话慢得要命"。
+      快照是按内容寻址的，天生可缓存：同一个 sha 读一次就够。
+    """
+
+    def text(self, sha):
+        if not sha:
+            return ""
+        if sha in self:
+            return self[sha]
+        txt = _blob_get(sha)
+        self[sha] = txt
+        return txt
+
+
+def _norm_cache():
+    """归一化结果也缓存：同一份材料在 20 条断言里要被归一化 20 次。"""
+    return {}
+
+
 def _rotate():
     try:
         if not os.path.isfile(_LEDGER):
@@ -233,17 +258,25 @@ def make_round(question, answer, tool_trace=None, snippets=None, extra=None):
     except Exception as e:      # noqa: silent-ok — 抽不出断言就记 0 条，不编
         LOG.debug("证据账本：抽断言失败（忽略）：%s", e)
         raw_claims = []
+    # 【性能】材料只读一次、归一化只算一次，然后所有断言共享 —— 见 `_BlobCache` 的说明。
+    cache = _BlobCache()
+    normed = []
+    for s in sources:
+        try:
+            from core import answer_gate as AG0
+            normed.append((s["sid"], AG0._norm(cache.text(s["sha256"]))))
+        except Exception:      # noqa: silent-ok — 单份材料不参与绑定，不影响别的
+            normed.append((s["sid"], ""))
     for c in raw_claims:
         val = str(c.get("value") or "")
         bound = []
-        for s in sources:
-            body = _blob_get(s["sha256"])
-            try:
-                from core import answer_gate as AG2
-                if AG2._found(val, AG2._norm(body), c.get("kind")):
-                    bound.append(s["sid"])
-            except Exception:      # noqa: silent-ok — 单条判不了就当没绑定
-                continue
+        try:
+            from core import answer_gate as AG2
+            for sid, body_norm in normed:
+                if body_norm and AG2._found(val, body_norm, c.get("kind")):
+                    bound.append(sid)
+        except Exception:      # noqa: silent-ok — 单条判不了就当没绑定
+            bound = []
         claims.append({"kind": c.get("kind"), "value": val, "raw": str(c.get("raw") or "")[:80],
                        "sources": bound,
                        "status": "supported" if bound else ("unbound" if sources else "no_material")})
@@ -339,11 +372,13 @@ def audit_round(rid_or_rec):
     claims = rec.get("claims") or []
     sources = {s.get("sid"): s for s in (rec.get("sources") or [])}
     missing_blobs, recheck_bad, supported_now = [], [], 0
+    # 审计也一样：快照每份只读一次、归一化只算一次（见 `_BlobCache` 的说明）
+    _cache = _BlobCache()
     for c in claims:
         got = []
         for sid in (c.get("sources") or []):
             s = sources.get(sid) or {}
-            body = _blob_get(s.get("sha256"))
+            body = _cache.text(s.get("sha256"))
             if not body:
                 missing_blobs.append({"claim": c.get("value"), "sid": sid,
                                       "sha256": s.get("sha256")})

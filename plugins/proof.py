@@ -86,6 +86,26 @@ _TOOLS = [
         },
     },
     {
+        "name": "cross_check",
+        "description": ("换**另一颗火种**把同一个问题重答一遍，再逐条对账（一致 / 单边有据 / 独有无据 / 分歧）。"
+                        "什么时候用：用户问「你确定吗」「换个模型看看」「交叉核验一下」，"
+                        "或答案涉及要害事实；输入 question；输出 对账表与结论"),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "要核验的问题（不填 = 最近那句）"},
+                "models": {"type": "string", "description": "指定火种（逗号分隔，可省）"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "proof_panel",
+        "description": ("自证面板的地址与关键数字（账本 / 有据率 / 链状态 / 换模型增量 / 闸门 / 项目）。"
+                        "什么时候用：用户问「给我看看你的凭据/自证面板在哪」；输入 无；输出 地址与摘要"),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "project_start",
         "description": ("把一件要很久的事交给它（多里程碑、跨重启、有预算）。"
                         "什么时候用：一件事要几个阶段、可能要几小时几天；输入 goal；输出 项目号"),
@@ -369,6 +389,35 @@ class ProofPlugin:
                                            + "；按 apply=false 已退回，只做了测量")
                     res["ok"] = False
                 return _fmt_gate(res, GE.stats().get("applied"))
+            if tool_name == "cross_check":
+                from core import consensus as CN
+                q = str(params.get("question") or "").strip()
+                if not q:
+                    return ("要给一个问题 —— 交叉核验是「两颗火种各答一遍再对账」，"
+                            "没问题就没法核。")
+                models = [x.strip() for x in str(params.get("models") or "").split(",") if x.strip()]
+                rep = CN.check(q, models=models or None)
+                return CN.format_report(rep)
+            if tool_name == "proof_panel":
+                from core import proof_panel as PP
+                d = PP.collect(limit=8)
+                lg, ch = d.get("ledger") or {}, d.get("chain") or {}
+                gt = d.get("gate") or {}
+                pa = (d.get("parity") or {}).get("summary") or {}
+                cn = d.get("consensus") or {}
+                lines = ["🧾 **自证面板**：http://127.0.0.1:5000/proof", "",
+                         "- 证据账本：%s 轮 ｜ 断言 %s 条 ｜ 有据 %s 条 ｜ 哈希链：%s" % (
+                             lg.get("rounds", 0), lg.get("claims", 0), lg.get("supported", 0),
+                             "完整" if ch.get("ok") else "断了"),
+                         "- 换模型实测：裸 %s → 载体 %s（增量 %s）" % (
+                             pa.get("bare_fair_mean", "—"), pa.get("carrier_fair_mean", "—"),
+                             pa.get("lift_mean", "—")),
+                         "- 改进闸门：落地 %s ｜ 拒绝 %s ｜ 回滚 %s" % (
+                             gt.get("accepted", 0), gt.get("rejected", 0), gt.get("rolled_back", 0)),
+                         "- 交叉核验：%s 次（一致 %s ｜ 有问题 %s）" % (
+                             cn.get("total", 0), cn.get("clean", 0), cn.get("flagged", 0)),
+                         "", "（这一页纯只读，每一格都是现读现算；打不开就是服务没起或要令牌。）"]
+                return "\n".join(lines)
             if tool_name == "project_start":
                 from core import project_runner as PR
                 goal = str(params.get("goal") or "").strip()

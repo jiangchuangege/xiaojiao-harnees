@@ -2328,6 +2328,75 @@ def _numeric_compare_answer(text):
     return base + "。" + amb + tail
 
 
+def _perception_skippable(text):
+    """这一轮能不能**不问模型**做"感知"？—— 只认又短又明确的问句。
+
+    【为什么要这一条】实测（live 日志 + 计时）：一轮里最少 3 次模型调用
+    （感知 / 元认知自评 / 正文回答），本机每调用 2~6 秒，于是「你好」要等 18 秒。
+    "感知"的产出只有两样：一句"这件事对它意味着什么"（给人看的）、一个"事"（给检索用的检索词）。
+    对于**短而明确**的问句，原话本身就是最好的检索词，解读也不需要模型来猜。
+
+    判据（宁严不宽，宽了会把真需要理解的句子也省掉）：
+      · 长度 ≤ 24 字；
+      · 且命中以下之一：纯问候/致谢、问日期时间、问 IP/天气这类明确工具指令、
+        纯数字比较、抓取指令（带 http 或"抓一下"）。
+    其余一律照旧走模型感知 —— 语义判断这种事不省。
+    """
+    t = str(text or "").strip()
+    if not t or len(t) > 24:
+        return False
+    # 问候语允许带尾巴（实测「你好呀」原来没被认出来 → 又多花了 4 次调用）
+    if re.fullmatch(r"(你好|您好|嗨|哈喽|哈啰|在吗|在么|早|早安|晚上好|晚安|谢谢|多谢|辛苦了|"
+                    r"好的|好|嗯|哦|收到|ok|OK)[呀啊哦呢哈嘛啦了！!。.～~，, ]*", t):
+        return True
+    if re.search(r"(今天|现在|此刻)[^。？?]{0,6}(几号|几点|星期几|周几|什么时间|哪一年)", t):
+        return True
+    if re.search(r"(公网|本机|我的)\s*IP|天气|气温", t, re.I):
+        return True
+    if re.search(r"\d+(?:\.\d+)?\s*(和|跟|与|比)\s*\d+(?:\.\d+)?", t) and \
+            re.search(r"(哪个|谁)(更)?(大|小)", t):
+        return True
+    if re.search(r"https?://", t) and re.search(r"(抓|爬|下载|存)", t):
+        return True
+    return False
+
+
+def _clock_answer(question):
+    """问「今天几号/星期几/几点/今年哪一年」→ **载体直接读时钟回答**，不问模型。
+
+    【为什么这件事根本不该问模型】时钟是载体自己手里的事实（`time.localtime()`），
+      问模型等于"让火种背一遍今天的日期"：慢（2~6 秒）、还可能背错（实测有答成 2025 的）。
+      实测一次「今天几号？」要 16 秒，而正确的做法是 0.001 秒读表。
+      判据只认**纯问时间的句子**（问日期/星期/时刻/年份），带别的内容照样交给模型。
+    """
+    q = str(question or "").strip()
+    if not q or len(q) > 30:
+        return ""
+    if not re.search(r"(今天|今日|现在|此刻|当前|目前|今年)[^。？?]{0,8}"
+                     r"(几号|几月几号|什么日期|日期是|星期几|周几|礼拜几|几点|什么时间|哪一年|哪年|几年)",
+                     q):
+        return ""
+    lt = time.localtime()
+    y, m, d = lt.tm_year, lt.tm_mon, lt.tm_mday
+    wk = "一二三四五六日"[lt.tm_wday]
+    iso = "%04d-%02d-%02d" % (y, m, d)
+    ask_clock = bool(re.search(r"(几点|什么时间)", q))
+    ask_year = bool(re.search(r"(哪一年|哪年|几年)", q))
+    if ask_year and not re.search(r"(几号|日期|星期|几[点时])", q):
+        return ("今年是 **%d 年**。\n\n—— 这是**载体直接读的系统时钟**（%s），没问模型；"
+                "时间这种事实不该让火种背。" % (y, time.strftime("%Y-%m-%d %H:%M:%S")))
+    if ask_clock and not re.search(r"(几号|日期|星期|周几)", q):
+        return ("现在是 **%s**（%s）。\n\n—— 这是**载体直接读的系统时钟**，没问模型。"
+                % (time.strftime("%H:%M:%S"), "星期" + wk))
+    return ("今天是 **%s 星期%s**（%s）。\n\n—— 这是**载体直接读的系统时钟**（%s），没问模型；"
+            "日期这种事实不该让火种背（它偶尔会背成别的年份）。"
+            % (iso, wk, time.strftime("%H:%M"), time.strftime("%Y-%m-%d %H:%M:%S")))
+
+
+def _perception_skippable_old(text):      # noqa: retire-keep — 保留旧实现做对照，不再调用
+    return False
+
+
 def _time_guard(question, answer):
     """问"今天几号/星期几/几点/哪一年"而答案里没有真实时间 → 载体补一句。
 
@@ -4536,6 +4605,75 @@ def _llm_post(target, payload, timeout=90, tries=4):
     return resp, status, resp.text
 
 
+# ---- 给「回答慢」装一把尺子：每次调模型都把耗时累进这一轮的 _CTX ----
+# 【为什么用包装而不是改函数体】`_llm_post` 里有好几处 return、还带重试退避，
+#   逐个加计时容易漏；在外面包一层 try/finally，**所有出口都能计到**，也不动原有逻辑。
+_LLM_POST_IMPL = _llm_post
+
+
+def _llm_post(target, payload, timeout=90, tries=4):      # noqa: F811 — 有意覆盖，见上面说明
+    # 【用户轮专属车道】后台线程（逛世界/保养/画像/固化/审校）想调模型时，先让用户说完。
+    #   实测依据：问「今天几号」载体 1 毫秒答完，这一轮却耗 58 秒、模型累计被占 247 秒 ——
+    #   全是在和后台抢同一颗本地模型。让路比"加速"有用得多（见 core/turn_lane.py）。
+    try:
+        from core import turn_lane as _TL
+        if not _TL.wait_if_background(max_wait=float(CAP.get("bg_yield_wait_s", 20) or 20)):
+            LOG.info("后台模型调用让路：用户轮还在进行 → 本次跳过")
+            return None, None, "用户轮进行中，后台调用让路"
+    except Exception as e:      # noqa: silent-ok — 车道坏了也不许挡住调用
+        LOG.debug("用户轮车道检查失败（忽略）：%s", e)
+    _t = time.time()
+    # 【铁律：载体已经答完了，就别再问模型】
+    #   实测：问「今天几号」，`carrier_clock` 1 毫秒就有答案了，可这一轮仍然花了 28 秒
+    #   —— 日志显示后面还有 `_perceive_llm` / `_selfrate_llm` / `_profile_judge` 三次模型调用。
+    #   这些调用是"内部装饰"，在**载体直答**的短问句上纯属白花时间。
+    #   所以这里立一条硬规矩：短问句 + 载体已给答案 → 本轮后续模型调用一律不做（记日志，不静默）。
+    try:
+        if _CTX.get("brief_turn") and _CTX.get("answer_from_carrier"):
+            import inspect as _insp2
+            _c = ""
+            for _f in _insp2.stack()[1:8]:
+                if _f.function not in ("_llm_post", "llm_chat", "llm_chat_tools"):
+                    _c = _f.function
+                    break
+            LOG.info("跳过模型调用（%s）：本轮载体已直答且属短问句", _c or "?")
+            return None, None, "载体已直答（短问句）→ 不再调模型"
+    except Exception:      # noqa: silent-ok — 判不出来就照常调用
+        pass
+    try:
+        # 【谁在调模型】把调用方函数名、消息条数、提示长度记下来 —— 排"慢"的时候，
+        #   不看这个就只能在十几个可能里瞎猜（一行日志换一小时排查）。
+        try:
+            import inspect as _insp
+            _fr = _insp.stack()
+            _caller = ""
+            for _f in _fr[1:9]:
+                _n = _f.function
+                if _n not in ("_llm_post", "_llm_post_impl", "llm_chat", "llm_chat_tools"):
+                    _caller = _n
+                    break
+            _msgs = payload.get("messages") or []
+            LOG.info("模型调用 #%d ← %s ｜ 消息 %d 条 ｜ max_tokens=%s",
+                     int(_CTX.get("_llm_calls") or 0) + 1, _caller or "?",
+                     len(_msgs), payload.get("max_tokens"))
+        except Exception:      # noqa: silent-ok — 日志记不上不影响调用
+            pass
+        return _LLM_POST_IMPL(target, payload, timeout=timeout, tries=tries)
+    finally:
+        try:
+            _CTX["_llm_sec"] = round(float(_CTX.get("_llm_sec") or 0.0)
+                                     + (time.time() - _t), 3)
+            _CTX["_llm_calls"] = int(_CTX.get("_llm_calls") or 0) + 1
+        except Exception:      # noqa: silent-ok — 计时失败绝不影响调用
+            pass
+        try:
+            # 告诉模型切换层"聊天模型刚刚真的用过" —— 它据此拒绝把正在用的模型顺手卸掉
+            import video_service.model_switch as _ms
+            _ms.mark_chat_use(str((target or {}).get("model") or ""))
+        except Exception:      # noqa: silent-ok
+            pass
+
+
 def _scrub_secret(s):
     """错误信息里可能回显密钥 → 一律打码后再使用。"""
     return re.sub(r"(sk-|ghp_|Bearer\s+)[A-Za-z0-9\-_]{6,}", r"\1***", s or "")
@@ -4688,6 +4826,16 @@ def llm_chat(messages, temperature=None):
         if _wants_long_output(_probe):
             _tok = max(_tok, 2048)
             LOG.info("长输出请求 → 本轮额度提到 %d（预设里是 %d）｜用户：%s", _tok, MAX_TOKENS, _probe[:40])
+    except Exception:      # noqa: silent-ok
+        pass
+    # 【2026-10-28 加：短问句收额度】
+    #   实测：问「你好」「今天几号」，模型照样抖出一大段（这轮 4 次调用累计生成 109 秒），
+    #   用户体感就是"回一句话要等十几秒"。而这类问题两句话就够。
+    #   判据用**载体自己的规则**（`_perception_skippable` 那套），不额外问模型。
+    try:
+        if _CTX.get("brief_turn"):
+            _tok = min(int(_tok), int(CAP.get("brief_max_tokens", 260) or 260))
+            LOG.info("短问句 → 本轮额度收到 %d（少写一点，回得快一点）", _tok)
     except Exception:      # noqa: silent-ok
         pass
     payload = {"messages": messages,
@@ -5791,11 +5939,17 @@ def llm_chat_tools(messages, max_rounds=6, lean=False, tools_subset=None, budget
         LOG.info("挂起中：拒绝调用大脑（chat+tools）—— 它在睡，不推理、不占显存")
         return None, []
     _energy_spend(why="模型调用（带工具）")
-    # 内存守卫: 生成前卸载另一个 llama 模型——8G 上保证单个 llama 占满显存(防龟速/OOM)
+    # 内存守卫: 生成前卸载**另一个** llama 模型——8G 上保证单个 llama 占满显存(防龟速/OOM)
+    # 【2026-10-28 修：别再顺手把正在用的模型也卸了】
+    #   实测（live 日志 + 计时）：每句话都出现两条卸载记录（先 coder、再 xiaojiao），
+    #   因为 `_llama_swap_unload` 原来"卸不掉就把所有 loaded 的都卸掉"，于是**聊天模型每轮被踢出显存**，
+    #   下一句要重新读盘加载 —— 一句话 18 秒，其中十几秒在等模型进显存。
+    #   现在：只按名字卸"另一个"，并且把"我刚用过聊天模型"这件事告诉切换层（它据此拒绝误卸）。
     try:
         if LLM_MODEL in ("coder", "xiaojiao"):
             import video_service.model_switch as _ms
             _other = "xiaojiao" if LLM_MODEL == "coder" else "coder"
+            _ms.mark_chat_use(LLM_MODEL)
             _ms._llama_swap_unload(_other)
     except Exception as e:
         LOG.debug("忽略异常(%s:%d): %s", __file__, 938, e)
@@ -12117,9 +12271,23 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 LOG.debug("合并调用失败（退回两次调用）：%s", e)
                 _joint_res = None
         _per = None
+        _per_skipped = False
         if _joint_res and _joint_res.get("ok"):
             _per = _joint_res["perception"]
             _sr_out_early = _joint_res["selfrate"]
+        elif _perception_skippable(user_input_ctx):
+            # 【2026-10-28 加：短问句不劳模型"感知"】
+            #   实测现状（live 日志）：一轮里至少 3 次模型调用 —— 感知、自评、正文回答。
+            #   本机一颗 4B 每次 2~6 秒，于是「你好」「今天几号」这种一句话要等 18 秒，
+            #   用户的评价是「回复慢得要死」。
+            #   而"感知"这一步做的事是：把这句话解读成「事/我/命/向」（给检索用）。
+            #   对**又短又明确**的问句（问候、问时间、问 IP/天气、算术、抓取指令），
+            #   直接拿原话当检索词完全够用 —— 用规则接住，省掉一整个来回。
+            #   ⚠️ 这不是"假装感知过"：日志里会写明"这一轮用规则代替感知"，可查。
+            _per = {"meaning": "（短问句：用规则代替模型感知，原话即事）",
+                    "event_what": str(user_input_ctx)[:80]}
+            _per_skipped = True
+            LOG.info("感知层：**短问句 → 用规则代替模型感知**（省一次调用；原话即事）")
         else:
             if _need_sr_model and CAP.get("inner_parallel", True):
                 # 自评先起飞，感知在主线程上走 —— 两边同时在飞，谁也不用等谁
@@ -12321,6 +12489,13 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             if _is_social_turn(user_input_ctx):
                 _sr_out = {"rating": "A", "why": "寒暄轮：答案里没有要查的事实，免自评"}
                 LOG.info("元认知自评：**寒暄轮免问模型**（省一次调用）")
+            elif _per_skipped:
+                # 【2026-10-28 加】这一轮"感知"已经按规则跳过了（短问句），自评也**不问模型**：
+                #   两件事吃的是同一句话，一个能按规则省，另一个就没理由再花一次调用。
+                #   注意口径：这里不是"声称有把握"，只是**不做自评这一步**（不注入 C 档手段链、
+                #   也不加免责标注），与寒暄轮的处理保持一致。
+                _sr_out = {"rating": "A", "why": "短问句：感知已按规则跳过，自评同样不问模型"}
+                LOG.info("元认知自评：**短问句免问模型**（与感知同步省）")
             elif _sr_out_early:
                 # 合并那条路已经把它一起问回来了（就没有第二次调用）
                 _sr_out = _sr_out_early
@@ -12661,6 +12836,20 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     #      这样既有它自己的语气，又不会编时间。
     if answer is None and re.search(r"(现在|当前|今天|此刻).{0,4}(几点|时间|日期|几号|星期|礼拜)|"
                                     r"(几点|几号|星期几|what time|current time)", user_input or "", re.I):
+        # 【2026-10-28 加：**纯问时间的句子，载体直接答**，不问模型】
+        #   实测：这一问要 16~18 秒（先在下面让模型"用自己的话说"，再加核对），
+        #   而用户问「今天几号」要的只是一个准确的日期。用户的抱怨是「回复慢得要死」，
+        #   所以对**只有时间、没有别的诉求**的句子，直接读系统时钟回答（几毫秒）。
+        #   代价是这种回答语气统一（模板化）——这里做过取舍：**这一步优先"快且准"**。
+        #   带其它诉求的句子（比如「今天几号，顺便查下天气」）照旧走下面的"让它自己说 + 核对"。
+        _ck0 = _clock_answer(user_input)
+        if _ck0:
+            LOG.info("载体读表：纯问时间 → 直接读系统时钟（%s；不问模型）", user_input[:20])
+            tool_trace.append(_trace_entry("carrier_clock", {"q": user_input[:40]}, _ck0))
+            answer = _ck0
+            _CTX["answer_from_carrier"] = True
+    if answer is None and re.search(r"(现在|当前|今天|此刻).{0,4}(几点|时间|日期|几号|星期|礼拜)|"
+                                    r"(几点|几号|星期几|what time|current time)", user_input or "", re.I):
         _now = datetime.now()
         _wd = "一二三四五六日"[_now.weekday()]
         _facts = ("%s（%s，星期%s）" % (_now.strftime("%Y-%m-%d %H:%M:%S"), _now.strftime("%A"), _wd))
@@ -12811,6 +13000,17 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             LOG.info("载体算数：数值比较 → 自己算（不问模型）")
             tool_trace.append(_trace_entry("carrier_math", {"q": user_input[:40]}, _nc))
             answer = _nc
+            _CTX["answer_from_carrier"] = True
+
+    # ③0a0c 读时钟：问「今天几号/星期几/几点/今年哪一年」→ 载体读系统时钟，不问模型。
+    #   实测：这一问要走 16 秒（模型背日期），而正确答案就在 `time.localtime()` 里。
+    if answer is None:
+        _ck = _clock_answer(user_input)
+        if _ck:
+            LOG.info("载体读表：问时间 → 直接读系统时钟（不问模型）")
+            tool_trace.append(_trace_entry("carrier_clock", {"q": user_input[:40]}, _ck))
+            answer = _ck
+            _CTX["answer_from_carrier"] = True
 
     # ③0a1a 【自证路由】问「你凭什么这么说 / 换个模型会不会变傻 / 你自己改了什么 / 项目呢」
     #   这四类话**一律不许交给模型**：它们问的都是载体自己的账本和实测，模型只会凭印象编。
@@ -14260,6 +14460,40 @@ def health():
     return jsonify({"ok": True, "version": APP_VERSION})
 
 
+@app.route("/proof")
+def proof_page():
+    """**自证面板**：账本 / 交叉核验 / 闸门 / 换模型实测 / 长时项目，一页看完。
+
+    【为什么要有这个页面】"可核查"如果只能靠跑脚本看，那就只对写代码的人可用。
+    这一页把五件事的**真实记录**摆出来，每一格都是现读现算（没有手打数字），纯只读。
+    【为什么不去掉鉴权】它含着问题原文与产物路径，属于敏感信息 —— 走和其它页面同一套
+    令牌规则（`before_request` 统一处理），不做特殊放行。
+    """
+    try:
+        from core import proof_panel as _PP
+        return Response(_PP.collect_and_render(limit=20), mimetype="text/html")
+    except Exception as e:      # noqa: silent-ok — 面板挂了不许影响别的页面
+        LOG.warning("自证面板渲染失败：%s: %s", type(e).__name__, e)
+        return Response("<h1>自证面板暂时打不开</h1><p>原因：%s: %s</p>"
+                        "<p>（如实报错，不假装正常）</p>"
+                        % (type(e).__name__, str(e)[:200]),
+                        mimetype="text/html", status=500)
+
+
+@app.route("/api/proof")
+def api_proof():
+    """自证数据的 JSON 版（给脚本/外部监控用，和面板同一份数据）。"""
+    try:
+        from core import proof_panel as _PP
+        d = _PP.collect(limit=int(request.args.get("limit") or 20))
+        # 项目里含里程碑细节，这里只保留摘要，避免一次吐出太多
+        d["projects"] = [{k: p.get(k) for k in ("id", "goal", "state", "progress", "spent")}
+                         for p in (d.get("projects") or [])]
+        return jsonify({"ok": True, **d})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
 @app.route("/api/central")
 def api_central():
     """协同网络的只读快照：中央状态 + 事件总线统计 + 最近事件。
@@ -14296,6 +14530,22 @@ def _no_cache(resp):
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
     return resp
+
+
+@app.teardown_request
+def _close_turn_lane(exc=None):
+    """每个请求结束时都收回"用户轮车道"。
+
+    【为什么用 teardown 而不是在 api_chat 里 finally】`/api/chat` 里有十几处 return，
+      逐个加 end() 必漏一个；漏掉的后果是**后台永远让路**（模型全闲着）——
+      那比慢更糟。teardown 无论正常返回还是抛异常都会跑，正好。
+    """
+    try:
+        from core import turn_lane as _TL3
+        _TL3.end()
+    except Exception:      # noqa: silent-ok — 收不回来也不许影响响应
+        pass
+    return None
 
 # ================== Agent 预设切换（presets/） ==================
 _PRESETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
@@ -15300,7 +15550,41 @@ def api_chat():
     # 切换会话就会把回答写错地方，自己的会话永远停在"正在回答"（实测踩到）。
     _sid = get_current_session()[0].get("id")
     lean = bool((request.get_json(force=True, silent=True) or {}).get("lean", False))
+    # 计时：总耗时 / 调模型累计 / 出口各闸门耗时（回答里一起带出去，见下面的 sec/llm_sec）
+    _t_req = time.time()
+    _CTX["timings"] = {}
+    _CTX["_llm_sec"] = 0.0
+    _CTX["_llm_calls"] = 0
+    # 短问句（问候/问时间/问IP/算术/抓取指令）→ 收额度、跳过感知与自评的模型调用。
+    # 这是「回得快」这件事唯一的物理来源：少调一次模型 + 少生成一大段。全由载体规则判定。
+    try:
+        _CTX["brief_turn"] = bool(_perception_skippable(user_input))
+    except Exception:      # noqa: silent-ok
+        _CTX["brief_turn"] = False
+    # 用户轮车道：这一轮从开始到结束，后台的模型调用一律让路（见 core/turn_lane.py）
+    try:
+        from core import turn_lane as _TL2
+        _TL2.begin()
+    except Exception as e:      # noqa: silent-ok — 车道起不来也要能回答
+        LOG.debug("用户轮车道开启失败（忽略）：%s", e)
     answer, online, info, needs_confirm, tool_trace = agent_run(user_input, lean=lean)
+    _CTX["timings"]["agent_run"] = round(time.time() - _t_req, 2)
+    # 【集中打一个标记：这一轮的答案是"载体自己给的"】
+    #   为什么在出口统一判，而不是在每个路由里各写一遍（实测教训）：
+    #     逐处标记必然漏 —— 漏掉的那条路由会继续花几十秒调模型（问「今天几号」花了 28 秒，
+    #     就是因为标记漏在了更早的 1b3 分支里）。这里只看"轨迹里有没有载体直答类工具"，
+    #     以后新增路由不用记得来改这一处。
+    try:
+        _CD_TOOLS = {"carrier_math", "carrier_clock", "net_ip", "now", "get_weather",
+                     "ebook_manifest", "ebook_grab", "audit_answer", "audit_history",
+                     "evidence_stats", "parity_report", "evolve_gate", "cross_check",
+                     "proof_panel", "project_start", "project_status", "project_list",
+                     "project_resume", "task_start", "task_status", "task_list",
+                     "skill_list", "skill_recall"}
+        if any(str((_t or {}).get("tool") or "") in _CD_TOOLS for _t in (tool_trace or [])):
+            _CTX["answer_from_carrier"] = True
+    except Exception as e:      # noqa: silent-ok — 标记失败只影响"还能不能省调用"
+        LOG.debug("载体直答标记失败（忽略）：%s", e)
     answer = _strip_think(answer)                  # 双保险：任何路径的 <think> 都不许进正文/会话
     answer = _answer_sane(answer)                   # 占位符/空串一律不算回答（见 _answer_sane 说明）
     # ---- 问题 1：**唯一出口的复读解毒网** ----
@@ -15438,13 +15722,20 @@ def api_chat():
         "answer": answer_final,
         "brain_online": online,
         "needs_confirm": needs_confirm,
-        "tool_trace": tool_trace,
-        "tools_on": bool(CAP.get("run_tools", True)),
+        "tool_trace": tool_trace,        "tools_on": bool(CAP.get("run_tools", True)),
         "session_id": get_current_session()[0].get("id"),
         "log_id": log_id,
         "sources": [{"title": t, "content": c, "url": u} for t, u, c in info],
         "grounding": g,
         "grounding_note": _grounding_note(g),
+        # 【2026-10-28 加：把"这一轮慢在哪"如实带出来】
+        #   用户抱怨"回话慢得要命"，而慢有三种完全不同的原因：模型自己慢、工具链慢、
+        #   载体出口那几道闸门慢。不带数字就只能在三种里瞎猜，也没法证明改好了。
+        #   这三个字段就是尺子：`sec` 总耗时、`llm_sec` 调模型累计、`llm_calls` 调了几次。
+        "sec": round(time.time() - _t_req, 2),
+        "llm_sec": round(float(_CTX.get("_llm_sec") or 0.0), 2),
+        "llm_calls": int(_CTX.get("_llm_calls") or 0),
+        "stage_sec": dict(_CTX.get("timings") or {}),
         "history": _hist_json(),
     })
 
