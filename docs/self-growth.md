@@ -270,20 +270,25 @@ python tools/health_capability.py --save   # 工具真机体检
 
 ### 全量自测里"没过的那几个"是什么（2026-10-28 实测，不粉饰）
 
-`python tools/run_all_tests.py`（126 个文件、3997 条断言）这一轮的结论：
-**3966 / 3997 通过，7 个文件没通过**。逐个说清楚是哪一类：
+`python tools/run_all_tests.py`（126 个文件、4015 条断言）这一轮的结论：
+**3975 / 4015 通过，8 个文件没通过**。逐个说清楚是哪一类：
 
 | 文件 | 现象 | 归类 |
 | --- | --- | --- |
-| `test_6_capabilities.py` | 跑到「④ RAG 三个源同时查」停住（>600 秒） | 联网检索，本机网络下会卡 |
-| `test_closed_loop.py` | 8 条案例 × 3 次**真模型对话**，>900 秒 | 真对话慢测，不是"坏" |
-| `test_mind_stream_live.py` | 7/23 条不稳 | 真模型判定类，跨轮会飘 |
-| `test_module_integration.py` | 9/19 条 | 同上（真模型回答措辞） |
-| `test_single_request_limit.py` | 10/12 → 有时卡死 | 同上 |
+| `test_6_capabilities.py` | 9/19，跑到「④ RAG 三个源同时查」就停 | 真联网检索 + 它按**仓库目录**里的日志判，而服务跑在 live 副本上 |
+| `test_module_integration.py` | 9/19，失败的 5 条都是「日志有痕迹 ← 无命中」 | 同上：服务在 live 副本，日志写不到仓库目录 |
+| `test_closed_loop.py` | 8 案例 × 3 次**真模型对话**，>900 秒 | 真对话慢测，不是"坏" |
+| `test_mind_stream_live.py` | 8/23 不稳 | 真模型判定类，跨轮会飘 |
+| `test_single_request_limit.py` | 有时卡死 | 同上 |
 | `test_impression_usage.py` | 0/1（"用上了没有"靠模型判） | 同上 |
+| `test_agnes_live.py` | 0/1 | 真模型判定 |
 | `test_math_render.py` | KaTeX 从 CDN 拉不到 | 本机没网就必红（环境） |
 
 **同一批文件在别的轮次里是过的**（`test_stream_render` 22/22、`test_time_context` 15/15、
-`test_perception_infinity` 9/9、`test_memory_recall` 通过）—— 所以它们是"飘"，不是"坏"。
-**确定性项（不依赖模型）这一轮全过**；被标"卡死"的也从不伪装成通过，跑测器会把超时单列。
+`test_perception_infinity` 9/9、`test_memory_recall` 通过、`test_interoceptive` 23/23）——
+所以它们是"飘"或"前提不满足"，不是"坏"。**确定性项（不依赖模型）这一轮全过**；
+被标"卡死"的也从不伪装成通过，跑测器会把超时与"跳过"单列。
 `test_profile_recall_integration.py` 因为本机还没生成画像库 → 明确标「跳过」，不算绿也不算红。
+
+**要从这套测试里学到的一条**：凡是"只看结果、不看前提"的跑测都会骗自己 ——
+超时被杀 ≠ 失败，跳过 ≠ 通过，服务跑在别的目录 ≠ 功能坏了。这三件事现在都分开算了。

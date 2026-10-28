@@ -158,8 +158,13 @@ def main(argv=None):
         lines.append("| `%s` | %s | %d/%d | %.1f | %s |" % (
             r["name"], r["state"], r["ok"], r["all"], r["sec"], r["note"] or ""))
     try:
-        io.open(_OUT, "w", encoding="utf-8").write("\n".join(lines) + "\n")
-        print("\n已写：docs/test-report.md")
+        if args.only:
+            # 只跑个别文件时**不要**覆盖全量报告 —— 实测踩过：单跑一个文件把
+            # `docs/test-report.md` 盖成了"1 个文件"的报告，全量结论就此丢失。
+            print("\n（单文件/子集运行，不覆盖 docs/test-report.md）")
+        else:
+            io.open(_OUT, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+            print("\n已写：docs/test-report.md")
     except Exception as e:      # noqa: silent-ok — 写不出报告不影响结论
         print("报告没写成（%s）" % e)
     print("\n合计：%d / %d；跳过 %d 个；没通过的文件 %d 个%s" % (
