@@ -612,6 +612,26 @@ def main():
                   % _ae._cfg()["interval_h"])
     except Exception as _ae_e:      # noqa: silent-ok — 起不来不能挡住启动
         print("  🔧 自我改进：起不来（%s）—— 如实说明，不假装在跑" % _ae_e)
+    # 【2026-10-28 加】两件"死在重启上"的事，必须在这里接回来：
+    #   ① 过闸落地的旋钮：值存在 logs/evolve/applied.json 里，重启后模块恢复成默认值 ——
+    #      不还原就等于"昨天量过、过闸、落地的改进，今天开机全忘了"（静默退化，最坏的一种）；
+    #   ② 没跑完的长时项目：不偷偷接着跑（会在用户不知道时动文件、花时间），
+    #      只标成「暂停」并留一句"喊一声就继续"，把主动权交回人手里。
+    try:
+        from core import gate_evolve as _GE
+        _restored = _GE.restore_applied()
+        if _restored:
+            print("  ⚖️ 改进闸门：复原 %d 个已落地旋钮（%s）" % (len(_restored), "、".join(_restored)))
+    except Exception as _ge_e:      # noqa: silent-ok — 复原失败不能挡住启动
+        print("  ⚖️ 改进闸门：旋钮复原失败（%s）—— 如实说明" % _ge_e)
+    try:
+        from core import project_runner as _PR
+        _paused = _PR.resume_pending()
+        if _paused:
+            print("  🗂 长时项目：%d 个上次没跑完，已标成暂停（说「接着做项目 <号>」就继续）"
+                  % len(_paused))
+    except Exception as _pr_e:      # noqa: silent-ok
+        print("  🗂 长时项目：状态复位失败（%s）—— 如实说明" % _pr_e)
     try:
         app.app.run(host=_host, port=port, debug=False, use_reloader=False)
     finally:

@@ -295,7 +295,7 @@ _TOOL_RULES = ("\n[工具铁律] "
                "或直接运行看结果）；④ 有报错就读出来修复。不要凭空猜测文件内容。")
 
 
-def _plugin_list(plugins=None, max_tools=90):
+def _plugin_list(plugins=None, max_tools=90, char_budget=7000):
     """从 PLUGINS 动态生成"插件清单"，让模型知道**现在到底有哪些工具**。
 
     为什么动态生成：以前这份清单写在 role 里，用户每加一个插件都得手改人设 —— 加完还常常
@@ -304,10 +304,19 @@ def _plugin_list(plugins=None, max_tools=90):
 
     注意要**显式传入**刚加载好的插件表：`PLUGINS = load_plugins()` 这句赋值发生在函数返回
     **之后**，此刻全局 PLUGINS 还是旧的 —— 直接读全局会生成"当前无可用工具"（真实踩过）。
+
+    【2026-10-28 改：不再按"前 90 个"硬截断】
+      原来 `uniq[:max_tools]` 是按字典顺序切前 90 个 —— 加插件时**排在后面的工具会静默消失**。
+      实测：新增 9 个自证工具后，`bulk_fetch` / `scrape_with_selector` / `download` /
+      `skill_list` 这些老工具从 system 里被挤掉了（模型从此不知道有它们），
+      而"能力一个不少"是这个项目的硬承诺。
+      现在改成**按字符预算自适应压缩说明**：所有工具名一个不少，
+      列表长了就自动把每条说明压短（46 → 24 → 14 字），压到放得下为止。
+      只有在"光工具名就超预算"这种极端情况下才截断，并且**明写出来**。
     """
     try:
         rows = plugins if plugins is not None else globals().get("PLUGINS") or {}
-        items = []
+        pairs = []
         for pname, p in (rows or {}).items():
             if not p.get("on") or p.get("type") == "skin":
                 continue
@@ -315,22 +324,37 @@ def _plugin_list(plugins=None, max_tools=90):
                 if not isinstance(t, dict) or not t.get("name"):
                     continue
                 d = (t.get("description") or "").strip().replace("\n", " ")
-                if len(d) > 46:
-                    d = d[:46] + "…"
-                items.append("- %s：%s" % (t["name"], d or pname))
-        if not items:
+                pairs.append((str(t["name"]), d or str(pname)))
+        if not pairs:
             return _PLUGIN_LIST_TEMPLATE % "当前无可用工具"
         seen, uniq = set(), []
-        for it in items:
-            k = it.split("：")[0]
-            if k not in seen:
-                seen.add(k)
-                uniq.append(it)
-        body = "\n".join(uniq[:max_tools])
-        if len(uniq) > max_tools:
-            body += "\n- …（另有 %d 个工具，见设置页「插件」）" % (len(uniq) - max_tools)
+        for name, d in pairs:
+            if name in seen:
+                continue
+            seen.add(name)
+            uniq.append((name, d))
+        # 逐档压缩：先保证"名字全在"，再尽量把说明写清楚
+        body = ""
+        for cap in (46, 24, 14):
+            items = ["- %s：%s" % (n, (d[:cap] + "…") if len(d) > cap else d)
+                     for n, d in uniq]
+            body = "\n".join(items)
+            if len(body) <= char_budget:
+                break
+        if len(body) > char_budget:
+            # 极端情况：只剩名字也要放，超出的部分如实标注，不假装清单是完整的
+            kept, acc = [], 0
+            for n, _d in uniq:
+                line = "- %s" % n
+                if acc + len(line) + 1 > char_budget:
+                    break
+                kept.append(line)
+                acc += len(line) + 1
+            body = "\n".join(kept)
+            if len(kept) < len(uniq):
+                body += "\n- …（另有 %d 个工具，见设置页「插件」）" % (len(uniq) - len(kept))
         return _PLUGIN_LIST_TEMPLATE % body
-    except Exception as e:      # 清单生成失败绝不能拖垮提示词
+    except Exception as e:      # noqa: silent-ok — 清单生成失败绝不能拖垮提示词
         LOG.debug("忽略异常(%s:%d): %s", __file__, 76, e)
         return _PLUGIN_LIST_TEMPLATE % "当前无可用工具"
 
@@ -2156,6 +2180,154 @@ _TIME_ASK = re.compile(
 _TIME_ASK2 = re.compile(r"(今天|今日)\s*(是|星期|周|几)")
 
 
+def _audit_intent(text):
+    """这一轮是不是在问「你刚才那句有依据吗 / 把最近几轮审一遍」？返回 (工具名, 参数)。
+
+    【为什么要载体认】这是"自证"的入口，最不能交给模型：模型被问「你凭什么这么说」时，
+    最自然的反应就是**再编一个理由**。而账本在磁盘上，能逐条指回材料的 sha256。
+    """
+    t = str(text or "").strip()
+    if not t or len(t) > 60:
+        return None
+    # 【先分「问账本家底」和「问某句话的依据」】实测：「你的证据账本有多少东西，有没有被改过」
+    #   原来被当成"问证据"，走了 audit_answer —— 答非所问。账本统计/链完整性是另一个工具。
+    if any(w in t for w in ("账本", "被改过", "有没有被改", "家底", "多少东西", "统计一下证据",
+                            "快照")):
+        return ("evidence_stats", {})
+    hist = ("最近几轮", "都审一遍", "历史", "以前的回答", "过去几轮", "全部审")
+    audit = ("有依据吗", "有依据么", "凭什么", "靠得住", "靠不靠谱", "审计", "核实一下",
+             "哪句有依据", "可核查", "证据", "自证")
+    if any(w in t for w in hist) and any(w in t for w in ("审", "依据", "核实", "靠得住")):
+        return ("audit_history", {"limit": 10})
+    if any(w in t for w in audit):
+        m = re.search(r"\b(20\d{6}_\d{6}_[0-9a-f]{4,8})\b", t)
+        return ("audit_answer", {"round_id": m.group(1)} if m else {})
+    return None
+
+
+def _parity_intent(text):
+    """这一轮是不是在问「换个模型会不会变傻 / 凭什么说模型可替换」？"""
+    t = str(text or "").strip()
+    if not t or len(t) > 60:
+        return False
+    hits = ("换个模型", "换模型", "换火种", "变傻", "变笨", "掉能力", "模型可替换",
+            "哪个模型强", "模型平等", "等价性", "裸模型")
+    return any(w in t for w in hits)
+
+
+def _gate_intent(text):
+    """这一轮是不是在问「你自己改了什么 / 能不能自己调得更好」？"""
+    t = str(text or "").strip()
+    if not t or len(t) > 60:
+        return False
+    hits = ("自己改了什么", "改了哪些", "调过什么", "自我改进", "自己调", "旋钮",
+            "进化了什么", "改了什么参数", "过闸")
+    return any(w in t for w in hits)
+
+
+def _project_intent(text):
+    """这一轮是不是「把一件要很久的事交出去 / 接着做项目」？返回 (工具名, 参数) 或 None。"""
+    t = str(text or "").strip()
+    if not t:
+        return None
+    m = re.search(r"\b(20\d{6}_\d{6}_[0-9a-f]{4,8})\b", t)
+    resume_marks = ("接着做", "继续做", "接着跑", "续上", "接着来")
+    if any(w in t for w in resume_marks):
+        if "项目" in t:
+            return ("project_resume", {"project_id": m.group(1)}) if m else \
+                ("project_list", {"limit": 8})
+        return None
+    if "项目" not in t and not any(w in t for w in ("跨天", "好几天", "几个阶段")):
+        # 【放宽一档】实测用户不会说「项目」两个字：他说「把这件事分三个阶段做完，可能要几天」。
+        #   「阶段」+ 明确的数量/时间跨度，就是"长时任务"的自然说法，别逼他学我们的词。
+        if not (("阶段" in t) and any(w in t for w in ("三", "两", "几", "多", "2", "3", "4", "5"))):
+            if not any(w in t for w in ("做一个月", "做一年", "长期", "每天", "持续")):
+                return None
+    if any(w in t for w in ("查", "进度", "做到哪", "列表", "最近", "状态", "怎么样了")):
+        if m:
+            return ("project_status", {"project_id": m.group(1)})
+        return ("project_list", {"limit": 8})
+    long_marks = ("做一个月", "做一年", "长期", "每天", "持续", "几个阶段", "整个项目",
+                  "全部做完", "跨天", "好几天", "几天", "分阶段")
+    _is_long = any(w in t for w in long_marks) or (
+        ("阶段" in t) and any(w in t for w in ("三", "两", "几", "多", "2", "3", "4", "5")))
+    if _is_long and len(t) >= 8:
+        return ("project_start", {"goal": t})
+    return None
+
+
+# ================== 数值比较：算术由载体自己算 ==================
+# 【为什么必须载体算】实测（`tools/parity_report.py`，2026-10-28）：
+#   问「3.11 和 3.9 哪个大」，四颗火种里**四颗都会错**（答 3.9 —— 按字符串长度或整数部分比）。
+#   这不是模型的偶发错误，是"小模型的十进制比较本来就不可靠"。
+#   而这件事载体**一次都不该问模型**：算术是确定性的，我们自己算得出。
+#   这也是"载体优先"最好懂的例子：模型负责"话怎么说"，事实和计算归载体。
+_NUM_CMP = re.compile(
+    r"(-?\d+(?:\.\d+)?)\s*(?:和|跟|与|vs\.?|VS\.?|比)\s*(-?\d+(?:\.\d+)?)")
+_NUM_CMP_ASK = re.compile(r"(哪个|谁)(更)?(大|小|大一些|小一些)|比(较)?(一下)?(大小|谁大)")
+
+
+def _numeric_compare_answer(text):
+    """问「A 和 B 哪个大/谁大」→ 载体用 Decimal 精确比较，直接给答案。
+
+    返回答案字符串；不是这类问题返回空串。**不做模糊解释**：错的比较比不答更糟。
+
+    【为什么答案要分两种读法】实测发现这个问法本身**有歧义**：
+      · 当**数值**：3.9 = 3.90 > 3.11 → 3.9 大；
+      · 当**版本号**：3.11 的次版本 11 > 9 → 3.11 更新。
+    两种读法都成立，硬挑一个就是替用户猜。所以两边都写清楚，并说明差别在哪 ——
+    这比"答对一个"更有用，也是载体该有的老实：**题目歧义就如实说是歧义**。
+    """
+    q = str(text or "")
+    if not q or len(q) > 60:
+        return ""
+    if not _NUM_CMP_ASK.search(q):
+        return ""
+    m = _NUM_CMP.search(q)
+    if not m:
+        return ""
+    a_s, b_s = m.group(1), m.group(2)
+    try:
+        from decimal import Decimal
+        a, b = Decimal(a_s), Decimal(b_s)
+    except Exception:      # noqa: silent-ok — 不是合法数字就不接这一手
+        return ""
+    ask_small = bool(re.search(r"(哪个|谁)(更)?(小)|小的", q))
+    if a == b:
+        base = "**按数值 %s 和 %s 一样大**（精确相等）" % (a_s, b_s)
+    elif ask_small:
+        base = "**按数值 %s 更小**（%s < %s）" % (a_s if a < b else b_s,
+                                               a_s if a < b else b_s,
+                                               b_s if a < b else a_s)
+    else:
+        base = "**按数值 %s 更大**（%s > %s）" % (a_s if a > b else b_s,
+                                               a_s if a > b else b_s,
+                                               b_s if a > b else a_s)
+    # 版本号读法：只有"两段数字、整数部分相同、小数部分不同"时才可能产生歧义
+    #   （3.11 vs 3.9 是典型：数值上 3.9 大，版本上 3.11 新）
+    amb = ""
+    try:
+        ma = re.fullmatch(r"(\d+)\.(\d+)", a_s)
+        mb = re.fullmatch(r"(\d+)\.(\d+)", b_s)
+        if ma and mb and ma.group(1) == mb.group(1):
+            va, vb = int(ma.group(2)), int(mb.group(2))
+            if (va > vb) != (a > b):
+                newer = a_s if va > vb else b_s
+                amb = ("\n\n⚠️ 不过**这个问法本身有歧义**，要看你问的是哪一种：\n"
+                       "- 当**数值**比：%s就是 %s，所以 %s 大；\n"
+                       "- 当**版本号**比：次版本 %d %s %d，所以 %s 更新。\n"
+                       "两种都成立，我不替你猜。"
+                       % ("3.9" if a_s == "3.9" or b_s == "3.9" else "小数末尾补零后",
+                          "3.90" if a_s == "3.9" or b_s == "3.9" else "它本身",
+                          a_s if a > b else b_s,
+                          max(va, vb), ">" if va > vb else "<", min(va, vb), newer))
+    except Exception:      # noqa: silent-ok — 歧义判定失败就只给数值答案
+        amb = ""
+    tail = ("\n\n—— 这一句是**载体自己算的**（十进制逐位比较，不是在比字符串长度或整数部分）；"
+            "这类算术不问模型，小模型经常答反。")
+    return base + "。" + amb + tail
+
+
 def _time_guard(question, answer):
     """问"今天几号/星期几/几点/哪一年"而答案里没有真实时间 → 载体补一句。
 
@@ -3226,6 +3398,14 @@ def _llm_targets():
     """
     primary = {"url": (LLM_BASE or "").rstrip("/") + "/chat/completions",
                "key": LLM_KEY, "model": LLM_MODEL, "local": _is_local_base(LLM_BASE)}
+    # ---- 【2026-10-28 加】钉火种（只在测量时用，平时不设）----
+    #   `core/capability_parity.py` 要回答的问题是「同一套载体、只换火种，分数塌多少」。
+    #   要回答它就必须能把某一次请求**钉死**在指定模型上，否则难度路由会自己换档，
+    #   测出来的就不是"这颗火种"的成绩。这是一个显式开关：只有测量代码会设，用完立刻清。
+    _fm = str((_CTX or {}).get("force_model") or "").strip()
+    if _fm:
+        primary["model"] = _fm
+        return [primary]         # 钉住时不给兜底路径：要测的就是这一颗
     # ---- 有人手动插了火种 → 那颗火种的 model 名不许被难度路由改掉 ----
     #   【实测缺陷】`BrainRegistry.apply_to_app()` 把 LLM_BASE/LLM_MODEL 换成用户选的那颗之后，
     #   下面这段难度路由**照样**按句子长度把 model 名换成本地默认档 —— 于是"点了 A，实际跑的是 B"，
@@ -6764,7 +6944,14 @@ _UI_NOISE = ("打开搜索", "关闭搜索", "搜索", "菜单", "首页", "登�
              "查看全部", "立即购买", "加入购物车", "开始", "返回", "顶部")
 
 
-def _display_body(text, limit=1500):
+
+# 【可测量旋钮】聊天里默认给用户看多少字正文（抓取/清单类回答的截断长度）。
+#   历史值是 1500，这里提成模块常量：`core/gate_evolve.py` 允许把这类**声明式旋钮**
+#   当候选改动，并且必须 A/B 量过、不退步才留。默认值与改动前一致。
+DISPLAY_BODY_DEFAULT = 1500
+
+
+def _display_body(text, limit=None):
     """把抓来的正文整理成"能看的几段"：去掉站点导航/图片语法/纯链接行，折叠空行。
 
     【为什么需要】抓回来的正文最前面常常是这样一堆东西：
@@ -6820,7 +7007,8 @@ def _display_body(text, limit=1500):
             continue
         keep.append(ln.rstrip())
     t = re.sub(r"\n{3,}", "\n\n", "\n".join(keep)).strip()
-    return t[:limit] + ("…（后略，全文见保存的文件）" if len(t) > limit else "")
+    lim = DISPLAY_BODY_DEFAULT if limit is None else int(limit)
+    return t[:lim] + ("…（后略，全文见保存的文件）" if len(t) > lim else "")
 
 
 def _scrape_save_target(text):
@@ -12379,8 +12567,12 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             _build_tools()
             _ares = _asset_result_text(_tool_result_str(run_tool("asset_intel_status", {}, force=True)))
             if _ares:
+                # 【2026-10-28 改】轨迹里放**真实结果**，不再只放一句标记。
+                #   为什么：`core/evidence_ledger.py` 要把答案里的断言绑到材料上，
+                #   如果轨迹只记「资产测绘数据源状态」这几个字，断言就绑不上，
+                #   审计会显示「这一轮没有可核查的依据」—— 明明有，是它自己没留。
                 tool_trace.append({"tool": "asset_intel_status", "args": {},
-                                   "result": "资产测绘数据源状态"})
+                                   "result": str(_ares)[:4000]})
                 answer = _ares
         except Exception as e:
             LOG.debug("忽略异常(%s:%d): %s", __file__, 1520, e)
@@ -12513,7 +12705,10 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             _build_tools()
             _ipres = _asset_result_text(_tool_result_str(run_tool("net_ip", {}, force=True)))
             if _ipres and "未知工具" not in _ipres:
-                tool_trace.append({"tool": "net_ip", "args": {}, "result": "公网 IP 查询（插件直答）"})
+                # 【2026-10-28 改】轨迹里放**真实结果**（原来只放「公网 IP 查询（插件直答）」，
+                #   结果证据账本里那份材料只有 34 字节，答案里的 111.17.158.64 因此绑不上来源，
+                #   审计显示「0 条有据」—— 有依据却记不出来，等于把自证能力自己废掉。）
+                tool_trace.append({"tool": "net_ip", "args": {}, "result": str(_ipres)[:4000]})
                 answer = "🌐 **我的公网 IP（net_ip 实测）**\n\n```\n%s\n```" % _ipres.strip()
         except Exception as e:
             LOG.debug("忽略异常(%s:%d): %s", __file__, 1560, e)
@@ -12526,7 +12721,8 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             try:
                 _res = _asset_result_text(_tool_result_str(run_tool(_nt, {}, force=True)))
                 if _res and "未知工具" not in _res:
-                    tool_trace.append({"tool": _nt, "args": {}, "result": "用户点名，直接调用"})
+                    # 同上：轨迹留真实结果，别只留一句「用户点名，直接调用」
+                    tool_trace.append({"tool": _nt, "args": {}, "result": str(_res)[:4000]})
                     answer = "🔧 **%s** 实测结果：\n\n```\n%s\n```" % (_nt, _res.strip()[:2500])
             except Exception as e:
                 LOG.debug("忽略异常(%s:%d): %s", __file__, 1570, e)
@@ -12571,6 +12767,24 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             except Exception as _tq_e:      # noqa: silent-ok — 查任务挂了不能拖垮整轮
                 LOG.debug("任务查询路由失败（忽略）：%s", _tq_e)
 
+    # ③0a0b 【长时项目先于长任务】"分三个阶段做完/要几天/长期做"这类话，是**一批事**不是一件。
+    #   实测踩到：用户说「把这一页分三个阶段做完，最后存到 G:\dzs\proj_e2e」，
+    #   先被 `_task_intent` 抢走（它看到「做完」+「存」就开了任务）——
+    #   于是"分阶段"这个信息被丢了：一次做完 ≠ 分阶段做完，后者要的是里程碑与预算。
+    #   判据：带**多阶段/跨天**信号时，长时项目优先；否则才轮到普通任务。
+    if answer is None and CAP.get("run_tools", True):
+        _pj = _project_intent(user_input)
+        if _pj and _pj[0] in ("project_start", "project_resume"):
+            try:
+                _pjres = _tool_result_str(run_tool(_pj[0], _pj[1] or {}, force=True))
+                if _pjres and not _pjres.startswith("⚠️"):
+                    LOG.info("长时项目：用户交出的是一批事 → %s", _pj[0])
+                    tool_trace.append(_trace_entry(_pj[0], _pj[1] or {}, _pjres))
+                    _note_tool_path(tool_trace, path="project")
+                    answer = _pjres
+            except Exception as _pj_e:      # noqa: silent-ok — 项目链挂了不能拖垮整轮
+                LOG.debug("长时项目路由失败（忽略）：%s", _pj_e)
+
     # ③0a1 任务级自主：用户把"一件多步的事"交给它 → 走 task_runner（多步 + 落盘 + 验收）。
     #   如果不接这条，模型会回一句"好的我来帮你抓"就结束，工具轨迹空的 —— 用户以为在跑。
     #   【2026-10-28 补一条】拆不出步骤时（`task_start` 回「没开成：…」）**必须让它退回普通问答**：
@@ -12589,6 +12803,35 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("任务自主：拆不出步骤 → 退回普通问答（%s）", str(_tres)[:60])
             except Exception as _t_e:      # noqa: silent-ok — 任务链挂了不能拖垮整轮
                 LOG.debug("任务自主路由失败（忽略）：%s", _t_e)
+
+    # ③0a0 数值比较：算术归载体（实测四颗火种都会把 3.11 和 3.9 比错，这种事不问模型）
+    if answer is None:
+        _nc = _numeric_compare_answer(user_input)
+        if _nc:
+            LOG.info("载体算数：数值比较 → 自己算（不问模型）")
+            tool_trace.append(_trace_entry("carrier_math", {"q": user_input[:40]}, _nc))
+            answer = _nc
+
+    # ③0a1a 【自证路由】问「你凭什么这么说 / 换个模型会不会变傻 / 你自己改了什么 / 项目呢」
+    #   这四类话**一律不许交给模型**：它们问的都是载体自己的账本和实测，模型只会凭印象编。
+    #   能查的先查（账本在磁盘、旋钮在内存、项目在磁盘），查不到才让它正常回答。
+    for _ftool, _fargs in (
+            _audit_intent(user_input) or (None, None),
+            ("parity_report", {}) if (answer is None and _parity_intent(user_input)) else (None, None),
+            ("evolve_gate", {}) if (answer is None and _gate_intent(user_input)) else (None, None),
+            # 项目进度查询放在这里（启动/接续已在上面的 ③0a0b 先处理，避免被"长任务"抢走）
+            _project_intent(user_input) or (None, None)):
+        if answer is None and _ftool:
+            try:
+                _fr = _tool_result_str(run_tool(_ftool, _fargs or {}, force=True))
+                if _fr and not _fr.startswith("⚠️") and not _fr.startswith("自证这里出错"):
+                    LOG.info("自证路由：%s", _ftool)
+                    tool_trace.append(_trace_entry(_ftool, _fargs or {}, _fr))
+                    _note_tool_path(tool_trace, path="proof")
+                    answer = _fr
+                    break
+            except Exception as _fe:      # noqa: silent-ok — 自证挂了不能拖垮整轮
+                LOG.debug("自证路由失败（忽略）：%s", _fe)
 
     # ③0a2 自我诊断：问"哪儿最弱 / 下一步改什么"→ 直接走 evolve_report。
     #   模型会把这种问题理解成"你项目哪里弱"从而反问要线索；而它自己是有诊断能力的。
@@ -13573,8 +13816,19 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         # ---- 元认知标注：自评 B（"没把握"）时**如实说出来**，别装确定 ----
         # 为什么不直接拒绝回答：B 档的含义是"答案本身可能对，但我不敢保证"。
         # 把这一点标出来，用户能自己决定要不要复核 —— 比给一个自信的错答案强得多。
+        # 【2026-10-28 加：载体自己算/自己查的答案不加这句】
+        #   实测：问「这句话有依据吗」，答案是审计插件的实测结论（1 条断言、复算 100% 有据），
+        #   后面却接了一句「这题我没有把握，建议你自己再核一遍」—— 自相矛盾，把真结论冲淡了。
+        #   凡是**载体直接给出的结果**（审计/任务/技能/算数/自证那几个路由），不需要模型自评的免责声明。
+        _carrier_direct = any(str((_t or {}).get("tool") or "") in (
+            "audit_answer", "audit_history", "evidence_stats", "parity_report", "evolve_gate",
+            "project_start", "project_status", "project_list", "project_resume",
+            "task_start", "task_status", "task_list", "skill_list", "skill_recall",
+            "carrier_math", "net_ip", "now", "get_weather", "ebook_manifest", "ebook_grab")
+            for _t in (tool_trace or []))
         try:
-            if _meta_route == "answer_with_caveat" and answer and "元认知" not in answer:
+            if _meta_route == "answer_with_caveat" and answer and "元认知" not in answer \
+                    and not _carrier_direct:
                 answer = answer.rstrip() + ("\n\n（元认知 · 自评 B：这题我没有把握，"
                                             "上面是尽力给的答案，建议你自己再核一遍）")
                 LOG.info("元认知标注：已给回答加上\u201c没把握\u201d说明")
@@ -15140,6 +15394,19 @@ def api_chat():
             answer_final = _nt + "\n\n---\n\n" + answer_final
     except Exception as _nt_e:      # noqa: silent-ok — 播报挂了不许影响回答
         LOG.debug("任务播报失败（忽略）：%s", _nt_e)
+    # ---- 证据账本：把这一轮的「问题 → 回答 → 材料」冻下来，日后可复算审计 ----
+    #   【为什么放在出口】出口才拿到"用户实际看到的那段话"。断言要对着**真实输出**抽，
+    #   不是对着草稿抽。记账失败一律不影响回答（账本是附加物，不是回答的前置条件）。
+    #   【测量模式下不记】`core/capability_parity.py` 会钉住火种跑一批用例，
+    #   那是基准测量，不是用户对话 —— 记进账本只会把真账稀释成噪声。
+    try:
+        if not str((_CTX or {}).get("force_model") or ""):
+            from core import evidence_ledger as _EL
+            _rid = _EL.record_round(user_input, answer_final, tool_trace, info)
+            if _rid:
+                LOG.info("证据账本：本轮已入账 %s", _rid)
+    except Exception as _el_e:      # noqa: silent-ok — 记账失败不许影响回答
+        LOG.debug("证据账本记录失败（忽略）：%s", _el_e)
     # ---- 技能库：这一轮如果做成了多步任务，就把它固化下来（下次同类问题可照抄）----
     # 判据在 `skill_memory.remember_task` 里：≥2 个工具、且没有失败痕迹才记；
     # 单工具调用不算技能（那叫"调一下"）。失败也不记 —— 不把错的路径固化成"经验"。

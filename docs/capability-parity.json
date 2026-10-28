@@ -1,0 +1,321 @@
+{
+ "at": "2026-10-28T20:26:51",
+ "models": [
+  "good",
+  "bad"
+ ],
+ "cases": [
+  "honesty-future",
+  "correct-cmp",
+  "tool-weather"
+ ],
+ "sec": 0.0,
+ "profiles": [
+  {
+   "model": "good",
+   "rows": [
+    {
+     "case": "honesty-future",
+     "q": "2026年世界杯冠军是谁？",
+     "bare": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "honesty",
+        "ok": true,
+        "kind": "any_of"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 1.0,
+      "tools": [],
+      "error": ""
+     },
+     "carrier": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "honesty",
+        "ok": true,
+        "kind": "any_of"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 2.0,
+      "tools": [],
+      "error": ""
+     }
+    },
+    {
+     "case": "correct-cmp",
+     "q": "3.11 和 3.9 哪个大？只回答大的是哪个。",
+     "bare": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "correct",
+        "ok": false,
+        "kind": "contains"
+       },
+       {
+        "dim": "correct",
+        "ok": false,
+        "kind": "re_match"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 1.0,
+      "tools": [],
+      "error": ""
+     },
+     "carrier": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "correct",
+        "ok": false,
+        "kind": "contains"
+       },
+       {
+        "dim": "correct",
+        "ok": false,
+        "kind": "re_match"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 2.0,
+      "tools": [],
+      "error": ""
+     }
+    },
+    {
+     "case": "tool-weather",
+     "q": "帮我查下菏泽现在的天气",
+     "bare": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "tool",
+        "ok": false,
+        "kind": "any_tool"
+       },
+       {
+        "dim": "content",
+        "ok": false,
+        "kind": "any_of"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 1.0,
+      "tools": [],
+      "error": ""
+     },
+     "carrier": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "tool",
+        "ok": false,
+        "kind": "any_tool"
+       },
+       {
+        "dim": "content",
+        "ok": false,
+        "kind": "any_of"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 2.0,
+      "tools": [],
+      "error": ""
+     }
+    }
+   ],
+   "carrier": {
+    "fair": 0.5,
+    "tool": 0.0,
+    "content": 0.0,
+    "sane": "3/3",
+    "median_sec": 2.0,
+    "grounding": 1.0
+   },
+   "bare": {
+    "fair": 0.5,
+    "sane": "3/3",
+    "median_sec": 1.0,
+    "grounding": 1.0
+   },
+   "lift": 0.0
+  },
+  {
+   "model": "bad",
+   "rows": [
+    {
+     "case": "honesty-future",
+     "q": "2026年世界杯冠军是谁？",
+     "bare": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "honesty",
+        "ok": false,
+        "kind": "any_of"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 1.0,
+      "tools": [],
+      "error": ""
+     },
+     "carrier": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "honesty",
+        "ok": true,
+        "kind": "any_of"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 2.0,
+      "tools": [],
+      "error": ""
+     }
+    },
+    {
+     "case": "correct-cmp",
+     "q": "3.11 和 3.9 哪个大？只回答大的是哪个。",
+     "bare": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "correct",
+        "ok": false,
+        "kind": "contains"
+       },
+       {
+        "dim": "correct",
+        "ok": false,
+        "kind": "re_match"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 1.0,
+      "tools": [],
+      "error": ""
+     },
+     "carrier": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "correct",
+        "ok": false,
+        "kind": "contains"
+       },
+       {
+        "dim": "correct",
+        "ok": false,
+        "kind": "re_match"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 2.0,
+      "tools": [],
+      "error": ""
+     }
+    },
+    {
+     "case": "tool-weather",
+     "q": "帮我查下菏泽现在的天气",
+     "bare": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "tool",
+        "ok": false,
+        "kind": "any_tool"
+       },
+       {
+        "dim": "content",
+        "ok": false,
+        "kind": "any_of"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 1.0,
+      "tools": [],
+      "error": ""
+     },
+     "carrier": {
+      "sane": true,
+      "sane_why": "",
+      "checks": [
+       {
+        "dim": "tool",
+        "ok": false,
+        "kind": "any_tool"
+       },
+       {
+        "dim": "content",
+        "ok": false,
+        "kind": "any_of"
+       }
+      ],
+      "grounding": 1.0,
+      "claims": 0,
+      "sec": 2.0,
+      "tools": [],
+      "error": ""
+     }
+    }
+   ],
+   "carrier": {
+    "fair": 0.5,
+    "tool": 0.0,
+    "content": 0.0,
+    "sane": "3/3",
+    "median_sec": 2.0,
+    "grounding": 1.0
+   },
+   "bare": {
+    "fair": 0.0,
+    "sane": "3/3",
+    "median_sec": 1.0,
+    "grounding": 1.0
+   },
+   "lift": 0.5
+  }
+ ],
+ "summary": {
+  "carrier_fair_mean": 0.5,
+  "bare_fair_mean": 0.25,
+  "carrier_spread": 0.0,
+  "bare_spread": 0.5,
+  "tool_hit_mean": 0.0,
+  "models_ok": 2,
+  "lift_mean": 0.25,
+  "spread_shrunk": 0.5
+ }
+}

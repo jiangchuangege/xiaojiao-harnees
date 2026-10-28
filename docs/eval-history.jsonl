@@ -15,3 +15,5 @@
 {"at": "2026-10-28T01:13:53", "total": 41, "pass": 41, "half": 0, "fail": 0, "score": 100.0, "failed": []}
 {"at": "2026-10-28T06:12:20", "total": 41, "pass": 38, "half": 3, "fail": 0, "score": 96.3, "failed": []}
 {"at": "2026-10-28T06:17:02", "total": 41, "pass": 41, "half": 0, "fail": 0, "score": 100.0, "failed": []}
+{"at": "2026-10-28T13:55:51", "total": 41, "pass": 37, "half": 3, "fail": 1, "score": 93.9, "failed": ["我昨天跟你说过的那件事你还记得吗"]}
+{"at": "2026-10-28T18:59:56", "total": 41, "pass": 41, "half": 0, "fail": 0, "score": 100.0, "failed": []}

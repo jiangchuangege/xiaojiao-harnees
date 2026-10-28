@@ -146,8 +146,19 @@ def plan_by_rules(goal):
             steps = [_step(tool, args, "先把页面抓下来（失败会自动换同族工具）",
                            verify="返回非空且无失败标记")]
             if out:
-                steps.append(_step("write_file", {"path": os.path.join(out, _out_name(args.get("url") or g)),
-                                                  "content": "__BODY__"},
+                # 【2026-10-28 修】`_scrape_save_target` 取出来的是"用户给的保存位置"，
+                #   它可能是**目录**，也可能是**文件**。一开始我一律当目录，
+                #   于是「存到 G:\\dzs\\out\\stage1.html」被拼成了
+                #   `G:\\dzs\\out\\stage1.html\\example.com.md` ——
+                #   系统建了一个叫 stage1.html 的**目录**，验收按文件名去找文件当然找不到，
+                #   项目因此判失败（实测：里程碑 1 failed，产物 1 字节且根本是目录）。
+                #   判据很简单：带扩展名且不像目录的，就当文件路径原样用。
+                _a = str(args.get("url") or g)
+                if _looks_like_file(out):
+                    _p = out
+                else:
+                    _p = os.path.join(out, _out_name(_a))
+                steps.append(_step("write_file", {"path": _p, "content": "__BODY__"},
                                    "把正文写到用户指定的位置", verify="文件真的存在且不是空的"))
             return steps
     except Exception as e:      # noqa: silent-ok — 规则不可用就试下一条
@@ -306,6 +317,22 @@ def _body_of(result):
             if isinstance(v, str) and v.strip():
                 return v
     return s
+
+
+def _looks_like_file(path):
+    """"用户给的保存位置"是文件还是目录？
+
+    判据（保守）：有扩展名、且不是以分隔符结尾 → 当文件。
+      实测踩过：`G:\\dzs\\out\\stage1.html` 被当目录，系统真去建了一个**叫 stage1.html 的目录**，
+      正文写进了它里面的 example.com.md，而验收按"文件在不在"判 → 失败，整个项目跟着失败。
+    """
+    p = str(path or "").strip()
+    if not p:
+        return False
+    if p.endswith("\\") or p.endswith("/"):
+        return False
+    ext = os.path.splitext(p)[1]
+    return bool(ext) and len(ext) <= 6 and re.fullmatch(r"\.[A-Za-z0-9]+", ext) is not None
 
 
 def _out_name(url_or_goal):

@@ -1,6 +1,6 @@
 {
- "total": 111,
- "ok": 111,
+ "total": 120,
+ "ok": 120,
  "bad": 0,
  "tools": [
   {
@@ -325,6 +325,34 @@
    "required": [],
    "properties": [],
    "example": "asset_intel_status({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "audit_answer",
+   "description": "什么时候用：用户问「这句话有依据吗/你凭什么这么说/审计一下」；",
+   "full_description": "审计一条回答有没有依据（断言逐条指回材料字节的 sha256，可复算）。什么时候用：用户问「这句话有依据吗/你凭什么这么说/审计一下」；输入 round_id 可省（默认审最近一轮）；输出 逐条结论与失效项",
+   "required": [],
+   "properties": [
+    "round_id"
+   ],
+   "example": "audit_answer({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "audit_history",
+   "description": "审最近若干轮，给汇总（支持率、复算一致率、失效产物）。什么时候用：用户问「你最近说的话都靠得住吗/把最近几轮都审一遍」；",
+   "full_description": "审最近若干轮，给汇总（支持率、复算一致率、失效产物）。什么时候用：用户问「你最近说的话都靠得住吗/把最近几轮都审一遍」；输入 limit；输出 汇总与逐轮结论",
+   "required": [],
+   "properties": [
+    "limit"
+   ],
+   "example": "audit_history({})",
    "test": "通过",
    "problems": []
   },
@@ -961,6 +989,35 @@
    "problems": []
   },
   {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "evidence_stats",
+   "description": "什么时候用：用户问「你的证据账本有多少东西/有没有被改过」；",
+   "full_description": "证据账本家底：轮次、断言数、有据比例、快照数、哈希链是否完整。什么时候用：用户问「你的证据账本有多少东西/有没有被改过」；输入 无；输出 统计与链完整性",
+   "required": [],
+   "properties": [],
+   "example": "evidence_stats({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "evolve_gate",
+   "description": "什么时候用：用户问「你自己改了什么/为什么改/能不能自己调得更好」；",
+   "full_description": "自我改进过闸：提一个旋钮改动，A/B 配对测量，零退步才落地，否则拒绝并记录。什么时候用：用户问「你自己改了什么/为什么改/能不能自己调得更好」；输入 knob new_value（不填 = 列当前可调旋钮与历史决策）；输出 测量与决策",
+   "required": [],
+   "properties": [
+    "knob",
+    "new_value",
+    "name",
+    "apply"
+   ],
+   "example": "evolve_gate({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
    "plugin": "evolve",
    "kind": "插件",
    "name": "evolve_report",
@@ -1376,6 +1433,85 @@
     "session_id"
    ],
    "example": "open_session({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "parity_report",
+   "description": "换火种会不会变傻：裸模型 vs 装载体跑同一批题的实测。什么时候用：用户问「换个模型会不会变笨/凭什么说模型可替换」；",
+   "full_description": "换火种会不会变傻：裸模型 vs 装载体跑同一批题的实测。什么时候用：用户问「换个模型会不会变笨/凭什么说模型可替换」；输入 run（true 才真跑，默认只报上次结果）；输出 各火种分数与增量",
+   "required": [],
+   "properties": [
+    "run",
+    "models"
+   ],
+   "example": "parity_report({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "project_list",
+   "description": "看最近的项目（哪个没跑完、哪个卡住了）。什么时候用：忘了项目号，或者想看看有没有上次没做完的；",
+   "full_description": "看最近的项目（哪个没跑完、哪个卡住了）。什么时候用：忘了项目号，或者想看看有没有上次没做完的；输入 limit；输出 项目清单",
+   "required": [],
+   "properties": [
+    "limit"
+   ],
+   "example": "project_list({})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "project_resume",
+   "description": "接着跑一个没做完的项目（重启后也能接，因为状态在磁盘上）。什么时候用：用户说「接着做/继续那个项目」；",
+   "full_description": "接着跑一个没做完的项目（重启后也能接，因为状态在磁盘上）。什么时候用：用户说「接着做/继续那个项目」；输入 project_id；输出 是否接上",
+   "required": [
+    "project_id"
+   ],
+   "properties": [
+    "project_id"
+   ],
+   "example": "project_resume({\"project_id\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "project_start",
+   "description": "把一件要很久的事交给它（多里程碑、跨重启、有预算）。什么时候用：一件事要几个阶段、可能要几小时几天；",
+   "full_description": "把一件要很久的事交给它（多里程碑、跨重启、有预算）。什么时候用：一件事要几个阶段、可能要几小时几天；输入 goal；输出 项目号",
+   "required": [
+    "goal"
+   ],
+   "properties": [
+    "goal",
+    "max_minutes",
+    "max_steps"
+   ],
+   "example": "project_start({\"goal\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "proof",
+   "kind": "插件",
+   "name": "project_status",
+   "description": "查项目做到哪了（每个里程碑的验收结论、花了多少预算）。什么时候用：开了长项目要跟进；",
+   "full_description": "查项目做到哪了（每个里程碑的验收结论、花了多少预算）。什么时候用：开了长项目要跟进；输入 project_id；输出 进度与逐里程碑详情",
+   "required": [
+    "project_id"
+   ],
+   "properties": [
+    "project_id"
+   ],
+   "example": "project_status({\"project_id\": \"值\"})",
    "test": "通过",
    "problems": []
   },
