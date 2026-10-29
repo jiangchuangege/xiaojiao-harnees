@@ -2646,7 +2646,9 @@ def _narrate_facts(question, facts, label=""):
     _cleanv = re.sub(r"[\w]*\d{5,}[\w]*", " ", f)
     _all = re.findall(r"\d+(?:\.\d+)?", _cleanv)
     _key = [n for n in _all if ("." in n or len(n) <= 5)][:6]
-    _miss = [n for n in _key if n not in _txt]
+    # 【单位数不补】实测补出来的「原始要点：5」是纯噪音 —— 那只是 4/5 步里的那个 5。
+    #   只补真正的量：两位以上、或带小数点的数。
+    _miss = [n for n in _key if n not in _txt and ("." in n or len(n) >= 2)]
     if _miss:
         LOG.info("数据解答没引用到数字 %s → 保留模型的话，另附一行原始要点", _miss[:3])
     return _txt, True, _miss
