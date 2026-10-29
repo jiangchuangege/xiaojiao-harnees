@@ -16252,6 +16252,53 @@ def api_aigroup_avatar_upload(gid):
         return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
 
 
+@app.route("/api/aigroups/<gid>/file", methods=["POST"])
+def api_aigroup_file_upload(gid):
+    """上传群文件（dataURL → 真落盘到 logs/aigroups/files/<gid>/）。"""
+    import base64 as _b64
+    data = request.get_json(force=True, silent=True) or {}
+    raw = str(data.get("data") or "")
+    name = str(data.get("name") or "文件")
+    try:
+        _M, G = _social()
+        blob = b""
+        if raw.startswith("data:"):
+            blob = _b64.b64decode(raw.partition(",")[2], validate=False)
+        elif raw:
+            blob = _b64.b64decode(raw, validate=False)
+        if len(blob) > 20 * 1024 * 1024:
+            return jsonify({"ok": False, "error": "文件太大（最多 20MB）"})
+        r = G.upload_file(gid, name, blob, by=str(data.get("who") or "你"),
+                          note=str(data.get("note") or ""))
+        return jsonify(r or {"ok": False, "error": "写入失败"})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/aigroups/<gid>/file/<fid>")
+def api_aigroup_file_get(gid, fid):
+    """下载/查看群文件（只认登记过的，防路径穿越）。"""
+    try:
+        _M, G = _social()
+        fp, rec = G.file_path(gid, fid)
+        if not fp:
+            return jsonify({"ok": False, "error": "没有这个文件"}), 404
+        return send_file(fp, as_attachment=False,
+                         download_name=(rec or {}).get("name") or os.path.basename(fp))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/aigroups/<gid>/read", methods=["POST"])
+def api_aigroup_read(gid):
+    """标记已读（左侧红点靠这个消）。"""
+    try:
+        _M, G = _social()
+        return jsonify(G.mark_read(gid))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
 @app.route("/api/aigroups/<gid>/pace", methods=["POST"])
 def api_aigroup_pace(gid):
     """群节奏：chat（聊天群，少动手）/ mixed / dev（开发群，多动手少空谈）。"""

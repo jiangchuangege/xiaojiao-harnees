@@ -34,6 +34,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DIR = os.path.join(_ROOT, "logs", "aigroups")
 _PATH = os.path.join(_DIR, "groups.json")
 _EVENTS = os.path.join(_DIR, "events.jsonl")
+_FILES = os.path.join(_DIR, "files")          # 群文件落盘：files/<gid>/<文件名>
 _LOCK = threading.RLock()
 
 _LLM = None
@@ -340,6 +341,11 @@ def list_groups():
                     "pace_label": (PACES.get(pace_of(g)) or {}).get("label"),
                     "distilled": len(g.get("distilled") or []),
                     "proposals": len(g.get("proposals") or []),
+                    "files": len(g.get("files") or []),
+                    "unread": unread_count(g),
+                    "last": (str(((g.get("messages") or [{}])[-1] or {}).get("text") or ""))[:60],
+                    "last_who": str(((g.get("messages") or [{}])[-1] or {}).get("who") or ""),
+                    "last_ts": str(((g.get("messages") or [{}])[-1] or {}).get("ts") or ""),
                     "messages": len(g.get("messages") or []),
                     "auto": auto_state(g.get("id")),
                     "created": g.get("created")})
@@ -437,6 +443,91 @@ def set_avatar(gid, filename):
     return set_group(gid, avatar=filename)
 
 
+def _files_dir(gid):
+    d = os.path.join(_FILES, re.sub(r"[^0-9A-Za-z_\-]", "_", str(gid or "x")))
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def upload_file(gid, name, blob, by="你", note=""):
+    """上传一个群文件（真落盘）。返回文件记录。"""
+    nm = os.path.basename(str(name or "").strip()) or ("文件_%d" % int(time.time()))
+    nm = re.sub(r'[\\/:*?"<>|]', "_", nm)[:120]
+    try:
+        d = _files_dir(gid)
+        fp = os.path.join(d, nm)
+        with open(fp, "wb") as f:
+            f.write(blob or b"")
+        return register_file(gid, nm, os.path.getsize(fp), by=by, note=note, path=fp)
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("群文件写入失败：%s", e)
+        return None
+
+
+def register_file(gid, name, size=0, by="你", note="", path=""):
+    """登记一条群文件（AI 自己写出来的文件也走这里 —— 真人有文件也会丢进群）。"""
+    with _LOCK:
+        d = _load()
+        for g in d.get("groups") or []:
+            if g.get("id") != gid:
+                continue
+            fs = list(g.get("files") or [])
+            fid = uuid.uuid4().hex[:8]
+            fs.append({"id": fid, "name": str(name)[:160], "size": int(size or 0),
+                       "by": str(by or "你"), "note": str(note or "")[:120],
+                       "path": str(path or ""),
+                       "ts": time.strftime("%Y-%m-%dT%H:%M:%S")})
+            g["files"] = fs[-60:]
+            _save(d)
+            _event("file", gid=gid, name=str(name)[:80], size=int(size or 0), by=by,
+                   path=str(path or "")[:160])
+            LOG.info("群文件：%s 往「%s」放了 %s（%d 字节）", by, g.get("name"), name, int(size or 0))
+            return {"ok": True, "file": fs[-1]}
+    return {"ok": False, "error": "没有这个群"}
+
+
+def file_path(gid, fid):
+    """取群文件的真实路径（下载用）。只认登记过的，防路径穿越。"""
+    for g in _load().get("groups") or []:
+        if g.get("id") != gid:
+            continue
+        for f in g.get("files") or []:
+            if f.get("id") != fid:
+                continue
+            p = str(f.get("path") or "")
+            if p and os.path.isfile(p):
+                return p, f
+            cand = os.path.join(_files_dir(gid), os.path.basename(str(f.get("name") or "")))
+            if os.path.isfile(cand):
+                return cand, f
+    return "", None
+
+
+def mark_read(gid):
+    """把"我读到哪儿了"推到最新（左侧红点靠这个消）。"""
+    with _LOCK:
+        d = _load()
+        for g in d.get("groups") or []:
+            if g.get("id") != gid:
+                continue
+            msgs = g.get("messages") or []
+            g["last_read"] = str(msgs[-1].get("ts") or "") if msgs else ""
+            g["last_read_n"] = len(msgs)
+            _save(d)
+            return {"ok": True, "n": len(msgs)}
+    return {"ok": False, "error": "没有这个群"}
+
+
+def unread_count(g):
+    """还没读的消息条数（自己说的话不算）。"""
+    try:
+        n0 = int((g or {}).get("last_read_n") or 0)
+        msgs = (g or {}).get("messages") or []
+        return max(0, sum(1 for m in msgs[n0:] if m.get("who") != "你"))
+    except Exception:      # noqa: silent-ok
+        return 0
+
+
 def set_member_perm(gid, name, allow_tools):
     """开关某个成员"能不能动手"（调插件 / 写文件 / 写代码 / 造插件）。"""
     with _LOCK:
@@ -453,6 +544,24 @@ def set_member_perm(gid, name, allow_tools):
                 return {"ok": True, "member": m}
             return {"ok": False, "error": "群里没有这个人：%s" % name}
     return {"ok": False, "error": "没有这个群"}
+
+
+def _register_written(gid, who, actions):
+    """把「它自己写出来的文件」登记成群文件 —— 真人有文件也会丢进群，它也一样。"""
+    _n = 0
+    for a in (actions or []):
+        if str(a.get("tool")) not in ("write_file", "edit_file"):
+            continue
+        try:
+            p = str((a.get("args") or {}).get("path") or "")
+            if p and os.path.isfile(p):
+                r = register_file(gid, os.path.basename(p), size=os.path.getsize(p),
+                                  by=str(who or "AI"), note="我写的，大家看看", path=p)
+                if (r or {}).get("ok"):
+                    _n += 1
+        except Exception as e:      # noqa: silent-ok
+            LOG.debug("群组·登记 AI 文件失败：%s", e)
+    return _n
 
 
 def _note_skill(gid, name, note):
@@ -612,6 +721,11 @@ def run_round(gid, rounds=1):
             _pc = PACES.get(pace_of(g)) or PACES["mixed"]
             sys_p += "\n本群节奏：" + str(_pc.get("hint") or "")[:160]
             # 【互相蒸馏】把本群已经聊出来的共识带上 —— 越聊越聪明靠这一条
+            _fl = ["%s（%s 上传）" % (f.get("name"), f.get("by"))
+                   for f in (g.get("files") or [])[-5:] if f.get("name")]
+            if _fl:
+                sys_p += "\n本群文件：" + "、".join(_fl) + \
+                    "\n（可以就这些文件讨论；需要读内容就用 read_file。）"
             _ds = [x.get("note") for x in (g.get("distilled") or [])[-6:] if x.get("note")]
             if _ds:
                 sys_p += "\n本群已有的共识（别重复讨论，直接用）：\n" + "\n".join(
@@ -717,6 +831,10 @@ def run_round(gid, rounds=1):
                                         _g3.setdefault("messages", []).append(_rm)
                                         _g3["messages"] = _g3["messages"][-MAX_MSGS_STORE:]
                                         _save(_d3)
+                                try:
+                                    _register_written(gid, m.get("name") or "AI", _racts)
+                                except Exception as _fe:      # noqa: silent-ok
+                                    LOG.debug("群组·提议产物登记失败：%s", _fe)
                                 added.append(_rm)
                                 _event("propose_done", gid=gid, member=m.get("name"),
                                        tools=[a.get("tool") for a in (_racts or [])][:6])
@@ -724,6 +842,12 @@ def run_round(gid, rounds=1):
                             LOG.debug("群组·执行提议失败：%s", _pe)
             except Exception as _pme:      # noqa: silent-ok — 提议解析失败不能影响群聊
                 LOG.debug("群组·解析提议失败：%s", _pme)
+
+            # 【AI 自己传文件】写出来的东西自动登记成群文件（真人有文件也会丢进群）
+            try:
+                _register_written(gid, m.get("name") or "AI", _actions)
+            except Exception as _fe:      # noqa: silent-ok
+                LOG.debug("群组·登记 AI 文件失败：%s", _fe)
 
             # 动手了就记到这人身上（下一轮 prompt 会带"你最近做过什么"）
             for _a in (_actions or [])[:3]:
