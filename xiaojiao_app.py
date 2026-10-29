@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # 小焦系统本身不依赖任何具体模型。
 # 它是完整的载体（器官齐全），模型是火种（可替换）。
 # 接入任何模型 → 系统活；换任何模型 → 系统不变。
@@ -4670,7 +4670,14 @@ def _llm_post(target, payload, timeout=90, tries=4):      # noqa: F811 — 有�
     #   全是在和后台抢同一颗本地模型。让路比"加速"有用得多（见 core/turn_lane.py）。
     try:
         from core import turn_lane as _TL
-        if not _TL.wait_if_background(max_wait=float(CAP.get("bg_yield_wait_s", 20) or 20)):
+        # 【2026-10-29 修掉我自己造的一个坑】只按"线程号"判断前台/后台是不对的：
+        #   主回答的模型调用可能跑在**工作线程**里（并发、工具循环、感知并发），
+        #   于是被误判成"后台"，让路 20 秒后直接放弃 —— 用户看到的是
+        #   「🤖 大脑没有应答（真实原因：用户轮进行中，后台调用让路）」（实测踩到）。
+        #   现在多用一条判据：只要这一轮**是用户轮**（`_CTX` 里挂着 `_in_user_turn`），一律放行。
+        _in_turn = bool(_CTX.get("_in_user_turn"))
+        if (not _in_turn) and \
+                not _TL.wait_if_background(max_wait=float(CAP.get("bg_yield_wait_s", 20) or 20)):
             LOG.info("后台模型调用让路：用户轮还在进行 → 本次跳过")
             return None, None, "用户轮进行中，后台调用让路"
     except Exception as e:      # noqa: silent-ok — 车道坏了也不许挡住调用
@@ -8965,7 +8972,11 @@ _INTENT_TOOLS = {
     #   **后面**（第 5 位），模型于是先抓网页 → 只拿到一堆链接 → 回"我没能力"。
     #   专用工具必须排在通用检索前面：`get_weather` 返回的是**结构化天气数据**，
     #   而 `web_search` 返回的是**网页片段**（还得模型自己从里面抠数字，抠不出来就答不了）。
-    "query": ("get_weather", "net_ip", "collect_vulnerabilities", "web_search", "read_file"),
+    # 【2026-10-29 把 `collect_vulnerabilities` 从这张表里拿掉】实测事故：问
+    #   「今天美股三大指数的收盘情况」——模型去调了**漏洞库**（NVD），网络超时后回了一句
+    #   「抱歉我查不到，因为我调用 NVD 接口失败」。工具装错了，答案自然全错。
+    #   漏洞那类问题本来就有专用规则路由（`_vuln_intent`）会自己接，不需要留在这张通用表里。
+    "query": ("get_weather", "net_ip", "web_search", "read_file"),
     "shell": ("run_command", "read_file", "write_file"),
     "diagram": None,      # 特殊：archify_* 全链 + 读写文件（下面现算）
     "full": _FULL_CORE_TOOLS,   # 核心集（不再是"全部"）；完整目录由 system 里的工具索引下发
@@ -10632,7 +10643,17 @@ def _rag_web_hits(query, num=4):
         return []
 
 
-def _rag_three_sources(query, timeout=15.0):
+def _rag_three_sources(query, timeout=None):
+    # 【2026-10-29 改：等待预算从写死 15 秒改成可配置、默认 6 秒】
+    #   实测：问「今天美股三大指数的收盘情况」时，检索这一步等满 15 秒才超时往下走，
+    #   而用户看到的就是界面卡在「正在回忆记忆…」。检索是**加分项**，不是必经关：
+    #   超时就用已经回来的候选继续答（答案里照样带来源，只是可能少一个源）。
+    if timeout is None:
+        try:
+            timeout = float((CAP or {}).get('rag_wait_s', 6) or 6)
+        except Exception:      # noqa: silent-ok
+            timeout = 6.0
+
     """**三个源同时发起**。返回 `(候选列表, 各源耗时, 总耗时)`。
 
     并发实现用 `ThreadPoolExecutor(3)`：三个源都是阻塞式 IO（本地向量检索 + HTTP 抓取），
@@ -12183,7 +12204,11 @@ def _fast_carrier_answer(text):
     q = str(text or "").strip()
     if not q or len(q) > 40:
         return None
-    if re.search(r"(为什么|怎么|如何|分析|解释|对比|评价|看法|建议|方案|帮我写|帮我做|生成)", q):
+    # 【否定判据要精确】实测：「今天A股大盘怎么样」被这句里的「怎么」误挡在快路之外，
+    #   于是走了 37 秒完整链路、还答「我没有联网查股票的能力」—— 而我们明明有行情接口。
+    #   所以这里只挡**真诉求**（问原因/要方案/要生成），不挡「怎么样/怎样」这种问现状的说法。
+    if re.search(r"(为什么|怎么才能|怎么办|怎么做|如何才|分析|解释|对比|评价|看法|建议|"
+                 r"方案|帮我写|帮我做|生成|设计)", q):
         return None
 
     def _wrap(tool, ans):
@@ -12259,6 +12284,67 @@ def _fast_carrier_answer(text):
                              "🌐 **我的公网 IP（net_ip 实测）**\n\n```\n%s\n```" % _ipres.strip())
     except Exception as e:      # noqa: silent-ok
         LOG.debug("快路·IP 失败（交回完整链路）：%s", e)
+    # ⑥ 实时行情 / 财经数据：**载体自己搜，自己把结果摆出来**
+    #   【为什么必须载体接】实测事故：问「今天美股三大指数的收盘情况」，模型去调了**漏洞库**
+    #   （NVD），网络超时后答「抱歉我查不到，因为我调用 NVD 接口失败」——工具装错，答案全错。
+    #   这类问题要的是"一个当下的数"，和天气同一性质：载体真去搜，把搜到的条目原样列出来
+    #   （带来源、带抓取时间），模型连转述都不参与 —— 转述就是编造的开始。
+    try:
+        if re.search(r"(股价|指数|收盘|开盘|涨跌|涨幅|跌幅|道指|纳指|标普|美股|港股|A股|"
+                     r"上证|深证|创业板|大盘|沪指|两市|汇率|金价|黄金|白银|银价|金条|油价|比特币|行情)", q) and \
+                re.search(r"(今天|今日|现在|最新|当前|昨夜|昨天|收盘|开盘|多少|涨|跌)", q):
+            _build_tools()
+            # ① 先走**结构化行情接口**（`get_index_quotes`）：一次请求出整张表，带行情时间。
+            #    实测：美股三大指数 3 行数字 + 涨跌幅 + 行情时间，1~2 秒拿到；
+            #    比"搜网页再让模型从片段里抠数字"稳得多（后者实测搜回来是首页，抠不出数）。
+            _iq = _tool_result_str(run_tool("get_index_quotes",
+                                            {"market": "", "question": q}, force=True))
+            if _iq and not _iq.startswith("⚠️") and "没取到数据" not in _iq:
+                return _wrap("get_index_quotes",
+                             _iq + "\n\n—— 这一条是**载体直接取自行情接口**，没有让模型转述；"
+                                   "好处是数字不会被「顺手改一下」。")
+            # ② 结构化接口不通，再退回通用检索（并且**只在结果真的对得上问题时**才用）
+            _kw = [w for w in ("美股", "指数", "收盘", "纳指", "道指", "标普", "涨", "跌",
+                               "上证", "深证", "创业", "汇率", "金价", "油价", "比特币",
+                               "港股", "A股", "行情") if w in q]
+            _variants = []
+            if _kw:
+                _variants.append(" ".join(dict.fromkeys(_kw[:4])) + " 今日 收盘 点位 涨跌")
+                _variants.append(" ".join(dict.fromkeys(_kw[:3])) + " 最新")
+            _clean = re.sub(r"^(帮我|请你|麻烦|给我)\s*(查一下|查|看看|看|搜一下|搜)", "", q).strip()
+            _clean = re.sub(r"(吧|呢|啊|吗)$", "", _clean).strip()
+            if _clean and _clean not in _variants:
+                _variants.append(_clean)
+            _sres, _used_q = "", ""
+            for _vq in _variants[:3]:
+                try:
+                    _try = str(web_search(_vq, num=6) or "")
+                except Exception as e:      # noqa: silent-ok — 这一组搜挂了就试下一组
+                    LOG.debug("行情检索一组失败（继续）：%s", e)
+                    _try = ""
+                _hit = any(w in _try for w in _kw) if _kw else bool(_try)
+                if _try and not _try.startswith("⚠️") and len(_try) > 40 and _hit \
+                        and re.search(r"\d", _try):
+                    _sres, _used_q = _try, _vq
+                    break
+                _sres = _sres or _try
+                _used_q = _used_q or _vq
+            if _sres and not _sres.startswith("⚠️") and len(_sres) > 40 \
+                    and (any(w in _sres for w in _kw) if _kw else True) \
+                    and re.search(r"\d", _sres):
+                _body = ("📈 **行情查询（联网检索原文）**\n\n"
+                         "> 抓到时间：%s ｜ 检索词：%s\n\n%s\n\n"
+                         "—— 说明：以上是检索到的**片段原文**，我没有二次概括；"
+                         "行情随时在变，请以交易所 / 官方行情页为准。"
+                         % (time.strftime("%Y-%m-%d %H:%M"), _used_q[:40], _sres.strip()[:1800]))
+                return _wrap("web_search", _body)
+            # ③ 两条路都不通：**如实说**。行情编错的代价比不答大得多。
+            return _wrap("get_index_quotes",
+                         "📈 行情这次没拿到：结构化行情接口和联网检索都没给出可用的数字。\n\n"
+                         "我不编数字 —— 可以稍等一下再问，或直接看东方财富 / 新浪财经的行情页。\n\n"
+                         "（接口原话：%s）" % (_iq[:200] or "（空）"))
+    except Exception as e:      # noqa: silent-ok — 检索失败就走完整链路
+        LOG.debug("快路·行情失败（交回完整链路）：%s", e)
     return None
 
 
@@ -15820,7 +15906,7 @@ def api_chat():
     #   并且立刻释放连接（不再挂着装死）。前端据此提示"前面还有 N 个，稍等"。
     try:
         from core import request_queue as _RQ
-        _RQ.configure(int((CONTROL.get("capabilities") or {}).get("chat_concurrency", 1) or 1))
+        _RQ.configure(int((CONTROL.get("capabilities") or {}).get("chat_concurrency", 2) or 2))
         _ticket = _RQ.new_ticket(user_input)
         _got, _info = _RQ.try_enter(
             _ticket["id"],
@@ -16116,7 +16202,7 @@ def api_chat_stream():
         _ticket = None
         try:
             from core import request_queue as _RQs
-            _RQs.configure(int((CONTROL.get("capabilities") or {}).get("chat_concurrency", 1) or 1))
+            _RQs.configure(int((CONTROL.get("capabilities") or {}).get("chat_concurrency", 2) or 2))
             _ticket = _RQs.new_ticket(user_input)
             _wait_s = float((CONTROL.get("capabilities") or {}).get("stream_queue_wait_s", 90) or 90)
             _deadline = time.time() + _wait_s

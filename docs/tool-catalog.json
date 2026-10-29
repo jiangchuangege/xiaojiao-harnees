@@ -1,6 +1,6 @@
 {
- "total": 123,
- "ok": 123,
+ "total": 124,
+ "ok": 124,
  "bad": 0,
  "tools": [
   {
@@ -1194,6 +1194,21 @@
     "file_path"
    ],
    "example": "get_file_info({\"file_path\": \"值\"})",
+   "test": "通过",
+   "problems": []
+  },
+  {
+   "plugin": "market",
+   "kind": "插件",
+   "name": "get_index_quotes",
+   "description": "什么时候用：用户问「今天美股/大盘/指数收盘多少、涨了还是跌了、金价多少」；",
+   "full_description": "查实时指数/行情（美股三大指数、A股三大指数、恒指、汇率、金价、油价）。什么时候用：用户问「今天美股/大盘/指数收盘多少、涨了还是跌了、金价多少」；输入市场（可省，自动按问题判断）；输出 名称+最新价+涨跌幅+行情时间",
+   "required": [],
+   "properties": [
+    "market",
+    "question"
+   ],
+   "example": "get_index_quotes({})",
    "test": "通过",
    "problems": []
   },
