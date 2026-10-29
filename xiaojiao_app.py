@@ -2584,6 +2584,14 @@ def _narrate_facts(question, facts, label=""):
     f = str(facts or "").strip()
     if not q or not f:
         return "", False
+    # 【不是"数据"就别解说】工具经常返回的是一句话通知（「🚀 项目已开…」「已写入 …」），
+    #   那种东西让模型"解读"只会变成废话 + 多余包装（用户截图里就是这样）。
+    #   判据：太短、或者没有 2 处以上数字/表格特征 → 原样回。
+    _cleanf = re.sub(r"[\w]*\d{5,}[\w]*", " ", f)
+    _short_nums = [n for n in re.findall(r"\d+(?:\.\d+)?", _cleanf) if len(n) <= 4]
+    _is_data = (f.count("|") >= 4) or (len(_short_nums) >= 3) or (len(f) >= 400)
+    if not _is_data:
+        return "", False
     try:
         _msgs = [{"role": "system", "content": _NARRATE_SYS},
                  {"role": "user", "content": "用户问：%s\n\n%s数据：\n%s" % (
@@ -2598,8 +2606,9 @@ def _narrate_facts(question, facts, label=""):
     #   但不能把任务号/时间戳当关键数字：实测「20261028_202237_290721」这种 ID 模型不会复述，
     #   于是所有含 ID 的解说全被误杀、一律退回原始块（用户看到的正是这个）。
     #   判据：只看**短数值**（≤6 位，或带小数点的价格/比例），且要求至少引用到一半。
-    _all = re.findall(r"\d+(?:\.\d+)?", f)
-    _key = [n for n in _all if ("." in n or len(n) <= 6)][:6]
+    _cleanv = re.sub(r"[\w]*\d{5,}[\w]*", " ", f)
+    _all = re.findall(r"\d+(?:\.\d+)?", _cleanv)
+    _key = [n for n in _all if ("." in n or len(n) <= 5)][:6]
     if _key:
         _miss = [n for n in _key if n not in _txt]
         if len(_miss) > len(_key) // 2 + 1:
@@ -2614,14 +2623,30 @@ def _answer_with_facts(question, facts, label="", fallback_head=""):
     · 模型可用 → 「解答」+ 折叠的「原始数据」（用户能核查，也能只读解说的那几句）；
     · 模型不可用 → 原始数据 + 一句如实说明（不是"我答不出"，而是"这次只能用原始数据回你"）。
     """
+    _raw0 = str(facts or "").strip()
+    # 【不是数据就原样回】「🚀 项目已开…」「已写入 …」这类是**一句话通知**，
+    #   既不该解说，也不该加"模型没讲成话"的说明 —— 加任何包装都是噪音（用户截图里就是这问题）。
+    # 【只认"数值"，不认 ID 里的数字】实测：任务号 `20261029_224553_5b68ea` 会被拆出
+    #   224553 / 5 / 68 三个"短数值"，于是一句话通知也被当成数据去解说。
+    #   判据：被下划线或其它数字包住的片段先剔掉，剩下的短数值（≤4 位）才算。
+    _clean0 = re.sub(r"[\w]*\d{5,}[\w]*", " ", _raw0)
+    _sn0 = [x for x in re.findall(r"\d+(?:\.\d+)?", _clean0) if len(x) <= 4]
+    if not ((_raw0.count("|") >= 4) or (len(_sn0) >= 3) or (len(_raw0) >= 400)):
+        return (fallback_head or "") + _raw0
     _n, _ok = _narrate_facts(question, facts, label)
-    _raw = str(facts or "").strip()
+    _raw = _raw0
     if _ok:
-        return ("%s\n\n<details><summary>原始数据（载体实取，可核查）</summary>\n\n%s\n\n</details>"
-                % (_n, _raw))
-    return ("%s%s\n\n—— 说明：这次没能让模型把数据讲成话（模型不可用或没引用到原始数字），"
-            "所以直接把**载体实取到的数据**摆给你，数字一个字没动。"
-            % (fallback_head or "", _raw))
+        # 【解说成功就不贴原始块】用户截图里那行 `<details><summary>原始数据…` 是 HTML 标签，
+        #   界面不认它，直接把标签当正文显示出来了 —— 又丑又占地方。
+        #   现在只留一行来源，想看原始记录随时说一句就贴。
+        return ("%s\n\n> 数据来源：%s（载体实取）。想看原始记录，说「核对一下」我就把原文贴出来。"
+                % (_n, label or "载体"))
+    if not _raw:
+        return _n or ""
+    # 解说失败 → 贴原始数据，用代码块（markdown 安全，不会露出标签）
+    return ("%s这次模型没能把数据讲成话（不可用或没引用到关键数值），"
+            "直接给你**载体实取到的原始数据**，数字一个字没动：\n\n```\n%s\n```"
+            % (fallback_head or "", _raw[:2000]))
 
 
 def _stored_fact_answer(question):
