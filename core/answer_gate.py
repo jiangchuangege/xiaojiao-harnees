@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # 小焦系统本身不依赖任何具体模型。
 # 它是完整的载体（器官齐全），模型是火种（可替换）。
 # 接入任何模型 → 系统活；换任何模型 → 系统不变。
@@ -122,6 +122,22 @@ def _found(value, evidence_norm, kind):
     return v in evidence_norm
 
 
+# 【创作类不适用"可核查"】虚构创作里的日期、地名、数字是**作品的一部分**，不是事实断言。
+#   给小说挂「本条没有可核查的来源，请自行核实」等于给诗加脚注 —— 是噪音，不是诚实。
+#   ⚠️ 只在**问题本身就是创作请求**时才跳过；其余一切照旧审。
+#   跳过的理由会写进返回值的 `skipped` 字段，不静默。
+_CREATIVE_RE = re.compile(
+    r"(写小说|写一段|写一章|写个故事|写故事|续写|接着写|往下写|下一段|下一章|"
+    r"第[一二三四五六七八九十\d]+(?:阶段|章|段|回|幕|节)|"
+    r"小说|故事|剧本|台词|人物设定|角色设定|大纲|文笔|字数|字左右|"
+    r"散文|诗歌|歌词|作文)")
+
+
+def is_creative(question):
+    """这句话是不是要它写/续写创作类内容。与 app 侧的判据保持同一口径。"""
+    return bool(_CREATIVE_RE.search(str(question or "")))
+
+
 def audit(answer, evidence="", question=""):
     """审一遍回答。返回 dict：
 
@@ -136,6 +152,9 @@ def audit(answer, evidence="", question=""):
     claims = extract_claims(ans)
     if not claims:
         return {"claims": 0, "unverified": [], "ratio": 1.0, "note": ""}
+    if is_creative(question):
+        return {"claims": len(claims), "unverified": [], "ratio": 1.0, "note": "",
+                "skipped": "creative"}      # 创作类的数字/地名不当作事实断言审
 
     unverified = []
     for c in claims:

@@ -2377,6 +2377,13 @@ def _perception_skippable(text):
     t = str(text or "").strip()
     if not t:
         return False
+    # 【创作类不问模型"感知"】**不看长度**：写小说/续写这类句子的语义本来就明确
+    #   （就是要一段文字），"这件事对它意味着什么"对成品零贡献，却要多一个模型来回。
+    #   实测（live）：写 200 字小说 38.5s，其中 plan 阶段 26.5s，感知/自评两次内部调用
+    #   在本地一颗 4B 上就是十几秒 —— 用户原话「回复速度慢点要死」。
+    #   ⚠️ 这不是"假装感知过"：日志里会写明这一轮用规则代替感知，可查。
+    if _is_creative_writing(t):
+        return True
     # 【明确的任务请求】**不看长度**：实测「帮我分析一下这段代码的问题：for i in range(3)…」
     #   30 个字，被原来的"≤24 字"挡在门外 → 感知 + 自评两次调用花掉 12.4 秒。
     #   这类句子的语义是明确的（要做什么 + 对谁做），不需要模型再"感知"一遍。
@@ -13106,7 +13113,12 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         #   ② 并发（`capabilities.inner_parallel`，默认**开**）：还是两次请求、提示词一个字不改，
         #      只是同时在飞。语义与原来完全一致，没有质量风险。
         try:
-            _need_sr_model = (not _rule_selfrate(user_input_ctx)) and (not _is_social_turn(user_input_ctx))
+            # 【创作类不问模型自评】「这题我有把握吗」对写小说没有任何意义，
+            #   而每次自评是一次完整模型调用（本地 4B 2~6 秒）。省掉它，
+            #   并且在元认知那条链上如实记成"创作轮，按不需要自评处理"，不假装评过了。
+            _need_sr_model = (not _rule_selfrate(user_input_ctx)) and \
+                (not _is_social_turn(user_input_ctx)) and \
+                (not _is_creative_writing(user_input_ctx))
         except Exception as e:      # noqa: silent-ok — 判不出来就当"要问"，与原行为一致
             LOG.debug("忽略异常(%s:%d): %s", __file__, 10989, e)
             _need_sr_model = True
