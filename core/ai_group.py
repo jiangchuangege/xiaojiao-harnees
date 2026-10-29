@@ -504,8 +504,10 @@ def run_round(gid, rounds=1):
                 g.get("topic") or "（没设主题，随意聊）",
                 _transcript(recent) or "（还没有人说话，你起个头）",
                 m.get("name"))
+            _t_say = time.time()
             txt, who = _ask(m.get("model") or "", [{"role": "system", "content": sys_p},
                                                    {"role": "user", "content": usr}])
+            _sec = round(time.time() - _t_say, 2)
             if not txt:
                 _event("silent", gid=gid, member=m.get("name"),
                        why="这颗火种没应答 → 这一轮它沉默（不编话）")
@@ -525,7 +527,8 @@ def run_round(gid, rounds=1):
                          m.get("name"), _dup_who or "别人", _ratio)
                 continue
             msg = {"id": uuid.uuid4().hex[:8], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                   "who": m.get("name"), "text": txt, "by": who, "round": r + 1}
+                   "who": m.get("name"), "text": txt, "by": who, "sec": _sec,
+                   "round": r + 1}
             with _LOCK:
                 d = _load()
                 for gg in d.get("groups") or []:
@@ -535,7 +538,7 @@ def run_round(gid, rounds=1):
                     gg["messages"] = gg["messages"][-MAX_MSGS_STORE:]
                     _save(d)
             added.append(msg)
-            _event("say", gid=gid, member=m.get("name"), chars=len(txt), by=who)
+            _event("say", gid=gid, member=m.get("name"), chars=len(txt), by=who, sec=_sec)
     LOG.info("群组：%s 跑了 %d 轮，新增 %d 条消息", g.get("name"), rounds, len(added))
     return {"ok": True, "added": added, "group": get(gid)}
 
@@ -545,12 +548,17 @@ def _bigrams(t):
     return {t[i:i + 2] for i in range(len(t) - 1)} if len(t) > 2 else set()
 
 
-def _too_similar(text, recent, floor=0.8):
-    """这句话是不是把别人刚说过的又抄了一遍？返回 (是否重复, 跟谁像, 相似度)。"""
+def _too_similar(text, recent, floor=0.8, floor_contain=0.55):
+    """这句话是不是把别人刚说过的又抄了一遍（整句或半句）？
+
+    实测：整句照抄拦得住（重合度 ≥0.8），但「前半句照抄 + 后半句自己加」漏了 ——
+    阿码说「空指针漏了才怪？边界条件不是那个空吗？」，前半句是小焦上一句的原话。
+    所以再加一条：跟最近 2 条比，包含度 ≥ floor_contain 也算复读。
+    """
     tb = _bigrams(text)
     if not tb:
         return False, "", 0.0
-    for m in (recent or [])[-3:]:
+    for m in (recent or [])[-2:]:
         ob = _bigrams(m.get("text") or "")
         if not ob:
             continue
@@ -559,7 +567,7 @@ def _too_similar(text, recent, floor=0.8):
             continue
         jac = inter / float(len(tb) + len(ob) - inter)
         cont = inter / float(min(len(tb), len(ob)))
-        if max(jac, cont) >= floor:
+        if jac >= floor or cont >= floor_contain:
             return True, m.get("who") or "", round(max(jac, cont), 2)
     return False, "", 0.0
 

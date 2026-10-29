@@ -86,6 +86,7 @@ function toast(el,msg,ok){if(!el)return;el.textContent=msg;el.className=ok?'ok':
 function av(name,color){const c=(color||'#7c6cf5');
  return '<span class="av" style="background:'+c+'">'+esc(String(name||'?').slice(0,1))+'</span>'}
 function ht(ts){return String(ts||'').slice(11,16)}
+function shortName(n){n=String(n||'');return n.length>14?(n.slice(0,12)+'\u2026'):n}
 """
 
 
@@ -453,8 +454,9 @@ async function load(){
     const me=(x.who==='你');
     const adm=(NAMES[x.who]||{}).admin?' <span class="tag">管理员</span>':'';
     return '<div class="msg '+(me?'me':'')+'">'+av(x.who,cmap[x.who]||'#5a6478')+
-      '<div><div class="meta"><b style="color:'+(cmap[x.who]||'#9aa3b5')+'">'+esc(x.who)+
-      '</b>'+adm+' <span class="muted">'+ht(x.ts)+'</span></div>'+
+      '<div><div class="meta"><b style="color:'+(cmap[x.who]||'#9aa3b5')+'">'+esc(shortName(x.who))+
+      '</b>'+adm+' <span class="muted">'+ht(x.ts)+
+      (x.by||x.sec?('  · '+(x.sec?x.sec+'s · ':'')+esc(x.by||'')):'')+'</span></div>'+
       '<div class="b">'+esc(x.text)+'</div></div></div>';
   }).join(''):'<div class="muted">还没有人说话。它自己一会儿就会开口；也可以点「聊 1 轮」。</div>';
   const box=document.getElementById('msgs');
