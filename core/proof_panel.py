@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # 小焦系统本身不依赖任何具体模型。
 # 它是完整的载体（器官齐全），模型是火种（可替换）。
 # 接入任何模型 → 系统活；换任何模型 → 系统不变。
@@ -78,7 +78,15 @@ def collect(limit=12):
         audit_text = _safe(lambda: SA.report_text(limit=3), "") or ""
     except Exception:      # noqa: silent-ok — 这一块读不到就空着，不影响别的格
         audit_stats, audit_text = {}, ""
+    # 融合层：载体说的 / 模型说的，各有几条（用户要求"所有的都要 AI 说"的验收依据）
+    try:
+        from core import fusion as FU
+        fusion_stats = _safe(FU.stats, {}) or {}
+        fusion_tail = _safe(lambda: FU.tail(8), []) or []
+    except Exception:      # noqa: silent-ok — 读不到就空着，不影响别的格
+        fusion_stats, fusion_tail = {}, []
     return {"at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "fusion": fusion_stats, "fusion_tail": fusion_tail,
             "ledger": ledger_stats, "chain": chain, "audit": audit,
             "gate": gate, "gate_history": gate_hist, "knobs": knobs,
             "parity": parity, "consensus": cn_stats, "consensus_rows": cn_rows,
@@ -268,6 +276,28 @@ def render(d=None):
                    'python tools/parity_report.py</div>')
 
     # ---- 长时项目 ----
+    # ---- 谁在说话：载体输出里有多少是模型讲的（用户要求"所有的都要 AI 说"）----
+    fu = d.get("fusion") or {}
+    out.append('<h2>谁在说话（载体输出 → 模型复述）</h2>')
+    if not fu.get("events"):
+        out.append('<p class="muted">还没有记录。说一句话就会有一条（logs/fusion.jsonl）。</p>')
+    else:
+        out.append('<p>共 <b>%d</b> 条输出判定 ｜ <b>AI 说 %d</b> ｜ 保留载体原文 %d ｜ '
+                   '按规矩不改述 %d ｜ 太慢没改 %d ｜ 本来就不是模板 %d</p>'
+                   % (fu.get("events") or 0, fu.get("ai") or 0, fu.get("kept") or 0,
+                      fu.get("exempt") or 0, fu.get("budget") or 0, fu.get("clean") or 0))
+        out.append('<p>模型复述占比 <b>%.1f%%</b> ｜ 模型没应答而保留原文 <b>%.1f%%</b>'
+                   '（后者如实标出来，不假装是模型说的）</p>'
+                   % ((fu.get("ai_ratio") or 0) * 100, (fu.get("kept_ratio") or 0) * 100))
+        rows = d.get("fusion_tail") or []
+        if rows:
+            out.append('<table><tr><th>时间</th><th>状态</th><th>来源</th><th>字数</th>'
+                       '<th>说明</th></tr>')
+            for r in rows:
+                out.append('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s→%s</td><td>%s</td></tr>'
+                           % (_esc(r.get("ts")), _esc(r.get("state")), _esc(r.get("kind")),
+                              r.get("src_chars"), r.get("out_chars"), _esc(r.get("why"))))
+            out.append('</table>')
     out.append('<h2>长时项目</h2>')
     projs = d.get("projects") or []
     if projs:

@@ -2702,74 +2702,62 @@ def _task_evidence_header(question, facts_text):
     return "【载体先核过的事实】\n" + "\n".join(out) + "\n\n【记录原文】\n"
 
 
-# ================== 「每一个都得是 AI 说」：模板答案统一收口 ==================
-# 【用户原话】「我是说不止这一条是所有的都要AI不要模板直接」。
-#   载体里拼模板的地方散在十几条路由上（IP / 点名工具 / 天气 / 技能 / 证据 / 漏洞 / 任务 / 项目…），
-#   逐个改必漏，以后新加一条又会忘。所以在回答定稿前统一认一遍形状、交给模型重讲。
-_TPL_EMOJI = ("🔧", "🌐", "💻", "📋", "🎯", "📈", "🧾", "🩺", "📊", "🧪", "🛠", "🚀", "📄", "🗂", "🔎")
-_TPL_PHRASES = ("实测结果", "载体实取", "未经模型转述", "极快直通", "原始数据如下")
-# 【不许改述的三类】安全原文（待确认/红线/禁区）改一个字都可能误导；
-# 工程类提问里的代码块本身就是用户要的东西；已走过解说流程的不重复烧一次。
-_TPL_SKIP = ("〔待确认〕", "红线", "禁区", "已拦截")
+# ================== 「每一个都得是 AI 说」：统一走 core/fusion.py ==================
+# 【用户原话】「不止是这一条，所有的都要 AI 不要模板，甚至插件，等等都不要直接模板，
+#   都是通过 AI。载体的所有都要融入到 AI，AI 也要融入到载体，成为一体。」
+# 【为什么把实现挪走】模板判据如果留在 app 里，路由各拼一份、以后新加一条又会漏；
+#   现在只有一个边界 `core/fusion.py`，写法只此一份，账也只记一份（logs/fusion.jsonl）。
+def _fus():
+    """拿到融合层，并把模型调用注进去（幂等）。"""
+    from core import fusion as _F
+    _F.install(llm_chat, model_name=str(MODEL_NAME or ""))
+    return _F
 
 
 def _looks_templated(answer, question=""):
-    """这条回答是不是载体拼的模板（而不是模型说的话）？"""
-    a = str(answer or "").strip()
-    q = str(question or "")
-    if not a or len(a) < 12:
+    """这条回答是不是载体拼的模板？真身在 core/fusion.looks_templated。"""
+    try:
+        return _fus().looks_templated(answer, question)
+    except Exception as e:      # noqa: silent-ok — 融合层不在就按"不是模板"处理，别拦路
+        LOG.debug("融合层不可用（忽略）：%s", e)
         return False
-    if any(w in a[:160] for w in _TPL_SKIP):
-        return False
-    # 工程类提问：代码块就是答案，不许改写
-    if "```" in a and re.search(r"(写代码|代码|函数|脚本|实现|报错|bug|debug|sql|正则|html|css|json)",
-                                q, re.I):
-        return False
-    if a.startswith(_TPL_EMOJI):
-        return True
-    if any(p in a for p in _TPL_PHRASES):
-        return True
-    # 「一行短标题 + 一个代码块」的整块形状（模板的典型长相）
-    if re.match(r"^[^\n]{0,60}\n+\s*```[\s\S]*```\s*$", a):
-        return True
-    return False
 
 
-def _speak_text(question, text):
-    """把载体拼的模板讲成模型自己的话。只改说法，不改事实。
-
-    返回空串表示模型这次没应答（调用方保留载体原文，并如实说这是载体读的）。
-    """
-    t = str(text or "").strip()
-    if not t:
+def _speak_text(question, text, kind=""):
+    """把模板讲成模型自己的话。真身在 core/fusion.answer。"""
+    try:
+        out, _st = _fus().answer(question, text, kind=kind)
+        return out if _st == "ai" else ""
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("融合改述失败（忽略）：%s", e)
         return ""
-    _sys = ("你在替一个本地助手，把载体刚取到的结果讲给用户听。要求：\n"
-            "1. 用你自己的话，**不要复读原文的表格和代码块**；\n"
-            "2. 原文里的数字、ID、路径、日期**一个都不能改、不能少**；\n"
-            "3. 不要写「根据数据」「原始数据如下」「实测结果」这类机器腔；\n"
-            "4. 三到六句，先说结论，再说关键细节；\n"
-            "5. 原文是执行/查询结果时，说清做了什么、结果是什么；出错了就说错在哪、下一步怎么办。")
-    _txt = ""
-    for _try in (1, 2):        # 本机 llama-swap 偶发 500，试两次再放弃
+
+
+def _fuse_outgoing(question, text):
+    """出口兜底：只要还是模板，就过融合层。已说过的不重复处理。"""
+    try:
+        if not text:
+            return text
+        if _CTX.get("_spoken") or _CTX.get("_narrated"):
+            return text
+        if not _looks_templated(text, question):
+            return text
+        _spent = 0.0
         try:
-            _txt = str(llm_chat([{"role": "system", "content": _sys},
-                                 {"role": "user",
-                                  "content": "用户问：%s\n\n载体结果：\n%s" % (
-                                      str(question or "")[:200], t[:2000])}],
-                                temperature=0.3) or "").strip()
-        except Exception as e:      # noqa: silent-ok — 第一次失败再试一次
-            LOG.debug("模板改述第 %d 次失败：%s", _try, e)
-            _txt = ""
-        if len(_txt) >= 4:
-            break
-    if len(_txt) < 4:
-        return ""
-    # 数字保真：原文里的量（两位以上或带小数）必须出现；缺的补一行原始要点
-    _miss = [n for n in dict.fromkeys(re.findall(r"\d+(?:\.\d+)?", t))
-             if ("." in n or len(n) >= 2) and n not in _txt]
-    if _miss:
-        _txt += "\n\n> 原始要点：%s —— 这一行是载体从记录里直接摘的。" % "、".join(_miss[:6])
-    return _txt
+            _spent = sum(float(v or 0) for v in (_CTX.get("timings") or {}).values())
+        except Exception:      # noqa: silent-ok
+            _spent = 0.0
+        out, st = _fus().answer(question, text, kind="outgoing",
+                                budget=(14.0 - _spent))
+        if st == "ai":
+            _CTX["_spoken"] = True
+            LOG.info("出口融合：模板 → 模型自己说（%d 字 → %d 字）", len(str(text)), len(out))
+        elif st in ("kept", "budget"):
+            LOG.info("出口融合：%s（如实保留载体原文）", st)
+        return out
+    except Exception as e:      # noqa: silent-ok — 出口兜底挂了也必须把答案给出去
+        LOG.debug("出口融合失败（忽略）：%s", e)
+        return text
 
 
 def _facts_prose(facts, label=""):
@@ -12957,6 +12945,7 @@ def _fast_carrier_answer(text):
                 _sp = _speak_text(q, ans)
                 if _sp:
                     LOG.info("快路模板 → 已改成模型自己说（%s）", tool)
+                    _CTX["_spoken"] = True
                     ans = _sp
                 else:
                     LOG.info("快路模板：模型这次没应答 → 保留载体原文（%s）", tool)
@@ -13209,6 +13198,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         return _fans, True, [], False, _ftrace
     history = current_messages()
     _stage_reset()          # 阶段计时从这里开始（慢在哪是数据，不是感觉）
+    # 每轮复位"这一轮是否已经由模型说过"：不复位的话，上一轮说过就会把这一轮压住
+    _CTX["_spoken"] = False
+    _CTX["_narrated"] = False
 
     # ================== 上下文融合（对话不连续的核心修复） ==================
     # 【为什么必须放在**这里**（意图识别之前、历史读到之后）】
@@ -15085,6 +15077,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 if _spoke:
                     LOG.info("模板答案 → 已改成模型自己说（%d 字 → %d 字）",
                              len(str(answer)), len(_spoke))
+                    _CTX["_spoken"] = True
                     answer = _spoke
                 else:
                     LOG.info("模板答案：模型这次没应答 → 保留载体原文（不假装是模型说的）")
@@ -17051,6 +17044,8 @@ def _api_chat_body(user_input, data, ticket=None):
     if g.get("grounded") is False:
         LOG.warning("回答疑似未引用检索资料（命中 %d / 候选 %d）：问题=%r",
                     g.get("matched"), g.get("considered"), user_input[:40])
+    # 【出口兜底】任何路径都出不去模板：定稿前统一过一次融合层（已说过的不会再烧一次）
+    answer_final = _fuse_outgoing(user_input, answer_final)
     return jsonify({
         "answer": answer_final,
         "brain_online": online,
@@ -17269,6 +17264,8 @@ def api_chat_stream():
             answer, online, info, needs_confirm, tool_trace = holder["r"]
             answer = _strip_think(answer or "")
             answer = _answer_sane(answer)          # 占位符/空串不算回答（与 /api/chat 同一条规矩）
+            # 【流式出口也过一次融合层】GUI 走的就是这条流；模板不许从这儿漏出去。
+            answer = _fuse_outgoing(user_input, answer)
             if not answer:
                 answer = ("🤖 大脑没有应答，这一问没答上。请确认模型配置正确、端口可达。"
                           + llm_error_suffix())
