@@ -2558,6 +2558,72 @@ def _fact_hit(text, keys, obj):
     return any(k in t for k in (keys or []))
 
 
+# ================== 载体取数据 → 模型解答（"死载体活过来"的那一层）==================
+# 【为什么要有这一层】用户的要求很明确：不要"载体把表格甩出来就完事"，
+#   也不要"让模型凭先验瞎编"。正确分工是：
+#     载体：真去取数据、定边界、验数字（数据是硬事实）
+#     模型：用自然语言把这些数据**解答**给用户（说明、对比、提醒、结论）
+#   载体只保证两件事：模型不许改数字；答不出来就退回原始数据并说明。
+_NARRATE_SYS = (
+    "你在帮用户解读一份**刚刚由载体真实取得的数据**。规则（必须遵守）：\n"
+    "1. 只能使用给到的数据；**数字必须原样引用**，不许四舍五入、不许换单位、不许补新数字；\n"
+    "2. 数据里没有的内容一律不许编（包括原因、预测、排名）；\n"
+    "3. 用自然的中文说话，像人在解答，不要复述表格，不要写「根据提供的数据」这种机器腔；\n"
+    "4. 如果数据不足以回答用户的问题，直接说缺什么、怎么才能拿到，别硬编；\n"
+    "5. 三到六句话，别长篇大论；\n"
+    "6. 括号里已经写明字段含义（例如「满值 1.00 = 最充沛」），**照它解释**；不要自行换算成百分比，也不要把「数值高」说成「消耗大」；数据没写的因果一律不说。"
+)
+
+
+def _narrate_facts(question, facts, label=""):
+    """把载体取到的数据交给模型解答。返回 (模型解答 或 空串, 是否成功)。
+
+    失败（模型不可用/空/丢了关键数字）→ 返回空串，由调用方退回原始数据。
+    """
+    q = str(question or "").strip()
+    f = str(facts or "").strip()
+    if not q or not f:
+        return "", False
+    try:
+        _msgs = [{"role": "system", "content": _NARRATE_SYS},
+                 {"role": "user", "content": "用户问：%s\n\n%s数据：\n%s" % (
+                     q, (label or "载体取到的"), f[:1800])}]
+        _txt = str(llm_chat(_msgs, temperature=0.3) or "").strip()
+    except Exception as e:      # noqa: silent-ok — 模型不可用就走退路
+        LOG.debug("数据解答失败（退回原始数据）：%s", e)
+        return "", False
+    if not _txt or len(_txt) < 4:
+        return "", False      # 太短（或空）才算失败；一句话的解说也算成功
+    # 【验数字】模型解答里要引用数据里的**关键数值**，否则判为"没看数据"（宁可退回原始块）。
+    #   但不能把任务号/时间戳当关键数字：实测「20261028_202237_290721」这种 ID 模型不会复述，
+    #   于是所有含 ID 的解说全被误杀、一律退回原始块（用户看到的正是这个）。
+    #   判据：只看**短数值**（≤6 位，或带小数点的价格/比例），且要求至少引用到一半。
+    _all = re.findall(r"\d+(?:\.\d+)?", f)
+    _key = [n for n in _all if ("." in n or len(n) <= 6)][:6]
+    if _key:
+        _miss = [n for n in _key if n not in _txt]
+        if len(_miss) > len(_key) // 2 + 1:
+            LOG.warning("数据解答里几乎没引用关键数值（缺 %s）→ 退回原始数据", _miss[:3])
+            return "", False
+    return _txt, True
+
+
+def _answer_with_facts(question, facts, label="", fallback_head=""):
+    """一步到位：模型解答 + 附原始数据。返回最终答案文本。
+
+    · 模型可用 → 「解答」+ 折叠的「原始数据」（用户能核查，也能只读解说的那几句）；
+    · 模型不可用 → 原始数据 + 一句如实说明（不是"我答不出"，而是"这次只能用原始数据回你"）。
+    """
+    _n, _ok = _narrate_facts(question, facts, label)
+    _raw = str(facts or "").strip()
+    if _ok:
+        return ("%s\n\n<details><summary>原始数据（载体实取，可核查）</summary>\n\n%s\n\n</details>"
+                % (_n, _raw))
+    return ("%s%s\n\n—— 说明：这次没能让模型把数据讲成话（模型不可用或没引用到原始数字），"
+            "所以直接把**载体实取到的数据**摆给你，数字一个字没动。"
+            % (fallback_head or "", _raw))
+
+
 def _stored_fact_answer(question):
     """问自己存过的事 → 从记忆库/画像库直接取答案。返回答案或空串。"""
     q = str(question or "").strip()
@@ -2600,13 +2666,10 @@ def _stored_fact_answer(question):
     if not cands:
         return ""
     best = max(cands, key=lambda x: (len(_obj) and _obj in x, -len(x)))
-    LOG.info("已存事实直答：命中「%s」→ %s", _obj, best[:40])
-    return ("🧠 **这条我记得**（从本地记忆库里取出来的，不是现编）\n\n"
-            "> %s\n\n"
-            "- 来源：本地记忆库 / 用户画像（你当时让我记下的）\n"
-            "- 想核对：说「审计最近几轮」，或看 `logs/xiaojiao_memory_vec.jsonl`\n"
-            "—— 如果这条已经过期或你想让我改，直接说新的，我按新说的记。"
-            % best[:300])
+    LOG.info("已存事实：命中「%s」→ %s", _obj, best[:40])
+    # 【分工】事实由记忆库给（真），话由模型说（自然）；模型不许加数据里没有的内容
+    return _answer_with_facts(question, best[:300], label="用户以前让我记下的",
+                              fallback_head="🧠 这条我记得（从本地记忆库里取出来的）：\n\n")
 
 
 def _self_state_text(question=""):
@@ -2630,7 +2693,7 @@ def _self_state_text(question=""):
             _sleeping = bool(_EN.is_sleeping())
         except Exception:      # noqa: silent-ok
             _sleeping = False
-        out.append("- 精力值：**%s**（0~1，越低越累；低于 0.30 它会想睡）%s"
+        out.append("- 精力值：**%s**（满值 1.00 = 最充沛，数值越高越有精神；低于 0.30 才算累。这是「还剩多少精力」，不是「用掉多少」）%s"
                    % ("%.2f" % v if isinstance(v, (int, float)) else "读不到",
                       "，此刻**在睡**" if _sleeping else ""))
     except Exception as e:      # noqa: silent-ok
@@ -12610,27 +12673,30 @@ def _fast_carrier_answer(text):
     try:
         _nc = _numeric_compare_answer(q)
         if _nc:
-            return _wrap("carrier_math", _nc)
+            return _wrap("carrier_math", _answer_with_facts(q, _nc, label="载体算的结果"))
     except Exception:      # noqa: silent-ok
         pass
     # ② 读时钟（日期/星期/时刻/年份）
     try:
         _ck = _clock_answer(q)
         if _ck:
-            return _wrap("carrier_clock", _ck)
+            return _wrap("carrier_clock", _answer_with_facts(q, _ck, label="系统时钟"))
     except Exception:      # noqa: silent-ok
         pass
     # ②a 问「你在后台干嘛 / 精力值多少」→ 用载体自己的数据直接答（别去翻记忆）
     try:
         if re.search(r"(精力|累不累|你困吗|在后台|后台干|后台做|你在干嘛|你在干什么|睡了吗)",
                      q) and not re.search(r"(为什么|怎么|如何|分析)", q):
-            return _wrap("self_state", _self_state_text(q))
+            _facts = _self_state_text(q)
+            return _wrap("self_state", _answer_with_facts(q, _facts, label="它自己的状态",
+                                                         fallback_head="🧠 "))
     except Exception as e:      # noqa: silent-ok
         LOG.debug("快路·自身状态失败（交回完整链路）：%s", e)
     # ②b 问「你凭什么说你能」/「把自评和证据链亮出来」→ 亮可核查的那部分（别跑去审计上一轮）
     try:
         if re.search(r"(凭什么|你凭什么|什么底气|证明你能|证据链|自评.{0,6}(亮|给|看))", q):
-            return _wrap("capability_proof", _capability_proof_text(q))
+            return _wrap("capability_proof",
+                         _answer_with_facts(q, _capability_proof_text(q), label="载体自己的凭据"))
     except Exception as e:      # noqa: silent-ok
         LOG.debug("快路·凭什么 失败（交回完整链路）：%s", e)
     # ③ 问载体自己的账 / 自审 / 换模型 / 旋钮 / 面板
@@ -12655,7 +12721,7 @@ def _fast_carrier_answer(text):
             _res = _tool_result_str(run_tool(_tool, _args, force=True))
             if _res and not _res.startswith("⚠️") and not _res.startswith("自证这里出错") \
                     and "未知工具" not in _res:
-                return _wrap(_tool, _res)
+                return _wrap(_tool, _answer_with_facts(q, _res, label="载体自己的记录"))
             return None        # 工具没成 → 交回完整链路（宁可慢，也不给半截结果）
     except Exception as e:      # noqa: silent-ok
         LOG.debug("快路·自证类失败（交回完整链路）：%s", e)
@@ -12666,13 +12732,13 @@ def _fast_carrier_answer(text):
             _build_tools()
             _res = _tool_result_str(run_tool(_tq[0], _tq[1], force=True))
             if _res and not _res.startswith("⚠️") and "未知工具" not in _res:
-                return _wrap(_tq[0], _res)
+                return _wrap(_tq[0], _answer_with_facts(q, _res, label="任务进度"))
         _pj = _project_intent(q)
         if _pj and _pj[0] in ("project_status", "project_list"):
             _build_tools()
             _res = _tool_result_str(run_tool(_pj[0], _pj[1] or {}, force=True))
             if _res and not _res.startswith("⚠️") and "未知工具" not in _res:
-                return _wrap(_pj[0], _res)
+                return _wrap(_pj[0], _answer_with_facts(q, _res, label="项目进度"))
     except Exception as e:      # noqa: silent-ok
         LOG.debug("快路·任务/项目失败（交回完整链路）：%s", e)
     # ⑤ 公网 IP（问自己的 IP，而不是查某个 IP）
@@ -12701,9 +12767,9 @@ def _fast_carrier_answer(text):
             _iq = _tool_result_str(run_tool("get_index_quotes",
                                             {"market": "", "question": q}, force=True))
             if _iq and not _iq.startswith("⚠️") and "没取到数据" not in _iq:
+                # 【分工】数字由接口给（真），话由模型说（自然）—— 这是用户要的"融合"
                 return _wrap("get_index_quotes",
-                             _iq + "\n\n—— 这一条是**载体直接取自行情接口**，没有让模型转述；"
-                                   "好处是数字不会被「顺手改一下」。")
+                             _answer_with_facts(q, _iq, label="行情", fallback_head="📈 "))
             # ② 【结构化接口不通时**不再退回网页检索**】实测：行情类问题用网页检索，
             #    回来的是新浪/知乎首页（片段里没有点位），三组检索词各要 5~8 秒 ——
             #    用户白等 20 秒还是拿不到数。所以直接**如实说查不到**，把时间还给用户。
@@ -13642,7 +13708,8 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("任务查询：%s", _tq[0])
                     tool_trace.append(_trace_entry(_tq[0], _tq[1], _tqr))
                     _note_tool_path(tool_trace, path="task")
-                    answer = _tqr
+                    # 【分工】进度数据由载体读（真），话由模型说（自然）
+                    answer = _answer_with_facts(user_input, _tqr, label="任务进度")
             except Exception as _tq_e:      # noqa: silent-ok — 查任务挂了不能拖垮整轮
                 LOG.debug("任务查询路由失败（忽略）：%s", _tq_e)
 
@@ -13660,7 +13727,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("长时项目：用户交出的是一批事 → %s", _pj[0])
                     tool_trace.append(_trace_entry(_pj[0], _pj[1] or {}, _pjres))
                     _note_tool_path(tool_trace, path="project")
-                    answer = _pjres
+                    answer = _answer_with_facts(user_input, _pjres, label="项目进度")
             except Exception as _pj_e:      # noqa: silent-ok — 项目链挂了不能拖垮整轮
                 LOG.debug("长时项目路由失败（忽略）：%s", _pj_e)
 
@@ -13719,7 +13786,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("自证路由：%s", _ftool)
                     tool_trace.append(_trace_entry(_ftool, _fargs or {}, _fr))
                     _note_tool_path(tool_trace, path="proof")
-                    answer = _fr
+                    answer = _answer_with_facts(user_input, _fr, label="载体自己的记录")
                     break
             except Exception as _fe:      # noqa: silent-ok — 自证挂了不能拖垮整轮
                 LOG.debug("自证路由失败（忽略）：%s", _fe)
