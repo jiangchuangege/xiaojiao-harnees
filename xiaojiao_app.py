@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # 小焦系统本身不依赖任何具体模型。
 # 它是完整的载体（器官齐全），模型是火种（可替换）。
 # 接入任何模型 → 系统活；换任何模型 → 系统不变。
@@ -2454,6 +2454,139 @@ def _override_note(question, answer):
     if "载体说明" in a:
         return a, False
     return a.rstrip() + note, True
+
+
+# ================== 明确写入指令：由载体直写，不交给模型判断 ==================
+# 【用户实测】他说「我的密码是 8388」→「记下来」，界面回「好的，已记下来」，
+#   但日志是「用户画像：它自己判断不记（原因：模型说不记）」，库里一个字没有；
+#   新会话再问「我的密码是多少」→「抱歉，查不到」。这就是"嘴上答应、实际没做"。
+# 【载体立场】"要不要记"不该由模型决定：用户已经下了明确指令，指令是事实，不是建议。
+#   载体照做 —— 并且如实告诉他存在哪、下次怎么召回、以及明文保存的风险。
+_REMEMBER_RE = re.compile(
+    r"(记住|记一下|记下来|记下|帮我记|给我记|存下来|存一下|保存下来|记录一下)")
+_SENSITIVE_RE = re.compile(r"(密码|口令|password|passwd|密钥|秘钥|token|令牌|验证码|身份证|银行卡)")
+
+
+def _remember_target_fact(user_input, history=None):
+    """要记的到底是什么？返回 (事实文本, 来源说明)。
+
+    · 这句话本身带事（「记住我的密码是 8388」）→ 取整句；
+    · 只有一句「记下来」→ 取**上一句用户说的话**（那才是他要记的内容）。
+    """
+    q = str(user_input or "").strip()
+    _body = _REMEMBER_RE.sub("", q).strip(" ，,。.！!：:")
+    if len(_body) >= 4:
+        return _body, "本句"
+    # 只说「记下来」→ 往历史里翻最近一句用户说的话
+    for h in reversed(list(history or [])[-8:]):
+        if str((h or {}).get("role") or "") in ("用户", "user"):
+            _t = str(h.get("content") or "").strip()
+            if _t and not _REMEMBER_RE.fullmatch(_t) and len(_t) >= 3:
+                return _t, "上一句"
+    return "", ""
+
+
+def _write_memory_direct(fact):
+    """把一条事实真写进记忆库（可召回）+ 画像库。返回 (ok, 说明)。"""
+    notes = []
+    ok_any = False
+    try:
+        from core import memory_vec as _MV
+        _r = _MV.add_memory(str(fact)[:500], kind="dialogue", key_text=str(fact)[:60])
+        if _r:
+            ok_any = True
+            notes.append("记忆库（向量，可召回）")
+    except Exception as e:      # noqa: silent-ok — 一条链失败不影响另一条
+        notes.append("记忆库失败：%s" % type(e).__name__)
+    try:
+        from core import user_profile as _UP
+        _UP.add("事实", str(fact)[:300], why="用户明确要求记住", evidence="用户原话",
+                source="用户明确指令")
+        ok_any = True
+        notes.append("用户画像")
+    except Exception as e:      # noqa: silent-ok
+        notes.append("画像失败：%s" % type(e).__name__)
+    return ok_any, "、".join(notes)
+
+
+def _remember_reply(fact, where, src):
+    """如实告诉用户：记了什么、存在哪、下次怎么召回、有什么风险。"""
+    sens = bool(_SENSITIVE_RE.search(str(fact)))
+    lines = ["✅ **已记下**（这次是真写进库了，不是嘴上答应）", "",
+             "> 内容：%s" % str(fact)[:200],
+             "> 来源：%s ｜ 写入位置：%s" % (src, where),
+             "",
+             "- 下次**新会话**问起时，会从记忆里召回它（检索按语义 + 关键词，说个相近的说法也能命中）。",
+             "- 想核对我到底存了什么：说「审计最近几轮」，或看 `logs/xiaojiao_memory_vec.jsonl`。"]
+    if sens:
+        lines += ["",
+                  "⚠️ **如实提醒**：这条属于敏感信息（密码/密钥类），我是按你的明确要求**原样存在本地文件里**的"
+                  "（明文）。我不会主动外发，但本地文件被看到就等于泄露 —— "
+                  "更稳的做法是让我只记「有这件事」而不记具体值。要不要改成那样，你说一句我就改。"]
+    return "\n".join(lines)
+
+
+# ================== 问"你记着的关于我的事" → 载体直接取，别让模型自己找 ==================
+# 【实测】用户说了「我的密码是 8388」→「记下来」，库里确实写进去了（向量库 + 画像库各一条），
+#   新会话问「我的密码是多少」，日志显示画像也注入进 system 了 —— 可它还是答
+#   「我查不到你的密码，密码属于高度敏感信息…」。
+#   查下去发现两条：
+#     ① 思维流的"它自己说过"把**上一轮那句"我查不到你的密码"**又摆进了 system
+#        （自我回灌换了扇门进来），模型顺着自己上次的话往下说；
+#     ② 这类问题本来就不该让模型"从 prompt 里自己挑" —— 事实就在库里，载体取出来直接说。
+_STORED_Q_RE = re.compile(
+    r"(是多少|是什么|是几|叫什么|叫啥|叫什么名字|住哪|住在哪|多大了|几岁"
+    r"|还记得.{0,8}吗|记得.{0,8}吗)")
+_ECHO_TXT = ("我查不到", "查不到你的", "没有记录", "没有关于你", "没能查到", "无法存储",
+             "我不知道你的")
+
+
+def _stored_fact_answer(question):
+    """问自己存过的事 → 从记忆库/画像库直接取答案。返回答案或空串。"""
+    q = str(question or "").strip()
+    if not q or len(q) > 40:
+        return ""
+    if not _STORED_Q_RE.search(q):
+        return ""
+    # 取问句里的"对象词"（密码 / 生日 / 猫的名字…）
+    _obj = re.sub(r"(我的|我|俺|之前|上次|以前|告诉你的|跟你说的|是多少|是什么|是几|叫什么名字|"
+                  r"叫什么|叫啥|住哪|住在哪|多大了|几岁|记得|还记得|吗|呢|？|\?|，|,|。)", "", q).strip()
+    if len(_obj) < 1:
+        return ""        # 对象词被剥光了（例如只说「记下来」）→ 交给正常流程
+    # 【同一个东西说法不同也要能对上】实测：「我的猫叫什么」里的对象词是「我的猫」，
+    #   而库里存的是「用户养了一只三岁名叫团子的猫」—— 字面上并不包含「我的猫」。
+    #   所以准备几个候选键（全词 / 去"我的" / 尾部 3~2 字），命中任何一个都算对上。
+    _keys = [k for k in (_obj, _obj.replace("我的", ""), _obj[-3:], _obj[-2:])
+             if k and len(k) >= 1]
+    cands = []
+    try:
+        from core import memory_vec as _MV
+        for h in _MV.search_memory(q, top_k=8, threshold=0.0):
+            t = str(h.get("text") or "").strip()
+            if t and any(k in t for k in _keys):
+                cands.append(t)
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("取已存事实（向量库）失败：%s", e)
+    try:
+        from core import user_profile as _UP
+        for r in _UP.all_records():
+            t = str(r.get("content") or r.get("text") or "").strip()
+            if t and any(k in t for k in _keys):
+                cands.append(t)
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("取已存事实（画像库）失败：%s", e)
+    # 剔掉"它自己说过查不到"那种行（那是我方口吻，不是用户告诉我的事实）
+    cands = [c for c in dict.fromkeys(cands) if not any(w in c for w in _ECHO_TXT)]
+    if not cands:
+        return ""
+    best = max(cands, key=lambda x: (len(_obj) and _obj in x, -len(x)))
+    LOG.info("已存事实直答：命中「%s」→ %s", _obj, best[:40])
+    return ("🧠 **这条我记得**（从本地记忆库里取出来的，不是现编）\n\n"
+            "> %s\n\n"
+            "- 来源：本地记忆库 / 用户画像（你当时让我记下的）\n"
+            "- 想核对：说「审计最近几轮」，或看 `logs/xiaojiao_memory_vec.jsonl`\n"
+            "—— 如果这条已经过期或你想让我改，直接说新的，我按新说的记。"
+            % best[:300])
 
 
 def _capability_proof_text(question=""):
@@ -12574,6 +12707,37 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     #   答案完全由载体自己决定（读表、算数、查账本），这些阶段**一个都不需要**。
     #   所以提到最前面：命中就直接返回，后面的链路一步都不走。
     #   这不是"跳过流程"，是**这类问题本来就不属于那条流程**（日志会写明走了哪条快路）。
+    # 【明确写入指令】用户说「记下来」→ 载体自己写，不交给模型判断要不要记。
+    #   这条必须抢在模型之前：模型会以"敏感信息"为由悄悄不记，却还在嘴上答应（实测踩到）。
+    try:
+        if _REMEMBER_RE.search(str(user_input or "")):
+            _fact, _src = _remember_target_fact(user_input, current_messages())
+            if _fact and len(_fact) >= 3:
+                _wok, _wwhere = _write_memory_direct(_fact)
+                if _wok:
+                    LOG.info("明确写入指令：已直写记忆（%s）｜内容：%s", _wwhere, _fact[:40])
+                    _ans = _remember_reply(_fact, _wwhere, _src)
+                    _tr = [_trace_entry("remember_fact", {"fact": _fact[:60]}, _ans)]
+                    try:
+                        _record_interaction(user_input, _ans, _tr)
+                    except Exception:      # noqa: silent-ok
+                        pass
+                    return _ans, True, [], False, _tr
+                LOG.warning("明确写入指令：写库失败（%s），交给正常流程", _wwhere)
+    except Exception as _re:      # noqa: silent-ok — 写记忆失败不许挡住对话
+        LOG.debug("写入指令直写失败（忽略）：%s", _re)
+    # 【问已存事实】载体直接从库里取，别让模型从 prompt 里自己挑
+    try:
+        _sf = _stored_fact_answer(user_input)
+        if _sf:
+            _sftr = [_trace_entry("recall_fact", {"q": user_input[:40]}, _sf)]
+            try:
+                _record_interaction(user_input, _sf, _sftr)
+            except Exception:      # noqa: silent-ok
+                pass
+            return _sf, True, [], False, _sftr
+    except Exception as _sfe:      # noqa: silent-ok — 取事实失败就走正常流程
+        LOG.debug("已存事实直答失败（忽略）：%s", _sfe)
     try:
         _fast = _fast_carrier_answer(user_input)
     except Exception as _fe0:      # noqa: silent-ok — 快路挂了就照常走完整链路
