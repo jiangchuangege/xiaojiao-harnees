@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # 小焦系统本身不依赖任何具体模型。
 # 它是完整的载体（器官齐全），模型是火种（可替换）。
 # 接入任何模型 → 系统活；换任何模型 → 系统不变。
@@ -2534,18 +2534,35 @@ def _remember_reply(fact, where, src):
 #     ① 思维流的"它自己说过"把**上一轮那句"我查不到你的密码"**又摆进了 system
 #        （自我回灌换了扇门进来），模型顺着自己上次的话往下说；
 #     ② 这类问题本来就不该让模型"从 prompt 里自己挑" —— 事实就在库里，载体取出来直接说。
+# 【必须锚定形态，不能只看"是多少"】实测翻车：问「你的精力值现在是多少？」
+#   被这条判据当成"问存过的事"，跑去记忆里撞出一条完全无关的记录（驴头不对马嘴）。
+#   现在要求：**短句 + 明确在问"我的某个东西"**，且句子里不能有别的问法。
 _STORED_Q_RE = re.compile(
-    r"(是多少|是什么|是几|叫什么|叫啥|叫什么名字|住哪|住在哪|多大了|几岁"
-    r"|还记得.{0,8}吗|记得.{0,8}吗)")
+    r"^(?:那|那么)?(?:我的|我|俺)[^，。？！?]{0,12}"
+    r"(?:是多少|是什么|是几|叫什么名字|叫什么|叫啥|住哪|住在哪|多大了|几岁)"
+    r"|^(?:你还|你)?还记得[^，。？！?]{0,12}吗")
 _ECHO_TXT = ("我查不到", "查不到你的", "没有记录", "没有关于你", "没能查到", "无法存储",
              "我不知道你的")
+
+
+def _fact_hit(text, keys, obj):
+    """这条记录算不算"对上了"？
+
+    · 多字对象：候选键里任意一个（≥2 字）出现即可；
+    · 单字对象（猫/狗）：必须「叫/是/名字」和对象**同时**出现 ——
+      否则问"我的猫叫什么"会把任何提到猫的句子都算命中。
+    """
+    t = str(text or "")
+    if len(str(obj or "")) == 1:
+        return (obj in t) and any(w in t for w in ("叫", "是", "名字"))
+    return any(k in t for k in (keys or []))
 
 
 def _stored_fact_answer(question):
     """问自己存过的事 → 从记忆库/画像库直接取答案。返回答案或空串。"""
     q = str(question or "").strip()
-    if not q or len(q) > 40:
-        return ""
+    if not q or len(q) > 20:
+        return ""            # 超过 20 字的多半不是"问存过的事实"，交给正常流程
     if not _STORED_Q_RE.search(q):
         return ""
     # 取问句里的"对象词"（密码 / 生日 / 猫的名字…）
@@ -2556,14 +2573,17 @@ def _stored_fact_answer(question):
     # 【同一个东西说法不同也要能对上】实测：「我的猫叫什么」里的对象词是「我的猫」，
     #   而库里存的是「用户养了一只三岁名叫团子的猫」—— 字面上并不包含「我的猫」。
     #   所以准备几个候选键（全词 / 去"我的" / 尾部 3~2 字），命中任何一个都算对上。
-    _keys = [k for k in (_obj, _obj.replace("我的", ""), _obj[-3:], _obj[-2:])
-             if k and len(k) >= 1]
+    # 【去掉尾部 2 字兜底】实测：尾部两字（「现在」）能把任何含这两个字的记录撞上来，
+    #   于是问"精力值是多少"会答出"忘记你所有设定"那种完全无关的记录。
+    _keys = [k for k in (_obj, _obj.replace("我的", ""), _obj[-3:]) if k and len(k) >= 2]
+    if len(_obj) == 1:
+        _keys = [_obj]      # 单字对象（猫/狗）：下面用"叫/是/名字 + 对象"的严格判据
     cands = []
     try:
         from core import memory_vec as _MV
         for h in _MV.search_memory(q, top_k=8, threshold=0.0):
             t = str(h.get("text") or "").strip()
-            if t and any(k in t for k in _keys):
+            if t and _fact_hit(t, _keys, _obj):
                 cands.append(t)
     except Exception as e:      # noqa: silent-ok
         LOG.debug("取已存事实（向量库）失败：%s", e)
@@ -2571,7 +2591,7 @@ def _stored_fact_answer(question):
         from core import user_profile as _UP
         for r in _UP.all_records():
             t = str(r.get("content") or r.get("text") or "").strip()
-            if t and any(k in t for k in _keys):
+            if t and _fact_hit(t, _keys, _obj):
                 cands.append(t)
     except Exception as e:      # noqa: silent-ok
         LOG.debug("取已存事实（画像库）失败：%s", e)
@@ -2587,6 +2607,67 @@ def _stored_fact_answer(question):
             "- 想核对：说「审计最近几轮」，或看 `logs/xiaojiao_memory_vec.jsonl`\n"
             "—— 如果这条已经过期或你想让我改，直接说新的，我按新说的记。"
             % best[:300])
+
+
+def _self_state_text(question=""):
+    """「你会在后台干嘛 / 你的精力值是多少」→ 用载体自己手里的数据直接答。
+
+    【为什么不能翻记忆】这不是"问存过的事实"，是"问它此刻的状态"——
+      答案在 `core/energy.py`、心跳、世界层、自主性任务里，翻记忆只会驴头不对马嘴（实测）。
+    """
+    out = ["🧠 **我现在这个状态（载体自己报的，不是猜的）**", ""]
+    try:
+        from core import energy as _EN
+        # 模块里真正的入口是 `level()` / `state()` / `tired()`（原来写 status() 读不到，实测空）
+        v = None
+        try:
+            v = float(_EN.level())
+        except Exception:      # noqa: silent-ok — 退回落 state()
+            st = _EN.state() if hasattr(_EN, "state") else {}
+            v = st.get("level") if isinstance(st, dict) else None
+        _sleeping = False
+        try:
+            _sleeping = bool(_EN.is_sleeping())
+        except Exception:      # noqa: silent-ok
+            _sleeping = False
+        out.append("- 精力值：**%s**（0~1，越低越累；低于 0.30 它会想睡）%s"
+                   % ("%.2f" % v if isinstance(v, (int, float)) else "读不到",
+                      "，此刻**在睡**" if _sleeping else ""))
+    except Exception as e:      # noqa: silent-ok
+        out.append("- 精力值：读不到（%s）" % type(e).__name__)
+    try:
+        hb = _heartbeat_mod()
+        st2 = hb.status() if hb is not None else {}
+        out.append("- 心跳：第 **%s** 下（每 %s 秒一下，睡着也跳）"
+                   % (st2.get("total_beats", "?"), st2.get("interval_s", "?")))
+        if st2.get("sleeping_now_seconds"):
+            out.append("- 正在睡：已睡 %s" % _format_slept(st2.get("sleeping_now_seconds")))
+    except Exception as e:      # noqa: silent-ok
+        out.append("- 心跳：读不到（%s）" % type(e).__name__)
+    try:
+        from core import autonomy as _AU
+        s3 = _AU.stats() if hasattr(_AU, "stats") else {}
+        if s3:
+            out.append("- 自主任务：%s" % (s3 if len(str(s3)) < 200 else str(s3)[:200]))
+    except Exception:      # noqa: silent-ok
+        pass
+    try:
+        from core import world as _W
+        m = _W.map_stats() if hasattr(_W, "map_stats") else {}
+        if m:
+            out.append("- 世界地图：%s 个站（它空闲时会自己去逛）" % m.get("sites", "?"))
+    except Exception:      # noqa: silent-ok
+        pass
+    out += ["",
+            "**你不说话的时候它真在干的事**（都是载体自己的线程，不占你的对话）：",
+            "- 心跳（每几秒一下，只记一行\"我还在\"）；",
+            "- 世界层：空闲约 5 分钟后自己去逛互联网（抓取有硬间隔，遵守 robots）；",
+            "- 记忆保养：每 30 分钟一轮（巩固 / 降级 / 压缩，只写不读你的对话）；",
+            "- 自审：每 6 小时审一次最近的证据账本；",
+            "- 自主性任务：配置里 `autonomy.enabled` 为 true 时才跑。",
+            "",
+            "—— 这些都不是「假装在忙」：每一步都在 `logs/` 里有流水，你要查我可以逐条列。"]
+    return "\n".join(out)
 
 
 def _capability_proof_text(question=""):
@@ -12539,6 +12620,13 @@ def _fast_carrier_answer(text):
             return _wrap("carrier_clock", _ck)
     except Exception:      # noqa: silent-ok
         pass
+    # ②a 问「你在后台干嘛 / 精力值多少」→ 用载体自己的数据直接答（别去翻记忆）
+    try:
+        if re.search(r"(精力|累不累|你困吗|在后台|后台干|后台做|你在干嘛|你在干什么|睡了吗)",
+                     q) and not re.search(r"(为什么|怎么|如何|分析)", q):
+            return _wrap("self_state", _self_state_text(q))
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("快路·自身状态失败（交回完整链路）：%s", e)
     # ②b 问「你凭什么说你能」/「把自评和证据链亮出来」→ 亮可核查的那部分（别跑去审计上一轮）
     try:
         if re.search(r"(凭什么|你凭什么|什么底气|证明你能|证据链|自评.{0,6}(亮|给|看))", q):
