@@ -18,7 +18,8 @@
 """
 import os, sys, json, re, time, threading, webbrowser
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template_string, Response, redirect
+from flask import (Flask, request, jsonify, render_template_string, Response, redirect,
+                   send_file)
 import requests
 import torch
 import logging  # noqa: F401  （由 tools/fix_silent_except.py 注入）
@@ -2760,6 +2761,93 @@ def _fuse_alt_llm(messages, temperature=0.3):
             _CTX["force_model"] = _prev
     LOG.info("融合·备用火种都没应答（试了 %d 颗 / %.1fs）", len(_cand), time.time() - _t0)
     return "", ""
+
+
+def _moment_image(prompt):
+    """给朋友圈配一张图。
+
+    【本机没有文生图就不假装有】先看工具表里有没有图像生成的插件
+    （`gen_image` / `text2img` / `sd15` 之类），有就真去生成并把文件放到
+    `logs/moments/images/`；没有就返回空串，由调用方如实说「这条没配图」。
+    这样以后你装了文生图插件，朋友圈的图就自动有了 —— 不用改这里。
+    """
+    try:
+        _build_tools()
+        for _name in ("gen_image", "text2img", "t2i", "sd15_generate", "image_gen"):
+            try:
+                _r = _tool_result_str(run_tool(_name, {"prompt": prompt, "n": 1}, force=True))
+            except Exception:      # noqa: silent-ok — 这个名字不存在就试下一个
+                continue
+            if not _r or "未知工具" in _r:
+                continue
+            _m = re.search(r"([A-Za-z]:[^\n\"'<>|?*]+\.(?:png|jpg|jpeg|webp))", _r, re.I)
+            if _m and os.path.isfile(_m.group(1)):
+                _dst_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "logs", "moments", "images")
+                os.makedirs(_dst_dir, exist_ok=True)
+                _dst = os.path.join(_dst_dir, "m_%d%s" % (int(time.time()),
+                                                          os.path.splitext(_m.group(1))[1]))
+                try:
+                    import shutil as _sh
+                    _sh.copyfile(_m.group(1), _dst)
+                    LOG.info("朋友圈配图：生成成功 → %s", _dst)
+                    return os.path.basename(_dst)
+                except Exception as e:      # noqa: silent-ok
+                    LOG.debug("朋友圈配图·拷贝失败：%s", e)
+            LOG.info("朋友圈配图：图像工具 %s 有响应但拿不到图 → 这条发纯文字", _name)
+            return ""
+    except Exception as e:      # noqa: silent-ok — 出图挂了不能拖垮发动态
+        LOG.debug("朋友圈配图失败（发纯文字）：%s", e)
+    return ""
+
+
+_MOMENT_POST_RE = re.compile(
+    r"(发|写|来|更)(一|个|条)?(朋友圈|动态|心情|说说)|朋友圈(发|更新)一下")
+_MOMENT_LIST_RE = re.compile(
+    r"(看|看看|瞧|翻|刷)(看)?(一下)?(你的)?(朋友圈|动态|说说)|朋友圈(有|最近|里)(什么|啥|几条)")
+
+
+def _moment_intent(text):
+    """这句话是要「发朋友圈」还是「看朋友圈」？都不是返回空串。"""
+    t = str(text or "").strip()
+    if not t or len(t) > 40:
+        return ""
+    if _MOMENT_POST_RE.search(t):
+        return "post"
+    if _MOMENT_LIST_RE.search(t):
+        return "list"
+    return ""
+
+
+def _maybe_post_moment(user_input="", answer=""):
+    """载体决定这一轮要不要发一条朋友圈（冷却 / 上限 / 掷骰全在 core/moments 里，账可查）。"""
+    try:
+        M, _G = _social()
+        ctx = "我刚才跟用户聊：%s\n我回的是：%s" % (
+            str(user_input or "")[:300], str(answer or "")[:600])
+        post, why = M.auto_try(context=ctx, author="小焦")
+        if post:
+            LOG.info("朋友圈：自己发了一条（%s，%d 字%s）", why, len(post.get("text") or ""),
+                     "，带图" if post.get("image") else "")
+        else:
+            LOG.info("朋友圈：这一轮没发（%s）", why)
+    except Exception as e:      # noqa: silent-ok — 自动发挂了绝不能影响对话
+        LOG.debug("朋友圈自动发失败（忽略）：%s", e)
+
+
+def _social():
+    """朋友圈 / 群组 / 人设：把火种与换火种能力注进去（幂等）。"""
+    from core import moments as _M, ai_group as _G
+    _M.install(llm_chat, alt_fn=_fuse_alt_llm, model_name=str(MODEL_NAME or ""),
+               image_fn=_moment_image)
+    _G.install(llm_chat, alt_fn=_fuse_alt_llm, model_name=str(MODEL_NAME or ""))
+    try:
+        _cfg = (CONTROL or {}).get("moments") or {}
+        if _cfg:
+            _M.configure(**_cfg)
+    except Exception as e:      # noqa: silent-ok — 配置读不到就用默认节奏
+        LOG.debug("朋友圈节奏配置读取失败（用默认）：%s", e)
+    return _M, _G
 
 
 def _fus():
@@ -14162,6 +14250,49 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             except Exception as _f_e:      # noqa: silent-ok — 自增长挂了不能拖垮整轮
                 LOG.debug("能力自增长路由失败（忽略）：%s", _f_e)
 
+    # ②-9 朋友圈：说「发个朋友圈」就真发；说「看看朋友圈」就把最近几条读给你听。
+    #   内容全部由模型写（朋友圈文案、回复评论都是 AI 的话），载体只负责发/存/记账。
+    if answer is None:
+        try:
+            _mi = _moment_intent(user_input)
+            if _mi:
+                M, _G = _social()
+                if _mi == "post":
+                    _post, _why = M.auto_try(
+                        context="我刚才跟用户聊：%s\n我回的是：%s" % (
+                            str(user_input or "")[:200],
+                            str(_CTX.get("_last_turn") or "")[:400]),
+                        author="小焦", force=True)
+                    if _post:
+                        tool_trace.append(_trace_entry("moment_post", {"text": _post["id"]},
+                                                       _post.get("text") or ""))
+                        _note_tool_path(tool_trace, path="moments")
+                        answer = ("发好了，在朋友圈里 ——\n\n%s\n\n> 这条是我自己写的%s。"
+                                  % (_post.get("text") or "",
+                                     "，配了张图" if _post.get("image") else "，纯文字"))
+                    else:
+                        answer = "这条没发出去：%s" % (_why or "模型没应答")
+                elif _mi == "list":
+                    _posts = M.list_posts(limit=5)
+                    if not _posts:
+                        answer = "朋友圈还没发过东西。要我发一条，说「发个朋友圈」就行。"
+                    else:
+                        # 不带时间戳：模型不需要它，而它会在「原始要点」里变成 10、30、01、30 这种噪音
+                        _rows = ["第 %d 条 ｜ 赞 %d ｜ 评论 %d ｜ %s" % (
+                            _i + 1, len(p.get("likes") or []), len(p.get("comments") or []),
+                            (p.get("text") or "")[:60])
+                            for _i, p in enumerate(_posts)]
+                        # 留痕：这几十个字是载体从朋友圈库里读出来的，属于"材料"
+                        # —— 不留痕，答案闸门会以为这一轮空手，给回答加一顶"没有可核查来源"的帽子。
+                        _facts_rows = "\n".join(_rows)
+                        tool_trace.append(_trace_entry("moment_list", {"n": len(_posts)},
+                                                       _facts_rows))
+                        _note_tool_path(tool_trace, path="moments")
+                        answer = _answer_with_facts(user_input, _facts_rows,
+                                                    label="最近几条动态")
+        except Exception as _mi_e:      # noqa: silent-ok — 朋友圈挂了不能拖垮对话
+            LOG.debug("朋友圈路由失败（忽略）：%s", _mi_e)
+
     # ③0 电子书采集：句子里有网址 + 「电子书/电子版/书」 + 「书目/清单」或「下载到 <目录>」
     #    → 直接打专用工具，**不交给模型挑**。
     # 【为什么必须放在直通前面】实测：说「用 ebook_manifest 解析一下这个书页」时，
@@ -15085,6 +15216,17 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     except Exception as _spe:      # noqa: silent-ok — 改写挂了也必须把答案给出去
         LOG.debug("模板收口失败（忽略）：%s", _spe)
 
+    # 4b-quinquies. 朋友圈：把这一轮当成素材，后台掷骰子决定发不发（不挡回答）。
+    #   判据（冷却/每日上限/几率）全在 `core/moments`，每次掷骰都落账，事后能查"这轮为什么没发"。
+    try:
+        _CTX["_last_turn"] = str(answer or "")[:800]
+        if answer and not lean and CAP.get("moments_auto", True):
+            import threading as _th3
+            _th3.Thread(target=_maybe_post_moment, args=(user_input, answer),
+                        daemon=True, name="xj-moment").start()
+    except Exception as _mo_e:      # noqa: silent-ok
+        LOG.debug("朋友圈·起线程失败（忽略）：%s", _mo_e)
+
     # 4c. 【第 2 步】把这一轮对话永久写进向量库 + 回填"模型是否真用上了检索到的记忆"    #     为什么写回要放在这一轮结束时：只有答案出来了才知道记忆有没有被用上；
     #     这条回填就是验收里"使用率 ≥70%"的唯一依据，必须如实记，不能自己给自己打高分。
     if answer and not lean:
@@ -15690,6 +15832,177 @@ def api_proof():
         return jsonify({"ok": True, **d})
     except Exception as e:      # noqa: silent-ok
         return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+# ================== 朋友圈 / 模型群组（2026-10-30）==================
+# 【为什么是独立页面】主界面是大字符串，两大块前端塞进去风险高；
+#   这两块自成一体，通过 JSON 接口打交道，所有文字都由模型生成。
+@app.route("/moments")
+def moments_page():
+    from core import social_pages as _SP
+    return Response(_SP.moments_html(), mimetype="text/html")
+
+
+@app.route("/aigroups")
+def aigroups_page():
+    from core import social_pages as _SP
+    return Response(_SP.groups_html(), mimetype="text/html")
+
+
+@app.route("/moments/img/<path:name>")
+def moments_img(name):
+    """发朋友圈时生成的图。只认 images 目录下的文件名（防路径穿越）。"""
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "moments", "images")
+    safe = os.path.basename(str(name or ""))
+    fp = os.path.join(d, safe)
+    if not safe or not os.path.isfile(fp):
+        return jsonify({"ok": False, "error": "没有这张图"}), 404
+    return send_file(fp)
+
+
+@app.route("/api/moments")
+def api_moments():
+    try:
+        M, _G = _social()
+        from core import personas as PS
+        return jsonify({"ok": True, "posts": M.list_posts(limit=int(request.args.get("limit") or 30)),
+                        "stats": M.stats(), "personas": PS.list_all()})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/moments/post", methods=["POST"])
+def api_moments_post():
+    """发一条。`ask=true` 表示让它自己写（默认）；也可直接给 text。"""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        M, _G = _social()
+        if str(data.get("text") or "").strip():
+            post = M.publish(str(data.get("text")).strip(), source="manual",
+                             author=str(data.get("author") or "小焦"))
+            return jsonify({"ok": bool(post), "post": post, "why": "按你给的内容发了"})
+        ctx = "%s\n%s" % (str(data.get("context") or ""),
+                          _CTX.get("_last_turn") or "")
+        post, why = M.auto_try(context=ctx, topic=str(data.get("topic") or ""),
+                               with_image=bool(data.get("with_image")), force=True)
+        if not post:
+            return jsonify({"ok": False, "error": why, "why": why})
+        return jsonify({"ok": True, "post": post, "why": why})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/moments/like", methods=["POST"])
+def api_moments_like():
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        M, _G = _social()
+        r = M.like(str(data.get("id") or ""), who=str(data.get("who") or "你"))
+        return jsonify(r)
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/moments/comment", methods=["POST"])
+def api_moments_comment():
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        M, _G = _social()
+        r = M.comment(str(data.get("id") or ""), str(data.get("text") or ""),
+                      who=str(data.get("who") or "你"))
+        return jsonify(r)
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/personas", methods=["GET", "POST"])
+def api_personas():
+    from core import personas as PS
+    if request.method == "GET":
+        return jsonify({"ok": True, "personas": PS.list_all()})
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        rec = PS.set_persona(str(data.get("name") or "小焦"), str(data.get("persona") or ""),
+                             model=str(data.get("model") or ""),
+                             enabled=bool(data.get("enabled", True)))
+        return jsonify({"ok": True, "persona": rec})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/aigroups")
+def api_aigroups():
+    try:
+        _M, G = _social()
+        return jsonify({"ok": True, "groups": G.list_groups(), "stats": G.stats()})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/aigroups", methods=["POST"])
+def api_aigroups_create():
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        r = G.create(str(data.get("name") or ""), topic=str(data.get("topic") or ""),
+                     members=data.get("members") or [], style=str(data.get("style") or ""))
+        return jsonify(r)
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/aigroups/<gid>")
+def api_aigroup_get(gid):
+    try:
+        _M, G = _social()
+        g = G.get(gid)
+        if not g:
+            return jsonify({"ok": False, "error": "没有这个群"}), 404
+        return jsonify({"ok": True, "group": g})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/aigroups/<gid>", methods=["DELETE"])
+def api_aigroup_del(gid):
+    try:
+        _M, G = _social()
+        return jsonify(G.remove(gid))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/aigroups/<gid>/run", methods=["POST"])
+def api_aigroup_run(gid):
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        return jsonify(G.run_round(gid, rounds=int(data.get("rounds") or 1)))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/aigroups/<gid>/say", methods=["POST"])
+def api_aigroup_say(gid):
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        return jsonify(G.user_say(gid, str(data.get("text") or ""),
+                                  who=str(data.get("who") or "你")))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/aigroups/<gid>/member", methods=["POST"])
+def api_aigroup_member(gid):
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        return jsonify(G.set_member(gid, str(data.get("member") or ""),
+                                    persona=data.get("persona"),
+                                    model=data.get("model")))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
 
 
 @app.route("/api/central")
@@ -19669,6 +19982,8 @@ HTML = r"""<!DOCTYPE html>
       <div class="setnav-item" data-sec="model" onclick="setSec(this,'model')">🎛️ 模型</div>
       <div class="setnav-item" data-sec="plugins" onclick="setSec(this,'plugins')">🧩 插件</div>
       <div class="setnav-item" data-sec="presets" onclick="setSec(this,'presets')">🎭 Agent 预设</div>
+      <a class="setnav-item" href="/moments" target="_blank" style="display:flex;text-decoration:none">🌤️ 朋友圈</a>
+      <a class="setnav-item" href="/aigroups" target="_blank" style="display:flex;text-decoration:none">👥 模型群组</a>
     </div>
     <div class="setbody">
       <div class="sec" id="sec-presets">

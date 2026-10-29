@@ -84,6 +84,14 @@ def extract_claims(text):
     for m in _NUM_UNIT.finditer(t):
         add("数值", m.group(1), m.group(0))
     for m in _SCORE.finditer(t):
+        # 【IP:端口 不是比分】实测：模型写 `192.168.1.100:5000`，这里抠出 `100:5000` 当比分，
+        #   于是给一句正常解释扣了顶「这条里的「100:5000」没找到依据」的帽子。
+        #   判据：比号两边只要紧挨着小圆点（IP/版本号/端口），或者左边是 4 段点分数字 → 跳过。
+        _l = t[max(0, m.start() - 1):m.start()]
+        _r = t[m.end():m.end() + 1]
+        _around = t[max(0, m.start() - 16):m.end() + 4]
+        if _l in (".",) or _r in (".",) or re.search(r"\d+\.\d+\.\d+\.\d+:\d+", _around):
+            continue
         add("比分", "%s:%s" % (m.group(1), m.group(2)), m.group(0))
     for m in _DATE.finditer(t):
         add("日期", m.group(1), m.group(1))
