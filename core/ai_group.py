@@ -65,8 +65,35 @@ def set_available_models(names):
     return _AVAILABLE_MODELS
 
 
+_LLM_BASE = ""
+
+
+def set_llm_base(url):
+    """把模型服务地址注进来（用于"没人灌过火种名单时自己去问一次"）。"""
+    global _LLM_BASE
+    _LLM_BASE = str(url or "").rstrip("/")
+    return _LLM_BASE
+
+
 def available_models():
-    return list(_AVAILABLE_MODELS)
+    """当前可选火种。
+
+    先看 app 灌进来的名单；没有就按注入的 base 自己去 `/v1/models` 问一次 ——
+    实测页面直接渲染时没人灌，于是邀请按钮只剩「（默认火种）」一个，等于没得选。
+    """
+    if _AVAILABLE_MODELS:
+        return list(_AVAILABLE_MODELS)
+    if not _LLM_BASE:
+        return []
+    try:
+        import json as _json
+        import urllib.request as _uq
+        with _uq.urlopen(_LLM_BASE + "/models", timeout=3) as r:
+            d = _json.loads(r.read().decode("utf-8", "ignore"))
+        return [str(m.get("id")) for m in (d.get("data") or []) if m.get("id")]
+    except Exception as e:      # noqa: silent-ok — 问不到就当没有
+        LOG.debug("列火种失败（%s）：%s", _LLM_BASE, e)
+        return []
 
 
 def _norm_members(members):
@@ -82,7 +109,8 @@ def _norm_members(members):
             continue
         mem.append({"name": nm,
                     "persona": str((m or {}).get("persona") or "").strip(),
-                    "model": str((m or {}).get("model") or "").strip()})
+                    "model": str((m or {}).get("model") or "").strip(),
+                    "admin": bool((m or {}).get("admin"))})
     for i, m in enumerate(mem):
         m["color"] = _COLORS[i % len(_COLORS)]
     return mem[:MAX_MEMBERS]
@@ -107,8 +135,9 @@ def set_auto(gid, on, interval_s=18, rounds=12):
     if st.get("on"):
         return {"ok": True, "auto": {"on": True, "interval": st.get("interval"),
                                      "rounds": st.get("rounds")}}
-    st.update({"on": True, "interval": max(6, int(interval_s or 18)),
-               "rounds": max(1, min(int(rounds or 12), 40))})
+    _r = int(rounds or 0)
+    st.update({"on": True, "interval": max(10, int(interval_s or 25)),
+               "rounds": 0 if _r <= 0 else max(1, min(_r, 200))})
     _AUTO[gid] = st
 
     def _loop(_gid=gid):
@@ -121,7 +150,8 @@ def set_auto(gid, on, interval_s=18, rounds=12):
             except Exception as e:      # noqa: silent-ok — 自动聊挂了不能把服务带崩
                 LOG.debug("自动聊一轮失败：%s", e)
             _done += 1
-            if _done >= int(_s.get("rounds") or 12):
+            _cap = int(_s.get("rounds") or 0)
+            if _cap and _done >= _cap:
                 _s["on"] = False
                 _AUTO[_gid] = _s
                 _event("auto_done", gid=_gid, rounds=_done)
@@ -216,14 +246,27 @@ def create(name, topic="", members=None, style=""):
     with _LOCK:
         d = _load()
         g = {"id": uuid.uuid4().hex[:8], "name": name, "topic": str(topic or "").strip(),
-             "style": str(style or "").strip(),
+             "style": str(style or "").strip(), "avatar": "",
+             "notice": str(style or "").strip(),
              "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
              "members": mem, "messages": []}
         d["groups"].append(g)
         _save(d)
     _event("create", gid=g["id"], name=name, members=[m["name"] for m in mem], topic=g["topic"])
     LOG.info("群组：建了「%s」（%d 人 / 主题=%s）", name, len(mem), g["topic"] or "未设")
-    return {"ok": True, "group": g}
+    # 【建好就开始自己聊】用户要的是"他们不用等用户发言也会自己聊，跟人一样"。
+    #   所以建群即开自动聊：每 25 秒一轮、不设轮数上限（想停就点停）。
+    try:
+        set_auto(g["id"], True, interval_s=25, rounds=0)
+    except Exception as e:      # noqa: silent-ok — 起不来也能手动点「自动聊」
+        LOG.debug("建群后自动聊启动失败（忽略）：%s", e)
+    _g2 = get(g["id"]) or g
+    try:
+        _g2 = dict(_g2)
+        _g2["auto"] = auto_state(g["id"])      # 让前端/接口一眼看到"已经在自己聊了"
+    except Exception:      # noqa: silent-ok
+        pass
+    return {"ok": True, "group": _g2}
 
 
 def list_groups():
@@ -283,6 +326,51 @@ def set_member(gid, member, persona=None, model=None):
                 return {"ok": True, "member": m}
             return {"ok": False, "error": "群里没有这个人：%s" % member}
     return {"ok": False, "error": "没有这个群"}
+
+
+def set_group(gid, name=None, topic=None, notice=None, avatar=None):
+    """改群资料（群名/主题/群公告/群头像文件名）。只改传进来的那几项。"""
+    with _LOCK:
+        d = _load()
+        for g in d.get("groups") or []:
+            if g.get("id") != gid:
+                continue
+            if name is not None and str(name).strip():
+                g["name"] = str(name).strip()
+            if topic is not None:
+                g["topic"] = str(topic).strip()
+            if notice is not None:
+                g["notice"] = str(notice).strip()
+            if avatar is not None:
+                g["avatar"] = str(avatar).strip()
+            _save(d)
+            _event("set_group", gid=gid)
+            LOG.info("群组：改了群资料（%s）", g.get("name"))
+            return {"ok": True, "group": g}
+    return {"ok": False, "error": "没有这个群"}
+
+
+def set_admin(gid, name, on=True):
+    """设/取消管理员。"""
+    with _LOCK:
+        d = _load()
+        for g in d.get("groups") or []:
+            if g.get("id") != gid:
+                continue
+            for m in g.get("members") or []:
+                if m.get("name") != name:
+                    continue
+                m["admin"] = bool(on)
+                _save(d)
+                _event("set_admin", gid=gid, member=name, on=bool(on))
+                return {"ok": True, "member": m}
+            return {"ok": False, "error": "群里没有这个人：%s" % name}
+    return {"ok": False, "error": "没有这个群"}
+
+
+def set_avatar(gid, filename):
+    """记下群头像文件名（真文件由调用方存到 `logs/aigroups/avatars/`）。"""
+    return set_group(gid, avatar=filename)
 
 
 def add_member(gid, name, persona="", model=""):

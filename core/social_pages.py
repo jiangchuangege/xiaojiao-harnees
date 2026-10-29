@@ -207,299 +207,340 @@ def groups_html():
       <div class="row" style="margin-top:10px"><button id="btnG">建群</button>
         <span class="muted" id="gmsg"></span></div>
     </div>
-    <div class="card"><div class="row"><b>我的群</b></div>
+    <div class="card"><div class="row"><b>我的群</b><span class="grow"></span>
+      <span class="muted">点群名进房间；✕ 退出</span></div>
       <div class="glist" id="glist" style="margin-top:8px"></div></div>
   </div>
-
   <div>
-    <div class="chatbox" id="chat" style="display:none">
-      <div class="chathead">
-        <div class="row"><b id="cName"></b><span class="pill" id="cTopic"></span>
-          <span class="grow"></span>
-          <button class="ghost sm" onclick="run(1)">聊 1 轮</button>
-          <button class="ghost sm" onclick="run(3)">聊 3 轮</button>
-          <button class="sm" id="btnAutoOn">自动聊</button>
-          <button class="ghost sm" id="btnAutoOff">停</button>
-        </div>
-        <div class="row" style="margin-top:8px" id="memberChips"></div>
-        <div class="row" style="margin-top:6px">
-          <span class="muted" id="autoSt"></span>
-        </div>
-      </div>
-      <div class="chatbody" id="msgs"></div>
-      <div class="chatfoot">
-        <div class="row"><input class="grow" id="say" placeholder="你也可以插一句…"/>
-          <button class="sm" onclick="say()">发送</button></div>
-        <div class="muted" id="cmsg" style="margin-top:7px"></div>
-      </div>
-    </div>
-    <div class="card" id="empty"><span class="muted">左边建个群，或点一个已有的群。</span></div>
-
-    <div class="card" id="manage" style="display:none">
-      <div class="row"><b>成员与人设</b><span class="muted">（改完点保存，立刻生效）</span></div>
-      <div id="mlist" style="margin-top:10px"></div>
-      <div class="row" style="margin-top:10px">
-        <input id="addName" placeholder="加人：名字" style="max-width:140px"/>
-        <input id="addModel" placeholder="火种（可空）" style="max-width:160px"/>
-        <button class="sm" onclick="addMember()">加到群里</button>
-        <span class="muted" id="addMsg"></span>
-      </div>
-    </div>
+    <div class="card"><span class="muted">建好群会自动进它的房间页；也可以直接点左边的群。
+      房间里才有「邀请模型」「自动聊」「退出群」。</span></div>
   </div>
 </div>
 """
     js = """
-let CUR='';
+function toast(el,m,ok){if(!el)return;el.textContent=m;el.className=ok?'ok':'err';
+  setTimeout(()=>{if(el.textContent===m)el.textContent=''},5000)}
 async function loadGroups(){
-  const d=await J('/api/aigroups');const L=d.groups||[];
-  document.getElementById('glist').innerHTML=L.length?L.map(g=>
-    '<div class="'+(g.id===CUR?'on':'')+'" onclick="open_(\\''+g.id+'\\')">'+esc(g.name)+
-    (g.auto&&g.auto.on?' <span class="pill">自动聊中</span>':'')+
-    '<div class="muted" style="font-size:12px">'+esc(g.topic||'无主题')+' ｜ '+
-    (g.members||[]).length+' 人 ｜ '+g.messages+' 条</div>'+'<button class="sm danger" style="margin-left:6px;flex:0 0 auto" onclick="event.stopPropagation();delGroup(\''+g.id+'\',\''+esc(g.name)+'\')">✕ 退出</button>'+'</div>').join('')
-    :'<div class="muted">还没有群</div>';
-  const cur=L.find(x=>x.id===CUR);
-  if(cur){document.getElementById('autoSt').textContent=cur.auto&&cur.auto.on?
-    ('自动聊进行中（每 '+cur.auto.interval+'s 一轮，最多 '+cur.auto.rounds+' 轮）'):''}
+  const d=await J('/api/aigroups');
+  const L=d.groups||[];
+  const box=document.getElementById('glist');
+  if(!L.length){box.innerHTML='<div class="muted">还没有群。左边填个名字建一个。</div>';return}
+  box.innerHTML=L.map(function(g){
+    const aut=(g.auto&&g.auto.on)?' <span class="pill">自动聊中</span>':'';
+    return '<div class="row" style="align-items:flex-start;padding:3px 0">'+
+      '<a href="/aigroups/'+g.id+'" style="flex:1;min-width:0;display:block;padding:8px 10px;'+
+      'border-radius:10px;background:transparent" class="gopen">'+
+      '<b>'+esc(g.name)+'</b>'+aut+
+      '<div class="muted" style="font-size:12px">'+esc(g.topic||'无主题')+' ｜ '+
+      (g.members||[]).length+' 人 ｜ '+g.messages+' 条</div></a>'+
+      '<button class="sm danger" data-gid="'+g.id+'" data-name="'+esc(g.name)+'">✕</button>'+
+      '</div>';
+  }).join('');
 }
-async function open_(id){CUR=id;await loadGroups();
-  const d=await J('/api/aigroups/'+id);if(!d.ok)return;const g=d.group||{};
-  document.getElementById('chat').style.display='';
-  document.getElementById('manage').style.display='';
-  document.getElementById('empty').style.display='none';
-  document.getElementById('cName').textContent=g.name||'';
-  document.getElementById('cTopic').textContent=g.topic||'无主题';
-  const M=g.members||[];
-  document.getElementById('memberChips').innerHTML=M.map(m=>
-    '<span class="chip">'+av(m.name,m.color)+esc(m.name)+
-    (m.model?'<span class="muted" style="font-size:11px">'+esc(m.model)+'</span>':'')+'</span>').join('');
-  const cmap={};M.forEach(m=>cmap[m.name]=m.color);
-  const msgs=g.messages||[];
-  document.getElementById('msgs').innerHTML=msgs.length?msgs.map(m=>
-    '<div class="msg '+(m.who==='你'?'me':'')+'">'+av(m.who,cmap[m.who]||'#5a6478')+
-    '<div><div class="meta"><b style="color:'+(cmap[m.who]||'#9aa3b5')+'">'+esc(m.who)+
-    '</b> <span class="muted">'+ht(m.ts)+'</span></div><div class="b">'+esc(m.text)+'</div></div></div>'
-  ).join(''):'<div class="muted">还没有人说话。点「聊 1 轮」或开「自动聊」。</div>';
-  const box=document.getElementById('msgs');box.scrollTop=box.scrollHeight;
-  document.getElementById('mlist').innerHTML=M.map((m,i)=>
-    '<div class="card" style="background:var(--card2);margin-bottom:8px;padding:10px">'+
-    '<div class="row">'+av(m.name,m.color)+'<b>'+esc(m.name)+'</b>'+
-    '<input class="grow" style="max-width:170px" id="mm_'+i+'" value="'+esc(m.model||'')+'" placeholder="火种（可空）"/>'+
-    '<button class="sm" onclick="saveMember('+i+')">保存</button>'+
-    '<button class="sm danger" onclick="delMember(\\''+esc(m.name)+'\\')">删</button></div>'+
-    '<textarea id="mp_'+i+'" style="margin-top:7px" placeholder="这个人的性格/说话方式">'+esc(m.persona||'')+'</textarea>'+
-    '</div>').join('')
-}
-async function run(n){if(!CUR)return;const el=document.getElementById('cmsg');
-  el.textContent='它们在聊…';el.className='muted';
-  const d=await P('/api/aigroups/'+CUR+'/run',{rounds:n});
-  if(!d.ok){el.textContent=d.error||'失败';el.className='err';return}
-  el.textContent='新增 '+(d.added||[]).length+' 条';el.className='ok';open_(CUR)}
-async function say(){const el=document.getElementById('say');const t=(el.value||'').trim();if(!t||!CUR)return;
-  const d=await P('/api/aigroups/'+CUR+'/say',{text:t});
-  if(!d.ok)return toast(document.getElementById('cmsg'),d.error);el.value='';open_(CUR)}
-async function addMember(){if(!CUR)return;
-  const d=await P('/api/aigroups/'+CUR+'/member/add',
-    {name:document.getElementById('addName').value,model:document.getElementById('addModel').value});
-  toast(document.getElementById('addMsg'),d.ok?'加好了':(d.error||'失败'),!!d.ok);
-  if(d.ok){document.getElementById('addName').value='';document.getElementById('addModel').value='';open_(CUR)}}
-async function delMember(name){if(!CUR)return;
-  const d=await P('/api/aigroups/'+CUR+'/member/remove',{name:name});
-  toast(document.getElementById('cmsg'),d.ok?'已移除 '+name:(d.error||'失败'),!!d.ok);
-  if(d.ok)open_(CUR)}
-async function saveMember(i){if(!CUR)return;
-  const d=await J('/api/aigroups/'+CUR);const M=((d.group||{}).members)||[];const m=M[i]||{};
-  const r=await P('/api/aigroups/'+CUR+'/member',{member:m.name,
-    persona:document.getElementById('mp_'+i).value,
-    model:document.getElementById('mm_'+i).value});
-  toast(document.getElementById('cmsg'),r.ok?'人设已保存':(r.error||'失败'),!!r.ok);
-  if(r.ok)open_(CUR)}
-document.getElementById('btnAutoOn').onclick=async()=>{if(!CUR)return;
-  const d=await P('/api/aigroups/'+CUR+'/auto',{on:true,interval:16,rounds:12});
-  toast(document.getElementById('cmsg'),d.ok?'开始自动聊（AI 之间自己对话）':(d.error||'失败'),!!d.ok);
-  loadGroups()}
-document.getElementById('btnAutoOff').onclick=async()=>{if(!CUR)return;
-  const d=await P('/api/aigroups/'+CUR+'/auto',{on:false});
-  toast(document.getElementById('cmsg'),d.ok?'停了':(d.error||'失败'),!!d.ok);loadGroups()}
 async function delGroup(id,name){
-  if(!confirm('退出并删除这个群「'+name+'」？（聊天记录会一起没了）'))return;
+  if(!confirm('退出并删除群「'+name+'」？聊天记录会一起没了。'))return;
   const d=await D('/api/aigroups/'+id);
   toast(document.getElementById('gmsg'),d.ok?('已退出「'+name+'」'):(d.error||'失败'),!!d.ok);
-  if(CUR===id){CUR='';document.getElementById('chat').style.display='none';
-    document.getElementById('manage').style.display='none';
-    document.getElementById('empty').style.display=''}
-  loadGroups()}
-document.getElementById('btnDefault').onclick=()=>{document.getElementById('gMembers').value='小焦,阿码,老曲'};
-document.getElementById('btnG').onclick=async()=>{
+  loadGroups();
+}
+document.getElementById('glist').addEventListener('click',function(ev){
+  const b=ev.target.closest('button[data-gid]');
+  if(!b)return;
+  ev.preventDefault();ev.stopPropagation();
+  delGroup(b.dataset.gid,b.dataset.name);
+});
+document.getElementById('btnDefault').onclick=function(){
+  document.getElementById('gMembers').value='小焦,阿码,老曲'};
+document.getElementById('btnG').onclick=async function(){
+  const nm=(document.getElementById('gName').value||'').trim();
+  if(!nm){document.getElementById('gmsg').textContent='先给群起个名字';return}
   const raw=(document.getElementById('gMembers').value||'').trim();
   const names=raw?raw.split(/[,，\\s]+/).filter(Boolean):[];
-  const d=await P('/api/aigroups',{name:document.getElementById('gName').value,
-    topic:document.getElementById('gTopic').value,style:document.getElementById('gStyle').value,
-    members:names.map(n=>({name:n}))});
-  if(!d.ok)return toast(document.getElementById('gmsg'),d.error||'建群失败');
-  toast(document.getElementById('gmsg'),'建好了，正在进群…',true);
-  document.getElementById('gName').value='';
-  location.href='/aigroups/'+d.group.id;};
-loadGroups();setInterval(()=>{loadGroups();if(CUR&&document.getElementById('chat').style.display!=='none')open_(CUR)},6000);
+  const d=await P('/api/aigroups',{name:nm,
+    topic:document.getElementById('gTopic').value,
+    style:document.getElementById('gStyle').value,
+    members:names.map(function(n){return {name:n}})});
+  if(!d.ok){toast(document.getElementById('gmsg'),d.error||'建群失败');return}
+  location.href='/aigroups/'+d.group.id;
+};
+loadGroups();setInterval(loadGroups,15000);
 """
     return _page("模型群组", body, js)
 
 
 # ==================== 单个群的独立房间页 ====================
 def group_room_html(gid):
-    """一个群一个页面（`/aigroups/<gid>`）：整页聊天 + **点选**邀请 + 退出群。
+    """群里就该只有群聊：整页一间隔聊窗口 + 三个抽屉（邀请/成员/设置）。"""
+    import html as _html
 
-    【为什么邀请要点选】用户原话：「我不要输入，输入容易出错太鸡肋，直接邀请选择某个模型」。
-    所以火种、人设都列成一排按钮，点一下就邀进来；自定义名字是可选项，不是必经步骤。
-    """
+    def _chip(kind, val, existing):
+        on = val in (existing or set())
+        return ('<button class="sm %s" data-kind="%s" data-val="%s"%s>%s%s</button>'
+                % ("ghost" if on else "", kind, _html.escape(str(val), quote=True),
+                   " disabled" if on else "", "✓ " if on else "＋ ",
+                   _html.escape(str(val))))
+
+    try:
+        from core import ai_group as _AG, personas as _PS
+        _models = _AG.available_models() or []
+        _pnames = [r.get("name") for r in (_PS.list_all() or []) if r.get("name")]
+        _g = _AG.get(gid) or {}
+    except Exception:      # noqa: silent-ok — 列不出来就给个占位，页面照样能用
+        _models, _pnames, _g = [], ["小焦"], {}
+    _existing = {m.get("name") for m in (_g.get("members") or [])}
+    _model_chips = "".join(_chip("model", x, _existing) for x in (_models or ["（默认火种）"]))
+    _persona_chips = "".join(_chip("persona", x, _existing) for x in _pnames)
+
     body = """
-<div class="row"><h1 id="rName">…</h1><span class="pill" id="rTopic"></span>
-  <span class="grow"></span>
-  <button class="sm" id="btnInviteOpen">＋ 邀请模型</button>
-  <button class="ghost sm" id="btnAuto">自动聊</button>
-  <button class="ghost sm" id="btnStop">停</button>
-  <button class="sm danger" id="btnQuit">退出群</button>
-  <a href="/aigroups" style="margin-left:8px">← 所有群</a>
-  <a href="/moments">🌤️ 朋友圈</a></div>
-<div class="sub" id="rSub">一屋子 AI 在这里自己聊；你可以随时插话，也可以邀请别的模型进来。</div>
+<style>
+.room{max-width:900px;margin:0 auto}
+.rhead{display:flex;gap:12px;align-items:center;background:var(--card);border:1px solid var(--line);
+border-radius:16px;padding:12px 14px;position:sticky;top:8px;z-index:5}
+.rhead .gav{width:52px;height:52px;border-radius:14px;background:#2a3140;display:flex;
+align-items:center;justify-content:center;font-size:22px;cursor:pointer;overflow:hidden;flex:0 0 auto}
+.rhead .gav img{width:100%;height:100%;object-fit:cover}
+.rbody{background:var(--card);border:1px solid var(--line);border-radius:16px;margin-top:12px;
+display:flex;flex-direction:column;height:calc(100vh - 210px);min-height:340px}
+.rmsgs{flex:1;overflow:auto;padding:14px}
+.rfoot{border-top:1px solid var(--line);padding:10px 12px}
+.drawer{display:none;margin-top:12px;background:var(--card);border:1px solid var(--line);
+border-radius:16px;padding:14px}
+.drawer.on{display:block}
+.mrow{display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px dashed #222a38}
+.mrow:last-child{border-bottom:0}
+.tag{background:#2a3550;color:#a9b8ff;border-radius:8px;padding:1px 7px;font-size:11px}
+.notice{background:#1a2030;border-radius:10px;padding:8px 10px;color:#b9c3d6;font-size:13px;margin-top:8px}
+</style>
 
-<!-- 邀请抽屉：默认收着，点「邀请模型」展开。全部是点选，不用打字。 -->
-<div class="card" id="invPanel" style="display:none">
-  <div class="row"><b>邀请谁进来</b><span class="muted">（点一下就邀，不用打字）</span>
-    <span class="grow"></span>
-    <button class="ghost sm" onclick="document.getElementById('invPanel').style.display='none'">收起</button></div>
-  <div class="muted" style="margin-top:8px">按火种邀请</div>
-  <div class="row" id="invModels" style="margin-top:6px"></div>
-  <div class="muted" style="margin-top:10px">按已有的人设邀请</div>
-  <div class="row" id="invPersonas" style="margin-top:6px"></div>
-  <div class="row" style="margin-top:10px">
-    <button class="ghost sm" onclick="toggleCustom()">自定义一个（可选）</button>
-    <span class="muted" id="invMsg"></span></div>
-  <div id="invCustom" style="display:none;margin-top:8px">
-    <div class="row"><input id="invName" placeholder="名字" class="grow"/>
-      <input id="invModelCustom" placeholder="火种（可空）" style="max-width:170px"/></div>
-    <textarea id="invPersona" placeholder="人设（可空）" style="margin-top:8px"></textarea>
-    <div class="row" style="margin-top:8px"><button class="sm" onclick="inviteCustom()">加进来</button></div>
+<div class="room">
+  <div class="rhead">
+    <div class="gav" id="gav" title="点一下换群头像">__GAV_INIT__</div>
+    <div style="flex:1;min-width:0">
+      <div class="row"><b id="rName" style="font-size:17px">…</b>
+        <span class="pill" id="rAuto">自动聊中</span></div>
+      <div class="muted" id="rSub" style="font-size:12px">…</div>
+    </div>
+    <button class="sm" data-drawer="inv">＋ 邀请</button>
+    <button class="ghost sm" data-drawer="mem">成员</button>
+    <button class="ghost sm" data-drawer="set">设置</button>
+    <a href="/aigroups" class="ghost sm" style="padding:6px 10px;border-radius:10px;background:#222a3a">←</a>
   </div>
-</div>
 
-<div class="grid">
-  <div>
-    <div class="card"><div class="row"><b>群成员</b><span class="grow"></span>
-      <span class="muted">改完点保存</span></div><div id="mlist" style="margin-top:9px"></div></div>
-  </div>
-  <div>
-    <div class="chatbox">
-      <div class="chathead"><div class="row" id="chips"></div>
-        <div class="row" style="margin-top:7px"><span class="muted" id="autoSt"></span></div></div>
-      <div class="chatbody" id="msgs" style="max-height:62vh"></div>
-      <div class="chatfoot">
-        <div class="row"><input class="grow" id="say" placeholder="你也可以插一句…"/>
-          <button class="sm" onclick="say()">发送</button>
-          <button class="ghost sm" onclick="run(1)">聊 1 轮</button></div>
-        <div class="muted" id="cmsg" style="margin-top:7px"></div>
-      </div>
+  <div class="rbody">
+    <div class="rmsgs" id="msgs"></div>
+    <div class="rfoot">
+      <div class="row"><input class="grow" id="say" placeholder="说点什么…（它自己也会聊，不用你催）"/>
+        <button id="btnSay">发送</button></div>
+      <div class="row" style="margin-top:7px">
+        <button class="ghost sm" id="btnAuto">开始自己聊</button>
+        <button class="ghost sm" id="btnStop">停</button>
+        <button class="ghost sm" id="btnRun1">聊 1 轮</button>
+        <span class="muted" id="cmsg"></span></div>
     </div>
   </div>
+
+  <!-- 邀请抽屉 -->
+  <div class="drawer" id="d-inv">
+    <div class="row"><b>邀请模型进群</b><span class="muted">（点一下就邀，不用打字）</span>
+      <span class="grow"></span><button class="ghost sm" data-close="inv">收起</button></div>
+    <div class="muted" style="margin-top:8px">按火种</div>
+    <div class="row" id="invModels" style="margin-top:6px">__MODEL_CHIPS__</div>
+    <div class="muted" style="margin-top:10px">按人设</div>
+    <div class="row" id="invPersonas" style="margin-top:6px">__PERSONA_CHIPS__</div>
+    <div class="row" style="margin-top:10px"><button class="ghost sm" id="btnCustom">自定义一个（可选）</button>
+      <span class="muted" id="invMsg"></span></div>
+    <div id="invCustom" style="display:none;margin-top:8px">
+      <div class="row"><input id="invName" placeholder="名字" class="grow"/>
+        <input id="invModelCustom" placeholder="火种（可空）" style="max-width:170px"/></div>
+      <textarea id="invPersona" placeholder="人设（可空）" style="margin-top:8px"></textarea>
+      <div class="row" style="margin-top:8px"><button class="sm" id="btnInvCustom">加进来</button></div>
+    </div>
+  </div>
+
+  <!-- 成员抽屉 -->
+  <div class="drawer" id="d-mem">
+    <div class="row"><b>群成员</b><span class="muted">（可设管理员 / 移除）</span>
+      <span class="grow"></span><button class="ghost sm" data-close="mem">收起</button></div>
+    <div id="mlist" style="margin-top:8px"></div>
+  </div>
+
+  <!-- 设置抽屉 -->
+  <div class="drawer" id="d-set">
+    <div class="row"><b>群设置</b><span class="grow"></span>
+      <button class="ghost sm" data-close="set">收起</button></div>
+    <div style="margin-top:9px"><input id="setName" placeholder="群名"/></div>
+    <div style="margin-top:8px"><input id="setTopic" placeholder="主题"/></div>
+    <div style="margin-top:8px"><input id="setNotice" placeholder="群公告（大家都能看到）"/></div>
+    <div class="row" style="margin-top:10px"><button class="sm" id="btnSaveSet">保存群资料</button>
+      <button class="ghost sm" id="btnAvatar">上传群头像</button>
+      <button class="sm danger" id="btnQuit">退出群</button>
+      <span class="muted" id="setMsg"></span></div>
+    <input type="file" id="avatarFile" accept="image/*" style="display:none"/>
+  </div>
 </div>
-"""
+""".replace("__GAV_INIT__", "焦").replace(
+        "__MODEL_CHIPS__", _model_chips).replace("__PERSONA_CHIPS__", _persona_chips)
+
     js = """
-const GID='%s';let LASTN=0,MODELS=[],PERSONAS=[];
-function toggleCustom(){const e=document.getElementById('invCustom');
-  e.style.display=(e.style.display==='none'?'':'none')}
-async function boot(){
-  const m=await J('/api/aigroups/models');MODELS=m.models||[];
-  const p=await J('/api/personas');PERSONAS=(p.personas||[]).map(x=>x.name);
-  await load();
+const GID='__GID__';let LASTN=0,MODELS=[],NAMES={};
+function toast(el,m,ok){if(!el)return;el.textContent=m;el.className=ok?'ok':'err';
+  setTimeout(function(){if(el.textContent===m)el.textContent=''},5000)}
+function openDrawer(k){
+  ['inv','mem','set'].forEach(function(x){
+    document.getElementById('d-'+x).classList.toggle('on',x===k)});
+  if(k==='set')fillSettings();
 }
-function renderInvite(cur){
-  const have=new Set(cur||[]);
-  document.getElementById('invModels').innerHTML=(MODELS.length?MODELS:['（默认火种）']).map(x=>{
-    const on=have.has(x);
-    return '<button class="sm '+(on?'ghost':'')+'" '+(on?'disabled':'')+
-      ' onclick="inviteModel(\''+esc(x)+'\')">'+(on?'✓ ':'＋ ')+esc(x)+'</button>'}).join('');
-  document.getElementById('invPersonas').innerHTML=(PERSONAS.length?PERSONAS:['小焦']).map(x=>{
-    const on=have.has(x);
-    return '<button class="sm '+(on?'ghost':'')+'" '+(on?'disabled':'')+
-      ' onclick="invitePersona(\''+esc(x)+'\')">'+(on?'✓ ':'＋ ')+esc(x)+'</button>'}).join('');
-}
+function closeDrawer(k){document.getElementById('d-'+k).classList.remove('on')}
 async function inviteModel(model){
   const d=await P('/api/aigroups/'+GID+'/invite',{model:model});
-  toast(document.getElementById('invMsg'),d.ok?('已邀请 '+model):((d.failed||[]).join('、')||d.error||'失败'),!!d.ok);
-  if(d.ok)load()}
+  toast(document.getElementById('invMsg'),
+    d.ok?('已邀请 '+model):((d.failed||[]).join('、')||d.error||'失败'),!!d.ok);
+  if(d.ok)load();}
 async function invitePersona(name){
   const d=await P('/api/aigroups/'+GID+'/invite',{name:name});
-  toast(document.getElementById('invMsg'),d.ok?('已邀请 '+name):((d.failed||[]).join('、')||d.error||'失败'),!!d.ok);
-  if(d.ok)load()}
-async function inviteCustom(){
+  toast(document.getElementById('invMsg'),
+    d.ok?('已邀请 '+name):((d.failed||[]).join('、')||d.error||'失败'),!!d.ok);
+  if(d.ok)load();}
+async function toggleAdmin(name,on){
+  const d=await P('/api/aigroups/'+GID+'/admin',{name:name,on:on});
+  toast(document.getElementById('cmsg'),d.ok?((on?'设为管理员：':'取消管理员：')+name):(d.error||'失败'),!!d.ok);
+  if(d.ok)load();}
+async function delMember(name){
+  const r=await P('/api/aigroups/'+GID+'/member/remove',{name:name});
+  toast(document.getElementById('cmsg'),r.ok?'已移出 '+name:(r.error||'失败'),!!r.ok);
+  if(r.ok)load();}
+async function saveMemberPersona(name,i){
+  const r=await P('/api/aigroups/'+GID+'/member',{member:name,
+    persona:document.getElementById('mp_'+i).value,
+    model:document.getElementById('mm_'+i).value});
+  toast(document.getElementById('cmsg'),r.ok?'人设已保存':(r.error||'失败'),!!r.ok);
+  if(r.ok)load();}
+async function runRounds(n){
+  const el=document.getElementById('cmsg');el.textContent='它们在聊…';el.className='muted';
+  const d=await P('/api/aigroups/'+GID+'/run',{rounds:n});
+  if(!d.ok){el.textContent=d.error||'失败';el.className='err';return}
+  el.textContent='新增 '+(d.added||[]).length+' 条';el.className='ok';load();}
+async function saySomething(){
+  const el=document.getElementById('say');const t=(el.value||'').trim();if(!t)return;
+  const d=await P('/api/aigroups/'+GID+'/say',{text:t});
+  if(!d.ok){toast(document.getElementById('cmsg'),d.error);return}
+  el.value='';load();}
+async function fillSettings(){
+  const d=await J('/api/aigroups/'+GID);if(!d.ok)return;const g=d.group||{};
+  document.getElementById('setName').value=g.name||'';
+  document.getElementById('setTopic').value=g.topic||'';
+  document.getElementById('setNotice').value=g.notice||'';
+}
+async function load(){
+  const d=await J('/api/aigroups/'+GID);
+  if(!d.ok){document.getElementById('msgs').innerHTML='<div class="err">'+esc(d.error||'读不到这个群')+'</div>';return}
+  const g=d.group||{};
+  const M=g.members||[];const cmap={};NAMES={};
+  M.forEach(function(x){cmap[x.name]=x.color;NAMES[x.name]=x});
+  document.getElementById('rName').textContent=g.name||'';
+  document.getElementById('rSub').textContent=(g.topic||'无主题')+' ｜ '+M.length+' 人'+
+    (g.notice?' ｜ 公告：'+g.notice:'');
+  document.title=(g.name||'群')+' · 小焦';
+  const gav=document.getElementById('gav');
+  gav.innerHTML=g.avatar?'<img src="/aigroups/avatar/'+GID+'?t='+Date.now()+'"/>':'小焦群'.slice(0,1);
+  const l=await J('/api/aigroups');
+  const row=((l.groups||[]).filter(function(x){return x.id===GID})[0])||{};
+  const a=row.auto||{};
+  document.getElementById('rAuto').textContent=a.on?'自己聊中':'已暂停';
+  document.getElementById('rAuto').className='pill';
+  const msgs=g.messages||[];
+  document.getElementById('msgs').innerHTML=msgs.length?msgs.map(function(x){
+    const me=(x.who==='你');
+    const adm=(NAMES[x.who]||{}).admin?' <span class="tag">管理员</span>':'';
+    return '<div class="msg '+(me?'me':'')+'">'+av(x.who,cmap[x.who]||'#5a6478')+
+      '<div><div class="meta"><b style="color:'+(cmap[x.who]||'#9aa3b5')+'">'+esc(x.who)+
+      '</b>'+adm+' <span class="muted">'+ht(x.ts)+'</span></div>'+
+      '<div class="b">'+esc(x.text)+'</div></div></div>';
+  }).join(''):'<div class="muted">还没有人说话。它自己一会儿就会开口；也可以点「聊 1 轮」。</div>';
+  const box=document.getElementById('msgs');
+  if(msgs.length!==LASTN){box.scrollTop=box.scrollHeight;LASTN=msgs.length}
+  const lm=await J('/api/aigroups/models');MODELS=lm.models||[];
+  const lp=await J('/api/personas');
+  const PN=((lp.personas||[]).map(function(x){return x.name}));
+  document.getElementById('invModels').innerHTML=(MODELS.length?MODELS:['（默认火种）']).map(function(x){
+    const on=!!NAMES[x];
+    return '<button class="sm '+(on?'ghost':'')+'" data-kind="model" data-val="'+esc(x)+'"'+
+      (on?' disabled':'')+'>'+(on?'✓ ':'＋ ')+esc(x)+'</button>';
+  }).join('');
+  document.getElementById('invPersonas').innerHTML=(PN.length?PN:['小焦']).map(function(x){
+    const on=!!NAMES[x];
+    return '<button class="sm '+(on?'ghost':'')+'" data-kind="persona" data-val="'+esc(x)+'"'+
+      (on?' disabled':'')+'>'+(on?'✓ ':'＋ ')+esc(x)+'</button>';
+  }).join('');
+  document.getElementById('mlist').innerHTML=M.map(function(x,i){
+    const adm=x.admin;
+    return '<div class="mrow">'+av(x.name,x.color)+
+      '<div style="flex:1;min-width:0"><b>'+esc(x.name)+'</b>'+
+      (adm?' <span class="tag">管理员</span>':'')+
+      (x.model?' <span class="muted" style="font-size:12px">'+esc(x.model)+'</span>':'')+'</div>'+
+      '<button class="ghost sm" data-act="admin" data-val="'+esc(x.name)+'" data-on="'+(adm?'0':'1')+'">'+
+      (adm?'取消管理员':'设管理员')+'</button>'+
+      '<button class="sm danger" data-act="del" data-val="'+esc(x.name)+'">移除</button></div>'+
+      '<div class="row" style="margin:6px 0 10px"><input class="grow" id="mm_'+i+'" value="'+
+      esc(x.model||'')+'" placeholder="火种（可空）" style="max-width:150px"/>'+
+      '<button class="sm" data-act="save" data-val="'+esc(x.name)+'" data-i="'+i+'">保存人设</button></div>'+
+      '<textarea id="mp_'+i+'" style="margin-bottom:10px">'+esc(x.persona||'')+'</textarea>';
+  }).join('');
+}
+document.querySelectorAll('button[data-drawer]').forEach(function(b){
+  b.onclick=function(){openDrawer(b.dataset.drawer)}});
+document.querySelectorAll('button[data-close]').forEach(function(b){
+  b.onclick=function(){closeDrawer(b.dataset.close)}});
+document.getElementById('invModels').addEventListener('click',function(ev){
+  const b=ev.target.closest('button[data-kind]');if(!b||b.disabled)return;inviteModel(b.dataset.val)});
+document.getElementById('invPersonas').addEventListener('click',function(ev){
+  const b=ev.target.closest('button[data-kind]');if(!b||b.disabled)return;invitePersona(b.dataset.val)});
+document.getElementById('mlist').addEventListener('click',function(ev){
+  const b=ev.target.closest('button[data-act]');if(!b)return;
+  if(b.dataset.act==='admin')toggleAdmin(b.dataset.val,b.dataset.on==='1');
+  else if(b.dataset.act==='del')delMember(b.dataset.val);
+  else saveMemberPersona(b.dataset.val,parseInt(b.dataset.i,10));});
+document.getElementById('btnCustom').onclick=function(){
+  const e=document.getElementById('invCustom');e.style.display=(e.style.display==='none'?'':'none')};
+document.getElementById('btnInvCustom').onclick=async function(){
   const d=await P('/api/aigroups/'+GID+'/invite',{
     name:document.getElementById('invName').value,
     model:document.getElementById('invModelCustom').value,
     persona:document.getElementById('invPersona').value});
   toast(document.getElementById('invMsg'),d.ok?('已邀请 '+(d.added||[]).join('、')):(d.error||'失败'),!!d.ok);
-  if(d.ok){document.getElementById('invName').value='';
-    document.getElementById('invModelCustom').value='';
-    document.getElementById('invPersona').value='';load()}}
-async function load(){
-  const d=await J('/api/aigroups/'+GID);
-  if(!d.ok){document.getElementById('msgs').innerHTML='<div class="err">'+esc(d.error||'读不到这个群')+'</div>';return}
-  const g=d.group||{};
-  document.getElementById('rName').textContent=g.name||'';
-  document.getElementById('rTopic').textContent=g.topic||'无主题';
-  document.title=(g.name||'群')+' · 小焦';
-  const M=g.members||[];const cmap={};M.forEach(x=>cmap[x.name]=x.color);
-  renderInvite(M.map(x=>x.name));
-  document.getElementById('chips').innerHTML=M.map(x=>'<span class="chip">'+av(x.name,x.color)+
-    esc(x.name)+(x.model?'<span class="muted" style="font-size:11px">'+esc(x.model)+'</span>':'')+
-    '</span>').join('');
-  const msgs=g.messages||[];
-  document.getElementById('msgs').innerHTML=msgs.length?msgs.map(x=>
-    '<div class="msg '+(x.who==='你'?'me':'')+'">'+av(x.who,cmap[x.who]||'#5a6478')+
-    '<div><div class="meta"><b style="color:'+(cmap[x.who]||'#9aa3b5')+'">'+esc(x.who)+
-    '</b> <span class="muted">'+ht(x.ts)+'</span></div><div class="b">'+esc(x.text)+'</div></div></div>'
-  ).join(''):'<div class="muted">还没有人说话。点「聊 1 轮」或者开「自动聊」。</div>';
-  const box=document.getElementById('msgs');
-  if(msgs.length!==LASTN){box.scrollTop=box.scrollHeight;LASTN=msgs.length}
-  document.getElementById('mlist').innerHTML=M.map((x,i)=>
-    '<div class="card" style="background:var(--card2);padding:9px;margin-bottom:8px">'+
-    '<div class="row">'+av(x.name,x.color)+'<b>'+esc(x.name)+'</b>'+
-    '<input class="grow" style="max-width:150px" id="mm_'+i+'" value="'+esc(x.model||'')+'" placeholder="火种"/>'+
-    '<button class="sm" onclick="saveM('+i+')">保存</button>'+
-    '<button class="sm danger" onclick="delM(\''+esc(x.name)+'\')">移除</button></div>'+
-    '<textarea id="mp_'+i+'" style="margin-top:7px">'+esc(x.persona||'')+'</textarea></div>').join('');
-  const l=await J('/api/aigroups');
-  const row=((l.groups||[]).find(x=>x.id===GID))||{};
-  const a=row.auto||{};
-  document.getElementById('autoSt').textContent=a.on?
-    ('自动聊进行中（每 '+a.interval+'s 一轮，最多 '+a.rounds+' 轮）'):
-    ('共 '+(row.messages||0)+' 条 ｜ '+(row.members||[]).length+' 个人');
-}
-async function run(n){const el=document.getElementById('cmsg');el.textContent='它们在聊…';el.className='muted';
-  const d=await P('/api/aigroups/'+GID+'/run',{rounds:n});
-  if(!d.ok){el.textContent=d.error||'失败';el.className='err';return}
-  el.textContent='新增 '+(d.added||[]).length+' 条';el.className='ok';load()}
-async function say(){const el=document.getElementById('say');const t=(el.value||'').trim();if(!t)return;
-  const d=await P('/api/aigroups/'+GID+'/say',{text:t});if(!d.ok)return toast(document.getElementById('cmsg'),d.error);
-  el.value='';load()}
-async function saveM(i){const d=await J('/api/aigroups/'+GID);const M=((d.group||{}).members)||[];const x=M[i]||{};
-  const r=await P('/api/aigroups/'+GID+'/member',{member:x.name,
-    persona:document.getElementById('mp_'+i).value,model:document.getElementById('mm_'+i).value});
-  toast(document.getElementById('cmsg'),r.ok?'人设已保存':(r.error||'失败'),!!r.ok);if(r.ok)load()}
-async function delM(name){const r=await P('/api/aigroups/'+GID+'/member/remove',{name:name});
-  toast(document.getElementById('cmsg'),r.ok?'已移出 '+name:(r.error||'失败'),!!r.ok);if(r.ok)load()}
-document.getElementById('btnInviteOpen').onclick=()=>{
-  const e=document.getElementById('invPanel');e.style.display=(e.style.display==='none'?'':'none')};
-document.getElementById('btnQuit').onclick=async()=>{
+  if(d.ok){['invName','invModelCustom','invPersona'].forEach(function(x){
+    document.getElementById(x).value=''});load();}};
+document.getElementById('btnSaveSet').onclick=async function(){
+  const d=await P('/api/aigroups/'+GID+'/setting',{
+    name:document.getElementById('setName').value,
+    topic:document.getElementById('setTopic').value,
+    notice:document.getElementById('setNotice').value});
+  toast(document.getElementById('setMsg'),d.ok?'群资料已保存':(d.error||'失败'),!!d.ok);if(d.ok)load();};
+document.getElementById('btnAvatar').onclick=function(){document.getElementById('avatarFile').click()};
+document.getElementById('gav').onclick=function(){document.getElementById('avatarFile').click()};
+document.getElementById('avatarFile').onchange=function(){
+  const f=this.files&&this.files[0];if(!f)return;
+  const rd=new FileReader();
+  rd.onload=async function(){
+    const d=await P('/api/aigroups/'+GID+'/avatar',{data:rd.result});
+    toast(document.getElementById('setMsg'),d.ok?'群头像已换':(d.error||'失败'),!!d.ok);
+    if(d.ok)load();};
+  rd.readAsDataURL(f);};
+document.getElementById('btnQuit').onclick=async function(){
   const nm=document.getElementById('rName').textContent||'这个群';
   if(!confirm('退出并删除「'+nm+'」？聊天记录会一起没了。'))return;
   const d=await D('/api/aigroups/'+GID);
-  if(d.ok){location.href='/aigroups'}else{toast(document.getElementById('cmsg'),d.error||'失败')}};
-document.getElementById('btnAuto').onclick=async()=>{
-  const d=await P('/api/aigroups/'+GID+'/auto',{on:true,interval:16,rounds:12});
-  toast(document.getElementById('cmsg'),d.ok?'开始自动聊':(d.error||'失败'),!!d.ok);load()};
-document.getElementById('btnStop').onclick=async()=>{
+  if(d.ok){location.href='/aigroups'}else{toast(document.getElementById('setMsg'),d.error||'失败')}};
+document.getElementById('btnAuto').onclick=async function(){
+  const d=await P('/api/aigroups/'+GID+'/auto',{on:true,interval:25,rounds:0});
+  toast(document.getElementById('cmsg'),d.ok?'开始自己聊（AI 与 AI）':(d.error||'失败'),!!d.ok);load();};
+document.getElementById('btnStop').onclick=async function(){
   const d=await P('/api/aigroups/'+GID+'/auto',{on:false});
-  toast(document.getElementById('cmsg'),d.ok?'停了':(d.error||'失败'),!!d.ok);load()};
-boot();setInterval(load,5000);
-""" % gid
+  toast(document.getElementById('cmsg'),d.ok?'暂停了':(d.error||'失败'),!!d.ok);load();};
+document.getElementById('btnSay').onclick=saySomething;
+document.getElementById('say').addEventListener('keydown',function(e){
+  if(e.key==='Enter'){e.preventDefault();saySomething();}});
+document.getElementById('btnRun1').onclick=function(){runRounds(1)};
+load();setInterval(load,5000);
+""".replace("__GID__", str(gid))
     return _page("群", body, js)

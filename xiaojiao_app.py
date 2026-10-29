@@ -2898,6 +2898,10 @@ def _social():
                image_fn=_moment_image)
     _G.install(llm_chat, alt_fn=_fuse_alt_llm, model_name=str(MODEL_NAME or ""))
     try:
+        _G.set_llm_base((LLM_BASE or "").rstrip("/"))
+    except Exception as _e:      # noqa: silent-ok — 注不进去就走兜底
+        LOG.debug("群组·注入模型地址失败：%s", _e)
+    try:
         import requests as _rq
         _j = _rq.get((LLM_BASE or "").rstrip("/") + "/models", timeout=3).json()
         _G.set_available_models([str(m.get("id") or "") for m in (_j.get("data") or [])
@@ -16016,7 +16020,88 @@ def api_aigroups_create():
 def aigroup_room_page(gid):
     """单个群的**独立房间页**：建完群就跳到这里。"""
     from core import social_pages as _SP
+    try:
+        _social()      # 先把火种名单灌进去：否则页面上那排邀请按钮只剩「（默认火种）」
+    except Exception as _e:      # noqa: silent-ok — 灌不进去页面照样能开
+        LOG.debug("房间页注入火种失败（忽略）：%s", _e)
     return Response(_SP.group_room_html(gid), mimetype="text/html")
+
+
+@app.route("/aigroups/avatar/<gid>")
+def aigroup_avatar(gid):
+    """群头像（没有就 404，页面会退回默认圆角块）。"""
+    import glob as _glob
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "aigroups", "avatars")
+    hits = _glob.glob(os.path.join(d, os.path.basename(str(gid)) + ".*"))
+    if not hits:
+        return jsonify({"ok": False, "error": "这个群还没头像"}), 404
+    return send_file(hits[0])
+
+
+@app.route("/api/aigroups/<gid>/setting", methods=["POST"])
+def api_aigroup_setting(gid):
+    """改群资料：群名 / 主题 / 群公告。"""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        return jsonify(G.set_group(gid, name=data.get("name"),
+                                   topic=(data.get("topic") if "topic" in data else None),
+                                   notice=(data.get("notice") if "notice" in data else None)))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/aigroups/<gid>/avatar", methods=["POST"])
+def api_aigroup_avatar_upload(gid):
+    """上传群头像。前端传 dataURL（`data:image/png;base64,...`），服务端落成文件。
+
+    只认图片的 dataURL，最多 4MB —— 这不是"美化"，是别让任意内容写进 logs。
+    """
+    import base64 as _b64
+    data = request.get_json(force=True, silent=True) or {}
+    raw = str(data.get("data") or "")
+    try:
+        if not raw.startswith("data:image/"):
+            return jsonify({"ok": False, "error": "只支持图片（data:image/...）"})
+        head, _, b64 = raw.partition(",")
+        ext = "png"
+        for cand in ("png", "jpeg", "jpg", "webp", "gif"):
+            if cand in head:
+                ext = "jpg" if cand == "jpeg" else cand
+                break
+        blob = _b64.b64decode(b64, validate=False)
+        if len(blob) > 4 * 1024 * 1024:
+            return jsonify({"ok": False, "error": "图太大了（最多 4MB）"})
+        d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "aigroups", "avatars")
+        os.makedirs(d, exist_ok=True)
+        # 一个群只留一张：先删旧的同名文件（不同扩展名一起清）
+        import glob as _glob
+        for old in _glob.glob(os.path.join(d, os.path.basename(str(gid)) + ".*")):
+            try:
+                os.remove(old)
+            except Exception:      # noqa: silent-ok
+                pass
+        fp = os.path.join(d, "%s.%s" % (os.path.basename(str(gid)), ext))
+        with open(fp, "wb") as f:
+            f.write(blob)
+        _M, G = _social()
+        r = G.set_avatar(gid, os.path.basename(fp))
+        LOG.info("群组头像：%s → %s（%d 字节）", gid, os.path.basename(fp), len(blob))
+        return jsonify({"ok": bool(r.get("ok")), "avatar": os.path.basename(fp),
+                        "error": r.get("error") or ""})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/aigroups/<gid>/admin", methods=["POST"])
+def api_aigroup_admin(gid):
+    """设/取消管理员。"""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        return jsonify(G.set_admin(gid, str(data.get("name") or ""), bool(data.get("on", True))))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
 
 
 @app.route("/api/aigroups/<gid>/invite", methods=["POST"])
