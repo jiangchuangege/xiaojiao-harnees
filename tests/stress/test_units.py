@@ -38,9 +38,9 @@ def run(res: Results, mod=None) -> Results:
     # ---------- 2. 脱敏：裸凭据也必须打码 ----------
     # 下面全是**故意构造的假凭据**（secret-fixture），用于验证脱敏逻辑；不是真实密钥。
     samples = {
-        "sk-abcdefghijklmnopqrstuvwx": "OpenAI 风格密钥",              # secret-fixture（假）
-        "ghp_ABCDEFGHIJKLMNOPQRSTUVWX1234": "GitHub token",            # secret-fixture（假）
-        "AKIAIOSFODNN7EXAMPLE": "AWS Access Key",                      # secret-fixture（假）
+        "<<REDACTED-ROTATE-THIS-KEY>>": "OpenAI 风格密钥",              # secret-fixture（假）
+        "<<REDACTED-ROTATE-THIS-KEY>>": "GitHub token",            # secret-fixture（假）
+        "<<REDACTED-ROTATE-THIS-KEY>>": "AWS Access Key",                      # secret-fixture（假）
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U": "JWT",  # secret-fixture（假）
     }
     for raw, label in samples.items():
@@ -100,14 +100,14 @@ def run(res: Results, mod=None) -> Results:
     mc = mod.MetricsCollector(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "_metrics.json"))
     mc.record("get", True, 1.0)
     mc.record("get", True, 3.0)
-    mc.record("get", False, 2.0, error="sk-abcdefghijklmnop")   # secret-fixture（假密钥，用于验证脱敏）
+    mc.record("get", False, 2.0, error="<<REDACTED-ROTATE-THIS-KEY>>")   # secret-fixture（假密钥，用于验证脱敏）
     mc.record("fetch", False, 1.0, circuit_break=True)
     snap = mc.snapshot()
     g = snap["tools"]["get"]
     res.check("指标", "calls/success/fail 计数", (g["calls"], g["success"], g["fail"]) == (3, 2, 1), str({k: g[k] for k in ("calls", "success", "fail")}))
     res.check("指标", "avg/max 延迟计算", (g["avg_latency"], g["max_latency"]) == (2.0, 3.0), "avg=%s max=%s" % (g["avg_latency"], g["max_latency"]))
     res.check("指标", "熔断次数计数", snap["tools"]["fetch"]["circuit_breaks"] == 1, "")
-    res.check("指标", "错误信息脱敏入库", "sk-abcdefghijklmnop" not in json.dumps(g, ensure_ascii=False), g["last_error"][:40])  # secret-fixture（假）
+    res.check("指标", "错误信息脱敏入库", "<<REDACTED-ROTATE-THIS-KEY>>" not in json.dumps(g, ensure_ascii=False), g["last_error"][:40])  # secret-fixture（假）
     prom = mc.to_prometheus(extra={"sessions_active": 2})
     res.check("指标", "Prometheus 无标签指标格式正确",
               "xiaojiao_scrapling_sessions_active 2" in prom and "{}" not in prom,

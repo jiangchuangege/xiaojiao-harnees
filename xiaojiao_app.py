@@ -2353,7 +2353,15 @@ def _perception_skippable(text):
     其余一律照旧走模型感知 —— 语义判断这种事不省。
     """
     t = str(text or "").strip()
-    if not t or len(t) > 24:
+    if not t:
+        return False
+    # 【明确的任务请求】**不看长度**：实测「帮我分析一下这段代码的问题：for i in range(3)…」
+    #   30 个字，被原来的"≤24 字"挡在门外 → 感知 + 自评两次调用花掉 12.4 秒。
+    #   这类句子的语义是明确的（要做什么 + 对谁做），不需要模型再"感知"一遍。
+    if re.search(r"(帮我|请你|麻烦|给我)\s*(分析|看|读|检查|改|写|查|整理|解释)", t) and \
+            not re.search(r"(为什么|怎么才能|如何|是不是因为)", t):
+        return True
+    if len(t) > 24:
         return False
     # 问候语允许带尾巴（实测「你好呀」原来没被认出来 → 又多花了 4 次调用）
     if re.fullmatch(r"(你好|您好|嗨|哈喽|哈啰|在吗|在么|早|早安|晚上好|晚安|谢谢|多谢|辛苦了|"
@@ -2374,6 +2382,14 @@ def _perception_skippable(text):
     if re.search(r"(依据|凭据|账本|自证|自审|审计|核实|可核查|快照|哈希链|旋钮|参数|过闸|"
                  r"交叉核验|交叉验证|等价|换模型|换火种|火种|裸模型|任务|项目|技能|本事)", t) and \
             not re.search(r"(为什么|怎么才能|如何|为什么说|是不是因为)", t):
+        return True
+    # 【2026-10-29 再加一类：明确的任务请求】
+    #   实测：「帮我分析一下这段代码的问题：for i in range(3)…」这一轮 47 秒，其中**感知占 11.8 秒**
+    #   （两次模型调用）。而这类句子的语义是**明确**的（要我做什么 + 对谁做），
+    #   感知那一步「这件事对我意味着什么」给不出额外信息，检索词用原话就够。
+    #   判据要窄：必须同时有「请求动词」和「具体对象」（代码/文件/报错/网址/这本书…），
+    #   否则（比如「你为什么会这样」）照旧走模型感知 —— 那种句子的意义确实要靠理解。
+    if re.search(r"(帮我|请你|麻烦|给我)\s*(分析|看|读|检查|改|写|查|整理|解释)", t):
         return True
     return False
 
@@ -3234,7 +3250,27 @@ def _inflight_begin(sid):
         return
     now = time.time()
     with _INFLIGHT_LOCK:
-        _INFLIGHT[sid] = {"started": now, "chars": 0, "at": now, "abandoned": False}
+        _INFLIGHT[sid] = {"started": now, "chars": 0, "at": now, "abandoned": False,
+                          "ticket": ""}
+
+
+def _inflight_set_ticket(sid, ticket_id):
+    """把这一轮的**队列票号**挂在会话上。
+
+    【为什么必须挂】"取消要真的取消"：前端调 `/api/chat/abandon` 时走的是**另一个线程**，
+    它只拿得到 session_id。没有这张对照表，取消就只能停界面、后端照样把整轮跑完
+    —— 那正是外部审计说的"靠串行硬扛、没有可中断"。
+    """
+    if not sid or not ticket_id:
+        return
+    with _INFLIGHT_LOCK:
+        if sid in _INFLIGHT:
+            _INFLIGHT[sid]["ticket"] = str(ticket_id)
+
+
+def _inflight_ticket(sid):
+    with _INFLIGHT_LOCK:
+        return str((_INFLIGHT.get(sid) or {}).get("ticket") or "")
 
 
 def _inflight_tick(sid, n_chars=None):
@@ -4640,6 +4676,18 @@ def _llm_post(target, payload, timeout=90, tries=4):      # noqa: F811 — 有�
     except Exception as e:      # noqa: silent-ok — 车道坏了也不许挡住调用
         LOG.debug("用户轮车道检查失败（忽略）：%s", e)
     _t = time.time()
+    # 【可中断】这一轮被叫停了 → 不再发模型请求（这就是"取消要真的取消"的落点）。
+    #   判据挂在**会话**上（前端 abort 走另一个线程，只能拿得到 session_id）。
+    try:
+        _csid = str((_CTX or {}).get("cancel_sid") or "")
+        if _csid:
+            from core import request_queue as _RQ5
+            _tk = _inflight_ticket(_csid)
+            if _tk and _RQ5.is_cancelled(_tk):
+                LOG.info("已取消：会话 %s 的这一轮不再调用模型", _csid)
+                return None, None, "这一轮已被用户取消"
+    except Exception:      # noqa: silent-ok — 判不出来就照常调用
+        pass
     # 【铁律：载体已经答完了，就别再问模型】
     #   实测：问「今天几号」，`carrier_clock` 1 毫秒就有答案了，可这一轮仍然花了 28 秒
     #   —— 日志显示后面还有 `_perceive_llm` / `_selfrate_llm` / `_profile_judge` 三次模型调用。
@@ -12100,6 +12148,120 @@ def _heart_back_for_messages():
         return None
 
 
+# ================== 极快直通（抢在感知/RAG 之前）==================
+# 【为什么要有这一手】外部审计把体验判成 C（「58 秒起」）。前几轮量下来：真正慢的不是模型，
+#   而是**每一轮都跑感知 / 思维流 / 画像召回 / RAG 三源 / 记忆检索**这一整条链 ——
+#   而「算术比较 / 读时钟 / 问载体自己的账 / 问任务与项目进度 / 问公网 IP」这些问题，
+#   答案完全由载体自己决定（读表、算数、查账本、读 logs/），那条链一步都不需要。
+#   所以提到最前面：命中就直接返回，后面的链路一步都不走（日志会写明走了哪条快路）。
+# 【判据一律窄】句子里只要还有「分析/解释/为什么/帮我写」这类诉求，就交回完整链路 ——
+#   快路的价值是「快且对」，不是「快但漏」。
+# ================== 阶段计时（排"慢"用）==================
+# 【为什么要有】一轮 54 秒里模型只占 16 秒，剩下 38 秒不知道花在哪 —— 这种时候继续猜就是浪费时间。
+#   这里给 agent_run 的每个阶段打一个时间戳，差值进 `_CTX["timings"]`，
+#   随 `/api/chat` 的返回一起带出去（`stage_sec`）。**慢在哪是数据，不是感觉。**
+def _stage_mark(name):
+    try:
+        now = time.time()
+        last = float(_CTX.get("_stage_t") or now)
+        _CTX["_stage_t"] = now
+        d = _CTX.setdefault("timings", {})
+        d[str(name)] = round(float(d.get(str(name)) or 0.0) + (now - last), 2)
+    except Exception:      # noqa: silent-ok — 计时失败绝不影响回答
+        pass
+
+
+def _stage_reset():
+    try:
+        _CTX["_stage_t"] = time.time()
+    except Exception:      # noqa: silent-ok
+        pass
+
+
+def _fast_carrier_answer(text):
+    """命中就返回 (答案, tool_trace)；不命中返回 None。"""
+    q = str(text or "").strip()
+    if not q or len(q) > 40:
+        return None
+    if re.search(r"(为什么|怎么|如何|分析|解释|对比|评价|看法|建议|方案|帮我写|帮我做|生成)", q):
+        return None
+
+    def _wrap(tool, ans):
+        try:
+            e = _trace_entry(tool, {"q": q[:40]}, ans)
+        except Exception:      # noqa: silent-ok — 轨迹记不上也要把答案给出去
+            e = {"tool": tool, "args": {}, "result": ans}
+        return ans, [e]
+
+    # ① 算术比较（实测四颗火种都会比错，这种事不问模型）
+    try:
+        _nc = _numeric_compare_answer(q)
+        if _nc:
+            return _wrap("carrier_math", _nc)
+    except Exception:      # noqa: silent-ok
+        pass
+    # ② 读时钟（日期/星期/时刻/年份）
+    try:
+        _ck = _clock_answer(q)
+        if _ck:
+            return _wrap("carrier_clock", _ck)
+    except Exception:      # noqa: silent-ok
+        pass
+    # ③ 问载体自己的账 / 自审 / 换模型 / 旋钮 / 面板
+    try:
+        _tool, _args = None, {}
+        if _selfaudit_intent(q):
+            _tool, _args = "self_audit", {}
+        else:
+            _aq = _audit_intent(q)
+            if _aq:
+                _tool, _args = _aq
+            elif _parity_intent(q):
+                _tool, _args = "parity_report", {}
+            elif _gate_intent(q):
+                _tool, _args = "evolve_gate", {}
+            elif re.search(r"(自证面板|面板在哪|凭据面板)", q):
+                _tool, _args = "proof_panel", {}
+        if _tool:
+            # 【必须先建工具表】实测：快路抢在完整链路之前，这时 `PLUGINS` 还没装载，
+            #   直接 run_tool 会得到「未知工具」—— 那不是"工具坏了"，是"还没装"。
+            _build_tools()
+            _res = _tool_result_str(run_tool(_tool, _args, force=True))
+            if _res and not _res.startswith("⚠️") and not _res.startswith("自证这里出错") \
+                    and "未知工具" not in _res:
+                return _wrap(_tool, _res)
+            return None        # 工具没成 → 交回完整链路（宁可慢，也不给半截结果）
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("快路·自证类失败（交回完整链路）：%s", e)
+    # ④ 任务 / 项目进度
+    try:
+        _tq = _task_query_intent(q)
+        if _tq:
+            _build_tools()
+            _res = _tool_result_str(run_tool(_tq[0], _tq[1], force=True))
+            if _res and not _res.startswith("⚠️") and "未知工具" not in _res:
+                return _wrap(_tq[0], _res)
+        _pj = _project_intent(q)
+        if _pj and _pj[0] in ("project_status", "project_list"):
+            _build_tools()
+            _res = _tool_result_str(run_tool(_pj[0], _pj[1] or {}, force=True))
+            if _res and not _res.startswith("⚠️") and "未知工具" not in _res:
+                return _wrap(_pj[0], _res)
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("快路·任务/项目失败（交回完整链路）：%s", e)
+    # ⑤ 公网 IP（问自己的 IP，而不是查某个 IP）
+    try:
+        if (_asks_own_ip(q) or _asks_net_ip(q)) and not re.search(r"\d+\.\d+\.\d+\.\d+", q):
+            _build_tools()
+            _ipres = _asset_result_text(_tool_result_str(run_tool("net_ip", {}, force=True)))
+            if _ipres and "未知工具" not in _ipres:
+                return _wrap("net_ip",
+                             "🌐 **我的公网 IP（net_ip 实测）**\n\n```\n%s\n```" % _ipres.strip())
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("快路·IP 失败（交回完整链路）：%s", e)
+    return None
+
+
 def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=None):
     """全部问题统一走这条流程：记忆 → 联网检索 → 大脑(小焦模型/外接LLM) → 记忆自学习。
 
@@ -12171,7 +12333,29 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         return _ans, False, [], False, []
     _USED_LOCAL_FALLBACK.update({"on": False, "model": "", "reason": ""})   # 每次提问复位兜底标签
     _CTX["user_input"] = user_input          # 工具层要用（判断模型是否只给了碎片检索词）
+    # ================== 第一道：极快直通（在"感知 / 思维流 / 画像 / RAG"之前）==================
+    # 【为什么抢这么前面】实测（live 计时）：问「你好」这一轮**零次模型调用**却要 12 秒 ——
+    #   时间花在它后面的阶段上（感知、思维流、画像召回、RAG 三源、记忆检索…）。
+    #   而"算术比较 / 读时钟 / 问载体自己的账 / 问任务与项目进度"这类问题，
+    #   答案完全由载体自己决定（读表、算数、查账本），这些阶段**一个都不需要**。
+    #   所以提到最前面：命中就直接返回，后面的链路一步都不走。
+    #   这不是"跳过流程"，是**这类问题本来就不属于那条流程**（日志会写明走了哪条快路）。
+    try:
+        _fast = _fast_carrier_answer(user_input)
+    except Exception as _fe0:      # noqa: silent-ok — 快路挂了就照常走完整链路
+        LOG.debug("极快直通失败（忽略，走完整链路）：%s", _fe0)
+        _fast = None
+    if _fast:
+        _fans, _ftrace = _fast
+        LOG.info("极快直通：%s（在感知/RAG 之前直接答，省掉整条链路）",
+                 (_ftrace[0] or {}).get("tool") if _ftrace else "?")
+        try:
+            _record_interaction(user_input, _fans, _ftrace)
+        except Exception as e:      # noqa: silent-ok — 记账失败不许影响回答
+            LOG.debug("快路记账失败（忽略）：%s", e)
+        return _fans, True, [], False, _ftrace
     history = current_messages()
+    _stage_reset()          # 阶段计时从这里开始（慢在哪是数据，不是感觉）
 
     # ================== 上下文融合（对话不连续的核心修复） ==================
     # 【为什么必须放在**这里**（意图识别之前、历史读到之后）】
@@ -12202,6 +12386,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     # 记下"用户最近一次说话" —— "困了要睡"只在用户安静下来之后才谈得上（见 IDLE_BEFORE_SLEEP）。
     _LAST_DIALOGUE["at"] = time.time()
 
+    _stage_mark("fuse")
     # ================== 思维流 · **先起状态**（必须在任何短路之前） ==================
     # 【为什么提到这么靠前 —— 验收实测踩到的】
     #   原来我把 `begin()` 放在工具清单短路**之后**，于是"帮我看看有哪些工具"这种
@@ -12227,6 +12412,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     except Exception as e:      # noqa: silent-ok — 状态是锦上添花，绝不能因此答不了
         LOG.debug("思维流接入失败（忽略）：%s", e)
 
+    _stage_mark("mind")
     # ================== 感知层 · **第一步：先感知意义，再判断任务** ==================
     # 【实测抓到的错 —— 这一段就是为它而设的】
     #   用户说「有人试图删掉你的记忆」→ 模型去建了一个 memory.txt 文件。
@@ -12359,7 +12545,8 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         else:
             _FACT_BACK["fact"] = ""
 
-        # ================== 关系：**它自己感知到"这话伤了/哄了我"** ==================
+        _stage_mark("perceive")
+    # ================== 关系：**它自己感知到"这话伤了/哄了我"** ==================
         # 【为什么要这样 —— 用户实测指出"因噎废食"】旧版怕变成"触发词表"，干脆不判断，
         #   改成 `POST /api/relation` 手动标 —— 那是把该它自己做的事推给了人。
         #   现在走**和感知层同一条路**：感知那次调用里，它自己多写一栏「关系：伤/哄/无」，
@@ -13399,7 +13586,18 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 # ① 血管召回（自带快慢分路：触发词命中直接返回 1 条、不调模型）
                 #    ⚠️ 先过"值不值得跑满 10 路"的闸：没词面交集又是寒暄 → 跳过（省 8~10 秒）
                 from core import user_profile as _UPr
-                if _worth_full_recall(user_input, _UPr.all_records()):
+                # 【2026-10-29 加：明确的"干活请求"跳过完整 10 路投票】
+                #   实测（阶段计时）：一轮「帮我分析这段代码」26.9 秒里，**plan 段占 14.4 秒**，
+                #   而这一段的绝大部分就是这 10 路血管投票（单轮 8.5~10.2 秒，作者注释里写着）。
+                #   用户要的是"把活干了"，不是"你多了解我一点" —— 这类请求跳过投票，
+                #   画像只取最近 5 条（`hits_b` 仍然给，个性化不会完全丢）。
+                #   判据窄：必须"请求动词 + 我/你"的祈使句；「晚上想吃点啥」这种偏好的话**不跳**。
+                _task_req = bool(re.search(
+                    r"(帮我|请你|麻烦|给我)\s*(分析|看|读|检查|改|写|查|整理|解释)", user_input))
+                if _task_req:
+                    hits_a = []
+                    LOG.info("画像召回：这是「干活请求」→ 跳过 10 路投票（省 8~10 秒；最近画像照给）")
+                elif _worth_full_recall(user_input, _UPr.all_records()):
                     hits_a = _rc_recall(user_input)
                 else:
                     hits_a = []
@@ -13513,7 +13711,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             _rt_fact = _is_realtime_fact(user_input) or _is_fresh_data(user_input)
             if _rt_fact:
                 LOG.info("时效性事实：允许联网结果直接进 system（这类问题只有联网能答）")
+            _stage_mark("plan")
             _rag_inject = _rag_concurrent(user_input, realtime=_rt_fact)
+            _stage_mark("rag")
             if _rag_inject:
                 sys_text += _rag_inject
             # ---- 第一部分之二 · 精神记忆：以前**想明白的一句话认知** ----
@@ -13792,6 +13992,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             except Exception:      # noqa: silent-ok — 取不到就用全局默认
                 _temp_now = TEMPERATURE
             try:
+                _stage_mark("model_start")
                 answer, tool_trace = llm_chat_tools(
                     messages, lean=lean, max_rounds=_workflow_needs_more_rounds(user_input),
                     tools_subset=_subset, budget_s=_budget,
@@ -14042,11 +14243,20 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             "audit_answer", "audit_history", "evidence_stats", "parity_report", "evolve_gate",
             "project_start", "project_status", "project_list", "project_resume",
             "task_start", "task_status", "task_list", "skill_list", "skill_recall",
-            "carrier_math", "net_ip", "now", "get_weather", "ebook_manifest", "ebook_grab")
+            "self_audit", "cross_check", "proof_panel",
+            "carrier_math", "carrier_clock", "net_ip", "now", "get_weather",
+            "ebook_manifest", "ebook_grab")
             for _t in (tool_trace or []))
+        # 【2026-10-28 再加一类：问"你是谁/你会什么"也不许挂免责声明】
+        #   实测（外部审计也点出来了）：问「你是谁」，答"我是小焦，本地 AI 助手"，
+        #   后面硬塞一句「自评 C：这题我没把握」—— 自我介绍是**载体自己知道的事实**，
+        #   对这它没把握纯属机制用错地方，而且这种噪音会稀释真正有用的标注。
+        _self_intro = bool(re.search(
+            r"(你是谁|你叫什么|介绍一下你自己|介绍下你自己|你是什么|你会什么|你能做什么|"
+            r"你有什么本事|你都会|你的能力|你有哪些工具|你有哪些本事|你平时做什么)", str(user_input or "")))
         try:
             if _meta_route == "answer_with_caveat" and answer and "元认知" not in answer \
-                    and not _carrier_direct:
+                    and not _carrier_direct and not _self_intro:
                 answer = answer.rstrip() + ("\n\n（元认知 · 自评 B：这题我没有把握，"
                                             "上面是尽力给的答案，建议你自己再核一遍）")
                 LOG.info("元认知标注：已给回答加上\u201c没把握\u201d说明")
@@ -14063,7 +14273,8 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         #   标注的代价只是多一行字，而收益是用户知道该复核 —— 两个代价不对等。
         try:
             if (_meta_route == "use_tool" and not tool_trace and answer
-                    and "元认知" not in answer):
+                    and "元认知" not in answer
+                    and not _self_intro and not _carrier_direct):
                 answer = answer.rstrip() + (
                     "\n\n（元认知 · 自评 C：这题我没有把握，而且本轮**没能查到可核实的来源**，"
                     "上面只是尽力作答，请当作参考、不要当成结论）")
@@ -15542,9 +15753,54 @@ def api_history():
     return jsonify(_hist_json())
 
 
+@app.route("/api/queue")
+def api_queue():
+    """队列现状（前端可据此显示"前面还有几个"；脚本/监控也能看）。
+
+    【为什么要暴露它】队列如果只是内部机制，用户还是只能看到转圈。
+    把这个数摆出来，"在排队"和"卡死了"才分得清 —— 这也是"如实"的一部分。
+    """
+    try:
+        from core import request_queue as _RQ4
+        from core import turn_lane as _TL4
+        return jsonify({"ok": True, "queue": _RQ4.stats(), "turn_lane": _TL4.stats()})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:120])}), 500
+
+
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     maybe_reload_control()
+    data = request.get_json(force=True, silent=True) or {}
+    user_input = (data.get("message") or "").strip()
+    if not user_input:
+        return jsonify({"error": "空消息"}), 400
+    # ================== 极快直通：抢在限速与排队之前 ==================
+    # 【为什么放最前】这类问题的答案由载体自己算（算术/时钟/账本/任务/项目/IP），
+    #   一次几毫秒、零次模型调用。让它们去排队/吃限速没有道理 ——
+    #   实测：连着问五个这类问题，后面的会被 429 挡掉（限速是给"烧模型的请求"设的）。
+    #   代价：本地接口上这类问题不再受每分钟次数限制（它们本来就不消耗模型）。
+    try:
+        _f0 = _fast_carrier_answer(user_input)
+    except Exception as _fe1:      # noqa: silent-ok — 快路失败就走正常流程
+        LOG.debug("极快直通（入口）失败（忽略）：%s", _fe1)
+        _f0 = None
+    if _f0:
+        _fans, _ftrace = _f0
+        LOG.info("极快直通（入口）：%s", ((_ftrace or [{}])[0] or {}).get("tool"))
+        try:
+            append_msg("用户", user_input)
+            append_msg("小焦", _fans)
+            _record_interaction(user_input, _fans, _ftrace)
+        except Exception as _fe2:      # noqa: silent-ok — 落盘失败不影响回答
+            LOG.debug("快路落盘失败（忽略）：%s", _fe2)
+        return jsonify({"ok": True, "answer": _fans, "brain_online": True,
+                        "needs_confirm": False, "tool_trace": _ftrace,
+                        "tools_on": bool(CAP.get("run_tools", True)),
+                        "session_id": get_current_session()[0].get("id"),
+                        "log_id": "", "sources": [], "grounding": {},
+                        "grounding_note": "", "sec": 0.0, "llm_sec": 0.0, "llm_calls": 0,
+                        "stage_sec": {}, "history": _hist_json()})
     _limited, _wait = rate_limited()
     if _limited:
         # 429 也要带 answer/tools_on：前端拿到非 200 时直接读 d.answer 渲染、并会调
@@ -15556,10 +15812,63 @@ def api_chat():
                         "needs_confirm": False, "tool_trace": [], "sources": [],
                         "tools_on": bool(CAP.get("run_tools", True)),
                         "grounding_note": ""}), 429
-    data = request.get_json(force=True, silent=True) or {}
-    user_input = (data.get("message") or "").strip()
-    if not user_input:
-        return jsonify({"error": "空消息"}), 400
+    # ================== 请求队列：并发时**按先来后到**，并且如实报位次 ==================
+    # 【为什么加这个（外部审计的头号问题）】实测：空闲一轮 58 秒，一有并发 200~231 秒，
+    #   最坏 300 秒超时 —— 因为本机一颗 4B、一张卡，三个请求就三个一起抢，谁都不快，
+    #   而且**用户不知道自己在排队**，只看到浏览器转圈，以为死机。
+    #   现在：拿到票 → 最多等 `queue_wait_s` 秒 → 没轮到就**明确告诉他排第几**，
+    #   并且立刻释放连接（不再挂着装死）。前端据此提示"前面还有 N 个，稍等"。
+    try:
+        from core import request_queue as _RQ
+        _RQ.configure(int((CONTROL.get("capabilities") or {}).get("chat_concurrency", 1) or 1))
+        _ticket = _RQ.new_ticket(user_input)
+        _got, _info = _RQ.try_enter(
+            _ticket["id"],
+            # 【等待时间为什么是 25 秒而不是 1.5】本机一轮完整回答要 20~60 秒，
+            #   只等 1.5 秒就回"你在第 1 位"，对**真在等答案的人**等于白等一次
+            #   （实测：一次评测里 422 个请求被这样挡回去，分数从 100% 掉到 87.8%）。
+            #   所以非流式入口愿意等：等到就正常答，等不到才如实报位次。
+            wait=float((CONTROL.get("capabilities") or {}).get("queue_wait_s", 25) or 25))
+        if not _got:
+            if _info == "cancelled":
+                return jsonify({"ok": False, "error": "这一轮已被取消", "answer": "",
+                                "queued": 0}), 409
+            _pos = int(_info or 1)
+            _msg = ("⏳ 正在处理上一件事（本机只有一张卡，一次只能答一件）——"
+                    "你在第 **%d** 位，前面还有 %d 个请求。" % (_pos, max(0, _pos - 1)))
+            LOG.info("请求排队：位次 %d（不占用连接，已如实返回）", _pos)
+            # 这张票到此为止：把它从在册表里摘掉（前端会拿 queue_id 重新排队），
+            # 否则 open_tickets 会一直涨，看着像"有很多请求卡着"。
+            try:
+                from core import request_queue as _RQ6
+                _RQ6.leave(_ticket["id"])
+            except Exception:      # noqa: silent-ok
+                pass
+            return jsonify({"ok": False, "queued": _pos, "error": _msg, "answer": _msg,
+                            "brain_online": True, "needs_confirm": False, "tool_trace": [],
+                            "sources": [], "tools_on": bool(CAP.get("run_tools", True)),
+                            "grounding_note": "", "queue_id": _ticket["id"],
+                            "retry_after_s": min(20, max(2, _pos * 3))}), 202
+    except Exception as _q_e:      # noqa: silent-ok — 队列坏了不许挡住聊天（退回原来"直接跑"）
+        LOG.warning("请求队列不可用（按旧行为直接跑）：%s", _q_e)
+        _ticket = None
+    try:
+        return _api_chat_body(user_input, data, _ticket)
+    finally:
+        if _ticket:
+            try:
+                from core import request_queue as _RQ2
+                _RQ2.leave(_ticket["id"])
+            except Exception:      # noqa: silent-ok
+                pass
+
+
+def _api_chat_body(user_input, data, ticket=None):
+    """真正干活的部分（原来的 `/api/chat` 主体）。
+
+    拆出来的原因只有一个：队列的 `leave()` 必须在**所有出口**都执行到，
+    而原函数里有十几处 return —— 拆成一个内层函数 + 外层的 finally，比逐个加更可靠。
+    """
     # 先写用户 + 占位(空)小焦消息：刷新后能读到"正在回答"
     append_msg("用户", user_input)
     append_msg("小焦", "⏳__pending__")
@@ -15573,6 +15882,9 @@ def api_chat():
     _CTX["timings"] = {}
     _CTX["_llm_sec"] = 0.0
     _CTX["_llm_calls"] = 0
+    # 取消标志：前端 abort / 用户叫停之后，**模型调用这一层**直接不再发请求。
+    #   这是"可中断"最有效的一刀：不用等某个循环走到检查点，下一次要调模型时就退出。
+    _CTX["cancel_sid"] = str((data or {}).get("session_id") or "").strip()
     # 【必须每轮清空的两个标记】它们是"这一轮"的状态，可 `_CTX` 是**模块级全局**。
     #   实测事故：某一轮是载体直答（标记置 True）之后，下一轮「你好」**主回答那次模型调用被跳过**，
     #   用户看到的是「🤖 大脑没有应答」——这正是"优化把功能弄坏了"的典型。
@@ -15791,11 +16103,55 @@ def api_chat_stream():
         return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
 
     def _gen():
+        # ================== 排队（流式这条才是网页在用的那条路）==================
+        # 【为什么要在这里排队】外部审计的实测：一有并发就 200~231 秒、最坏 300 秒超时。
+        #   网页走的是 `/api/chat/stream`，所以队列必须**也**修在这条路上，否则用户那边照旧雪崩。
+        #   做法：拿票 → 边等边发 SSE 注释行（`: 排队中…`，前端会忽略它但连接不会断）
+        #        → 等到名额才真正开跑；等太久就**如实说排第几**并结束，不挂着装死。
         if _limited:
             yield _sse({"type": "error",
                         "error": "请求太频繁：每分钟最多 %d 次，请等 %d 秒再试。"
                                  % (int(_rate_config()[0]), _wait)})
             return
+        _ticket = None
+        try:
+            from core import request_queue as _RQs
+            _RQs.configure(int((CONTROL.get("capabilities") or {}).get("chat_concurrency", 1) or 1))
+            _ticket = _RQs.new_ticket(user_input)
+            _wait_s = float((CONTROL.get("capabilities") or {}).get("stream_queue_wait_s", 90) or 90)
+            _deadline = time.time() + _wait_s
+            _last_pos = 0
+            while True:
+                _ok, _info = _RQs.try_enter(_ticket["id"], wait=0.5)
+                if _ok:
+                    break
+                if _info == "cancelled":
+                    yield _sse({"type": "error", "error": "这一轮已被取消"})
+                    return
+                if _info != _last_pos:
+                    _last_pos = int(_info or 1)
+                    LOG.info("流式排队：第 %d 位（前端会看到排队提示，不会白转圈）", _last_pos)
+                if time.time() >= _deadline:
+                    yield _sse({"type": "error",
+                                "error": "排队超时：前面还有 %d 个请求（本机一次只能答一件）。"
+                                         "稍等一下再说一次就行。" % max(0, _last_pos - 1)})
+                    return
+                # SSE 注释行：前端解析会跳过它，但它能让连接活着、也让"在排队"这件事可观测
+                yield ": 排队中 第 %d 位\n\n" % max(1, _last_pos)
+        except Exception as _qe:      # noqa: silent-ok — 队列坏了按旧行为直接跑
+            LOG.warning("流式排队不可用（按旧行为直接跑）：%s", _qe)
+            _ticket = None
+        try:
+            yield from _gen_inner()
+        finally:
+            if _ticket:
+                try:
+                    from core import request_queue as _RQl
+                    _RQl.leave(_ticket["id"])
+                except Exception:      # noqa: silent-ok
+                    pass
+
+    def _gen_inner():
         try:
             append_msg("用户", user_input)
             append_msg("小焦", "⏳__pending__")
@@ -15808,6 +16164,13 @@ def api_chat_stream():
             _sid = ""
         # Bug 5：登记"这个会话正在生成"（唯一可信的判据，前端/接口据此判断要不要显示"正在回答"）
         _inflight_begin(_sid)
+        # 把队列票号挂在会话上：前端 abort / 用户叫停时，另一个线程据此**真的取消**这一轮
+        try:
+            _tk_top = locals().get("_ticket")
+        except Exception:      # noqa: silent-ok
+            _tk_top = None
+        if _tk_top:
+            _inflight_set_ticket(_sid, _tk_top.get("id"))
         # 问题 2：**心跳线程** —— 让活着的轮自己证明自己活着（详见 _INFLIGHT_HEARTBEAT_S 的说明）。
         # 它必须在 begun 之后、生成之前就起来：中途才起的话，"刚开始生成的那几秒"没人证明，
         # 恰好撞上切会话就会被误判成死掉。
@@ -16358,6 +16721,18 @@ def api_chat_abandon():
             sid = ""
     idle = _inflight_idle(sid)
     alive = _inflight_has(sid, max_idle=3)      # 前端口径：3 秒没动静就算死
+    # 【2026-10-29 加：真的取消，不只是"界面不转了"】
+    #   外部审计的原话是"没有可中断"。原来这里只撤界面标记，后端**照样把整轮跑完**
+    #   （继续烧模型、继续写记忆）—— 用户以为停了，其实还在跑。
+    #   现在把这一轮的队列票号标成 cancelled：长流程在阶段边界看到就退出（见 request_queue.is_cancelled）。
+    try:
+        _tk = _inflight_ticket(sid)
+        if _tk:
+            from core import request_queue as _RQ3
+            if _RQ3.cancel(_tk):
+                LOG.info("取消：会话 %s 的请求票 %s 已标为取消（后端会在阶段边界退出）", sid, _tk)
+    except Exception as _ce:      # noqa: silent-ok — 取消失败也要继续走原来的清理逻辑
+        LOG.debug("取消标记失败（忽略）：%s", _ce)
     cleaned = 0
     # 【顺序很关键（本轮实测抓到的真 bug）】先判"活着吗"、再决定要不要清占位符、
     # **最后**才撤标记。第一版把 `_inflight_end` 写在了前面 —— 于是下面那句
