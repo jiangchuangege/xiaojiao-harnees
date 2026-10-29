@@ -2605,45 +2605,146 @@ _NARRATE_SYS = (
 
 
 def _narrate_facts(question, facts, label=""):
-    """把载体取到的数据交给模型解答。返回 (模型解答 或 空串, 是否成功)。
+    """把载体取到的数据交给模型解答。返回 (模型解答, 是否成功, 没引用到的关键数字)。
 
-    失败（模型不可用/空/丢了关键数字）→ 返回空串，由调用方退回原始数据。
+    【2026-10-30 改：模型说的话不许被"验数字"整段丢掉】
+      用户截图里那句「这次模型没能把数据讲成话…直接给你载体实取到的原始数据」就是这里来的：
+      日志写着 `数据解答里几乎没引用关键数值（缺 ['8','2','2']）→ 退回原始数据` ——
+      模型其实已经讲成人话了，只因为没把「8 条」「2/2 步」复述一遍就被判不合格、整段丢弃，
+      换成了模板。用户的话：**「每一个都得是AI说不能是模板」**。
+      现在的分工：话保留（那是 AI 说的），数字没引到的部分**在下面补一行原始要点**，
+      由用户自己核对 —— 既不丢 AI 的话，也不让数字含糊。
     """
     q = str(question or "").strip()
     f = str(facts or "").strip()
     if not q or not f:
-        return "", False
+        return "", False, []
     # 【不是"数据"就别解说】工具经常返回的是一句话通知（「🚀 项目已开…」「已写入 …」），
-    #   那种东西让模型"解读"只会变成废话 + 多余包装（用户截图里就是这样）。
-    #   判据：太短、或者没有 2 处以上数字/表格特征 → 原样回。
+    #   那种东西让模型"解读"只会变成废话 + 多余包装。
     _cleanf = re.sub(r"[\w]*\d{5,}[\w]*", " ", f)
     _short_nums = [n for n in re.findall(r"\d+(?:\.\d+)?", _cleanf) if len(n) <= 4]
     _is_data = (f.count("|") >= 4) or (len(_short_nums) >= 3) or (len(f) >= 400)
     if not _is_data:
-        return "", False
-    try:
-        _msgs = [{"role": "system", "content": _NARRATE_SYS},
-                 {"role": "user", "content": "用户问：%s\n\n%s数据：\n%s" % (
-                     q, (label or "载体取到的"), f[:1800])}]
-        _txt = str(llm_chat(_msgs, temperature=0.3) or "").strip()
-    except Exception as e:      # noqa: silent-ok — 模型不可用就走退路
-        LOG.debug("数据解答失败（退回原始数据）：%s", e)
-        return "", False
+        return "", False, []
+    _txt = ""
+    # 两次尝试：本机 llama-swap 偶发 500（实测「upstream command exited prematurely」），
+    # 一次失败不代表模型不可用，直接退回模板是最坏的选择。
+    for _try in (1, 2):
+        try:
+            _msgs = [{"role": "system", "content": _NARRATE_SYS},
+                     {"role": "user", "content": "用户问：%s\n\n%s数据：\n%s" % (
+                         q, (label or "载体取到的"), f[:1800] if _try == 1 else f[:900])}]
+            _txt = str(llm_chat(_msgs, temperature=0.3) or "").strip()
+        except Exception as e:      # noqa: silent-ok — 第一次失败就再试一次
+            LOG.debug("数据解答第 %d 次失败：%s", _try, e)
+            _txt = ""
+        if _txt and len(_txt) >= 4:
+            break
     if not _txt or len(_txt) < 4:
-        return "", False      # 太短（或空）才算失败；一句话的解说也算成功
-    # 【验数字】模型解答里要引用数据里的**关键数值**，否则判为"没看数据"（宁可退回原始块）。
-    #   但不能把任务号/时间戳当关键数字：实测「20261028_202237_290721」这种 ID 模型不会复述，
-    #   于是所有含 ID 的解说全被误杀、一律退回原始块（用户看到的正是这个）。
-    #   判据：只看**短数值**（≤6 位，或带小数点的价格/比例），且要求至少引用到一半。
+        return "", False, []
+    # 【关键数字】只从"可核查的短数值"里挑，且**只用来补原始要点，不再用来否决**。
     _cleanv = re.sub(r"[\w]*\d{5,}[\w]*", " ", f)
     _all = re.findall(r"\d+(?:\.\d+)?", _cleanv)
     _key = [n for n in _all if ("." in n or len(n) <= 5)][:6]
-    if _key:
-        _miss = [n for n in _key if n not in _txt]
-        if len(_miss) > len(_key) // 2 + 1:
-            LOG.warning("数据解答里几乎没引用关键数值（缺 %s）→ 退回原始数据", _miss[:3])
-            return "", False
-    return _txt, True
+    _miss = [n for n in _key if n not in _txt]
+    if _miss:
+        LOG.info("数据解答没引用到数字 %s → 保留模型的话，另附一行原始要点", _miss[:3])
+    return _txt, True, _miss
+
+
+def _task_evidence_header(question, facts_text):
+    """把"清空了吗 / 重启还在吗 / 这个 ID 还认得吗"核成事实，供模型解答。
+
+    【为什么必须由载体核】截图里那句问题是三件事合在一起问的，而工具只回一张任务表：
+      模型拿不到"正在跑几个""存在哪儿""重启还在不在"，只能念表；
+      念表又被数字校验挡住，最后落到模板上。
+    这里只做**能核对的事**：数行、数文件、比 ID 在不在。不推测、不承诺。
+    """
+    out = []
+    try:
+        rows = [l.strip() for l in str(facts_text or "").splitlines()
+                if l.strip().startswith(("-", "*", "·"))]
+        if rows:
+            c_done = sum(1 for r in rows if "完成" in r)
+            c_fail = sum(1 for r in rows if "失败" in r)
+            c_run = sum(1 for r in rows if ("进行" in r or "跑" in r) and "完成" not in r)
+            out.append("· 列表里**共 %d 条**（这张表列出的），其中完成 %d 条、失败 %d 条、还有 %d 条在跑。"
+                       % (len(rows), c_done, c_fail, c_run))
+            if not c_run:
+                out.append("· **没有正在跑的任务**：所以队列是空的，没有留着没做完的活。")
+    except Exception:      # noqa: silent-ok — 数不出来就不说这一条
+        pass
+    # 落盘证据：只看目录和文件个数（不读内容，几毫秒）
+    try:
+        _d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "tasks")
+        if os.path.isdir(_d):
+            n = len([f for f in os.listdir(_d) if f.endswith(".json")])
+            out.append("· 所有任务都**落盘**在 `logs/tasks/`，磁盘上现在有 %d 个任务文件；"
+                       "电脑关掉、进程重启，这些文件还在，重新打开能读到。" % n)
+        else:
+            out.append("· 没找到 `logs/tasks/` 目录 —— 也就是说本机**没有落盘的任务记录**（照实说）。")
+    except Exception:      # noqa: silent-ok
+        pass
+    # 用户问到的 ID 还在不在
+    try:
+        m = re.search(r"(20\d{6}_\d{6}_[0-9a-f]{4,8})", str(question or ""))
+        if m:
+            _hit = m.group(1) in str(facts_text or "")
+            out.append("· 你问的 ID `%s`：%s" % (
+                m.group(1), "**在记录里**（下表就是它那条）" if _hit else
+                "**不在这张表里**（可能更早、或被清理过；说「查这个任务 <ID>」我可以按 ID 直接读）"))
+    except Exception:      # noqa: silent-ok
+        pass
+    if not out:
+        return ""
+    return "【载体先核过的事实】\n" + "\n".join(out) + "\n\n【记录原文】\n"
+
+
+def _facts_prose(facts, label=""):
+    """把结构化记录**说成人话**（载体自己说，不调模型）。
+
+    只在模型真调不通时用。原则：只说记录里有的，按状态归类，不推测因果。
+    —— 这是"没有模型也能把事说清"的兜底，所以措辞里不出现"模型"二字。
+    """
+    raw = str(facts or "").strip()
+    lines = [l.strip() for l in raw.splitlines() if l.strip()]
+    body = [l for l in lines if not l.startswith(("📋", "|", "```"))]
+    rows = [l for l in body if l.startswith(("-", "*", "·"))]
+    if not rows:
+        rows = [l for l in body if len(l) > 6][:8]
+    st = {"完成": 0, "失败": 0, "进行": 0, "待": 0}
+    for r in rows:
+        if "完成" in r:
+            st["完成"] += 1
+        elif "失败" in r:
+            st["失败"] += 1
+        elif "进行" in r or "跑" in r:
+            st["进行"] += 1
+        elif "待" in r or "pending" in r.lower():
+            st["待"] += 1
+    out = []
+    what = (label or "记录").replace("（载体实取）", "").strip()
+    if rows:
+        out.append("%s一共 %d 条。" % (what, len(rows)))
+        bits = []
+        for k in ("完成", "失败", "进行", "待"):
+            if st[k]:
+                bits.append("%s %d 条" % (k, st[k]))
+        if bits:
+            out.append("按状态分：%s。" % "、".join(bits))
+
+    def _pick(r):
+        t = re.sub(r"^[-*·\s`]+", "", r)
+        t = re.sub(r"`", "", t)
+        return t[:120]
+
+    if rows:
+        out.append("最近一条是：%s" % _pick(rows[0]))
+    if len(rows) > 1:
+        out.append("更早的还有：%s" % _pick(rows[-1]))
+    if not out:
+        out = ["记录原文如下：" + raw[:300].replace("\n", " ／ ")]
+    return "\n".join(out)
 
 
 def _answer_with_facts(question, facts, label="", fallback_head=""):
@@ -2662,20 +2763,24 @@ def _answer_with_facts(question, facts, label="", fallback_head=""):
     _sn0 = [x for x in re.findall(r"\d+(?:\.\d+)?", _clean0) if len(x) <= 4]
     if not ((_raw0.count("|") >= 4) or (len(_sn0) >= 3) or (len(_raw0) >= 400)):
         return (fallback_head or "") + _raw0
-    _n, _ok = _narrate_facts(question, facts, label)
+    _n, _ok, _miss = _narrate_facts(question, facts, label)
     _raw = _raw0
     if _ok:
-        # 【解说成功就不贴原始块】用户截图里那行 `<details><summary>原始数据…` 是 HTML 标签，
-        #   界面不认它，直接把标签当正文显示出来了 —— 又丑又占地方。
-        #   现在只留一行来源，想看原始记录随时说一句就贴。
+        # 【解说成功就不贴原始块】`<details>` 那种 HTML 标签界面不认，会被当正文显示出来。
+        #   只留一行来源；数字没引到的，补一行**原始要点**（让用户能核对，又不抢掉 AI 的话）。
+        _out = _n
+        if _miss:
+            _out += "\n\n> 原始要点：%s —— 这一行是载体从记录里直接摘的，上面的话是模型说的。" \
+                % "、".join(_miss[:4])
         return ("%s\n\n> 数据来源：%s（载体实取）。想看原始记录，说「核对一下」我就把原文贴出来。"
-                % (_n, label or "载体"))
+                % (_out, label or "载体"))
     if not _raw:
         return _n or ""
-    # 解说失败 → 贴原始数据，用代码块（markdown 安全，不会露出标签）
-    return ("%s这次模型没能把数据讲成话（不可用或没引用到关键数值），"
-            "直接给你**载体实取到的原始数据**，数字一个字没动：\n\n```\n%s\n```"
-            % (fallback_head or "", _raw[:2000]))
+    # 【模型真调不通】也不要那句「模型没能把数据讲成话」的模板 ——
+    #   用户原话：「每一个都得是AI说不能是模板」。改成**载体按数据自己说话**（是句子，不是代码块），
+    #   只用一行如实标明这句话是谁说的。
+    return "%s%s\n\n> （以上是载体直接从记录里读的，这一轮模型没有应答；原文可要，说「核对一下」。）" \
+        % (fallback_head or "", _facts_prose(_raw, label))
 
 
 def _fuse_if_time(question, facts, label="", fallback_head="", budget_s=8.0):
@@ -13770,7 +13875,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 #   结果证据账本里那份材料只有 34 字节，答案里的 111.17.158.64 因此绑不上来源，
                 #   审计显示「0 条有据」—— 有依据却记不出来，等于把自证能力自己废掉。）
                 tool_trace.append({"tool": "net_ip", "args": {}, "result": str(_ipres)[:4000]})
-                answer = "🌐 **我的公网 IP（net_ip 实测）**\n\n```\n%s\n```" % _ipres.strip()
+                answer = _fuse_if_time(user_input, _ipres.strip(), label="net_ip 实测")
+                if not answer:
+                    answer = "🌐 **我的公网 IP（net_ip 实测）**\n\n```\n%s\n```" % _ipres.strip()
         except Exception as e:
             LOG.debug("忽略异常(%s:%d): %s", __file__, 1560, e)
 
@@ -13784,7 +13891,11 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 if _res and "未知工具" not in _res:
                     # 同上：轨迹留真实结果，别只留一句「用户点名，直接调用」
                     tool_trace.append({"tool": _nt, "args": {}, "result": str(_res)[:4000]})
-                    answer = "🔧 **%s** 实测结果：\n\n```\n%s\n```" % (_nt, _res.strip()[:2500])
+                    # 用户点名要看这个工具的原文 → 是数据时让模型讲成人话，不是数据就原样给
+                    answer = _fuse_if_time(user_input, _res.strip()[:2500],
+                                           label="%s 实测" % _nt)
+                    if not answer:
+                        answer = "🔧 **%s** 实测结果：\n\n```\n%s\n```" % (_nt, _res.strip()[:2500])
             except Exception as e:
                 LOG.debug("忽略异常(%s:%d): %s", __file__, 1570, e)
 
@@ -13824,8 +13935,11 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("任务查询：%s", _tq[0])
                     tool_trace.append(_trace_entry(_tq[0], _tq[1], _tqr))
                     _note_tool_path(tool_trace, path="task")
-                    # 【分工】进度数据由载体读（真），话由模型说（自然）
-                    answer = _answer_with_facts(user_input, _tqr, label="任务进度")
+                    # 【分工】进度数据由载体读（真），话由模型说（自然）。
+                    # 先把"清空了吗 / 重启还在吗 / 这个 ID 还认得吗"核成事实一起交给模型，
+                    # 否则它拿到的只有一张表，只能念表（用户截图里就是念表 + 模板）。
+                    _hdr = _task_evidence_header(user_input, _tqr)
+                    answer = _answer_with_facts(user_input, (_hdr + _tqr), label="后台任务记录")
             except Exception as _tq_e:      # noqa: silent-ok — 查任务挂了不能拖垮整轮
                 LOG.debug("任务查询路由失败（忽略）：%s", _tq_e)
 
