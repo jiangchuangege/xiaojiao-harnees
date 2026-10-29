@@ -14855,10 +14855,11 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                            % (_dd.get("dropped_paras") or 0, _dd.get("dropped_sents") or 0))
                 # 全篇都跟前文重复 → 不能回空，如实说清并给下一步
                 answer = (_rest + _note_d) if _rest else (
-                    "⚠️ 这一阶段写出来的内容与前面阶段**整段重复**，已经全部去掉（%d 段），"
-                    "没有一个字是新写的。\n\n"
-                    "这不是「没写」，是「又写了一遍同样的东西」。要往下走，给我一个**新方向**"
-                    "（时间往后推 / 换场景 / 加一个新人物），我再写。" % (_dd.get("dropped_paras") or 0))
+                    "这一阶段生成的内容与前面阶段**完全重复**（%d 段全部去掉了），"
+                    "没有一个字是新的，所以我没有拿它充数。\n\n"
+                    "要我接着写，给个**新方向**就行：时间往后推（「三年后」）、换场景"
+                    "（「他走进灶房」）、或者加一个人（「邻居来了」）。"
+                    % (_dd.get("dropped_paras") or 0))
             else:
                 answer = _dd.get("text") or answer
     except Exception as _dde:      # noqa: silent-ok — 去重挂了也必须把正文给出去

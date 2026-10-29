@@ -61,12 +61,12 @@ _SENT_REPEAT_MAX = 2    # 同一句最多留 2 次（第 3 次起才丢）
 #     → 重合度会被长度差拉低（实测 0.46），但包含度接近 1。
 #   实测（live 真文本）这两类都出现过，只用 Jaccard 会漏掉后者。
 _NEAR_PARA_MIN = 30     # 短段落不参与近似比对（「屋里没人。」这种可能是有意的节拍）
-_NEAR_PARA_JAC = 0.62   # 段落：重合度 ≥ 这个值算重复
-_NEAR_PARA_CONTAIN = 0.85   # 段落：包含度 ≥ 这个值也算重复
+_NEAR_PARA_JAC = 0.70   # 段落：重合度 ≥ 这个值算重复
+_NEAR_PARA_CONTAIN = 0.88   # 段落：包含度 ≥ 这个值也算重复
 _NEAR_SENT_MIN = 10     # 短句不参与近似比对
 _NEAR_SENT_JAC = 0.58   # 句子：重合度 ≥ 这个值算重复
 _NEAR_SENT_CONTAIN = 0.85   # 句子：包含度 ≥ 这个值也算重复
-_NEAR_WINDOW = 300      # 只跟最近这么多段/句比（再往前的多半是别的章节）
+_NEAR_WINDOW = 60      # 只跟最近这么多段/句比（再往前的多半是别的章节）
 
 _KEEP_PARA_TXT = 400    # 每段只存前这么多字（够比对，不把磁盘写爆）
 _KEEP_SENT_TXT = 120
