@@ -105,7 +105,13 @@ def _fetch(secids):
            "?fltt=2&secids=%s&fields=f1,f2,f3,f4,f12,f13,f14,f124&_=%d"
            % (key, int(_now * 1000)))
     last_err = ""
+    _t_start = time.time()
     for attempt in (1, 2):
+        # 【总时间上限】实测：接口被限流时，每次重试、每组单查都要等，加起来能拖到 20 秒以上，
+        #   而用户要的是"要么给数，要么快点说查不到"。所以整条链路封顶 ~8 秒。
+        if (time.time() - _t_start) > 8.0:
+            last_err = (last_err or "超时") + "（总耗时超过 8 秒，已停下）"
+            break
         try:
             r = requests.get(url, timeout=12,
                              headers={"User-Agent": _UA,
@@ -126,12 +132,58 @@ def _fetch(secids):
                                      "last": it.get("f2"), "chg_pct": it.get("f3"),
                                      "chg": it.get("f4"), "ts": it.get("f124")})
                     if rows:
-                        _CACHE[key] = {"at": _now, "rows": rows}
-                        return rows, ""
+                        got = {str(r.get("code")) for r in rows}
+                        missing = [x for x in secids if x.split(".")[-1] not in got]
+                        if not missing:
+                            _CACHE[key] = {"at": _now, "rows": rows}
+                            return rows, ""
+                        # 【部分缺失也要补齐】实测：美股三大指数 ulist 只回了「标普500」，
+                        #   另外两个（道指/纳指）没回来 —— 只当"有数据就返回"会让用户看到残缺的表。
+                        LOG.info("行情：ulist 只回了 %d/%d，缺的用单查补齐", len(rows), len(secids))
                     last_err = "接口没给数据（diff 为空）"
         except Exception as e:      # noqa: silent-ok — 网络失败如实上报
             last_err = "%s: %s" % (type(e).__name__, str(e)[:80])
         time.sleep(0.8 * attempt)
+    # 【最后一道：逐个单查】实测 `ulist.np` 不认商品合约（101.GC00Y 这类返回空），
+    #   但单查接口 `stock/get` 认：COMEX黄金 f43=4037.0、COMEX白银 f43=52.44 都能拿到。
+    #   所以整批拿不到时，改成一个个问 —— 慢一点，但总比"查不到"强。
+    singles = []
+    # ulist 已经回来的不再问一遍（实测：ulist 有时只回 1~2 个，剩下的才需要单查）
+    try:
+        _have = {str(r.get("code")) for r in (rows or [])}
+    except Exception:      # noqa: silent-ok — rows 还没定义就当"一个都没回来"
+        _have = set()
+    for sid in secids:
+        if (time.time() - _t_start) > 8.0:
+            break       # 单查也要守总时间上限（限流时每个都要等）
+        if sid.split(".")[-1] in _have:
+            continue
+        try:
+            r = requests.get(
+                "https://push2.eastmoney.com/api/qt/stock/get"
+                "?fltt=2&secid=%s&fields=f43,f57,f58,f169,f170&_=%d"
+                % (sid, int(time.time() * 1000)),
+                timeout=10, headers={"User-Agent": _UA,
+                                     "Referer": "https://quote.eastmoney.com/"})
+            j = json.loads(r.text or "{}")
+            d = j.get("data") or {}
+            if d and d.get("f43") not in (None, "", "-"):
+                singles.append({"code": str(d.get("f57") or sid.split(".")[-1]),
+                                "name": str(d.get("f58") or sid),
+                                "last": d.get("f43"), "chg_pct": d.get("f170"),
+                                "chg": d.get("f169"), "ts": None})
+        except Exception as e:      # noqa: silent-ok — 单个查不到就跳下一个
+            LOG.debug("单查 %s 失败：%s", sid, e)
+        time.sleep(0.3)
+    if singles or rows:
+        # 【别把已经拿到的丢掉】ulist 可能给了 1~2 个、单查又补齐一部分：
+        #   合并后一起返回（原来只 `return singles`，一旦单查全失败，连已有的一起丢了）。
+        merged = list(rows or []) + [x for x in singles
+                                     if str(x.get("code")) not in {str(r.get("code"))
+                                                                   for r in (rows or [])}]
+        if merged:
+            _CACHE[key] = {"at": time.time(), "rows": merged}
+            return merged, ""
     return [], last_err
 
 
