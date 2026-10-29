@@ -424,13 +424,23 @@ def audit_round(rid_or_rec):
             stale.append({"path": p, "当时": str(old)[:12], "现在": now[:12]})
 
     n = len(claims)
-    verdict = "可复算一致"
-    if recheck_bad or missing_blobs:
+    n_src = len(rec.get("sources") or [])
+    # 【判定顺序：先分"有没有东西可审"，再谈一致不一致】
+    #   用户实测截图：问「你凭什么说你能处理这个任务」，审计跑出来一条
+    #   「可核查断言 0 条 ｜ 结论：可复算一致」—— **0 条断言说"一致"是没意义的**，
+    #   就像"我没检查任何东西，所以全部通过"。这是判定逻辑的错，不是措辞不好。
+    if n == 0:
+        verdict = "无从核实（这条回答里没有可核查的断言）"
+    elif n_src == 0:
+        verdict = "无从核实（这一轮没有任何材料，断言无据可对）"
+    elif recheck_bad or missing_blobs:
         verdict = "账本有问题（复算不一致或缺快照）"
     elif stale:
         verdict = "当时有据，现在部分失效"
-    elif n and supported_now < n:
+    elif supported_now < n:
         verdict = "部分断言当时就没有依据"
+    else:
+        verdict = "可复算一致"
     return {"id": rec.get("id"), "at": rec.get("at"), "question": rec.get("question"),
             "claims": n, "supported": supported_now, "unbound": n - supported_now,
             "recheck_bad": recheck_bad, "missing_blobs": missing_blobs,

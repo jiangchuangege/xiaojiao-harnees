@@ -2456,6 +2456,59 @@ def _override_note(question, answer):
     return a.rstrip() + note, True
 
 
+def _capability_proof_text(question=""):
+    """「你凭什么说你能处理这件事 / 把自评和证据链亮出来」→ 只摆**能被查**的三样东西。
+
+    【为什么不能拿 audit_answer 顶】用户实测：他问「你凭什么说你能处理这个任务？把你刚才的
+      自评和证据链亮出来」，`audit_answer` 去审了**上一轮完全无关的那条**（今天黄金多少钱一克），
+      还给出「断言 0 条 ｜ 结论：可复算一致」—— 答非所问，而且"0 条也说一致"本身就荒谬。
+    这里回答"凭什么"：不吹能力，只列 ① 这一轮调了什么工具 ② 最近一轮账本断言/有据几条
+      ③ 整体账本家底与哈希链，最后写清**能保证什么、不能保证什么**。
+    """
+    from core import evidence_ledger as _EL
+    lines = ["🧾 **我凭什么这么说（只列你能查的部分）**", ""]
+    _tr = []
+    try:
+        _tr = [str(x) for x in (_CTX.get("_turn_tools") or [])]
+    except Exception:      # noqa: silent-ok
+        _tr = []
+    if _tr:
+        lines.append("- 这一轮真调到的工具：%s" % "、".join("`%s`" % x for x in _tr[:5]))
+    else:
+        lines.append("- 这一轮**没有调工具**（载体直答，或纯对话）")
+    try:
+        ag = _EL.audit_recent(limit=1)
+        d = (ag.get("details") or [])
+        if d:
+            r = d[0]
+            lines.append("- 最近一轮入账：`%s` ｜ 问题：%s" % (
+                r.get("id"), str(r.get("question") or "")[:36]))
+            lines.append("  - 可核查断言 **%s** 条 ｜ 复算有据 **%s** 条 ｜ 结论：**%s**" % (
+                r.get("claims") or 0, r.get("supported") or 0, r.get("verdict")))
+        else:
+            lines.append("- 账本里还没有记录（问几件有材料的事才会有）")
+    except Exception as e:      # noqa: silent-ok
+        lines.append("- 账本读不到：%s" % type(e).__name__)
+    try:
+        st = _EL.stats()
+        ch = _EL.verify_chain()
+        _bad = (ch.get("broken") or [{}])[0].get("line")
+        lines.append("- 账本总体：**%s** 轮 ｜ 断言 %s 条 ｜ 有据 %s 条（%.0f%%）｜ 哈希链：%s" % (
+            st.get("rounds") or 0, st.get("claims") or 0, st.get("supported") or 0,
+            100.0 * float(st.get("ratio") or 0),
+            "完整" if ch.get("ok") else "断了（第 %s 行起）" % _bad))
+    except Exception as e:      # noqa: silent-ok
+        lines.append("- 账本统计读不到：%s" % type(e).__name__)
+    lines += ["",
+              "**我能保证的**：工具是**真调了**（结果和快照都在盘上）；数字是**算出来的**"
+              "（算术/时钟/行情由载体自己算或取）；拿不到就明说查不到 —— 这些你都能逐条复查。",
+              "**我不能保证的**：需要我「写」的内容（文笔、判断、建议）质量取决于本机这颗 4B 火种；"
+              "外部接口被限流时我拿不到数据，那时我只会说查不到。",
+              "",
+              "—— 想逐条核：说「审计最近几轮」，或打开 http://127.0.0.1:5000/proof 。"]
+    return "\n".join(lines)
+
+
 def _time_guard(question, answer):
     """问"今天几号/星期几/几点/哪一年"而答案里没有真实时间 → 载体补一句。
 
@@ -3015,6 +3068,53 @@ def _needs_continuation(text):
         return False
 
 
+# ================== 流式复读拦截（2026-10-29）==================
+# 【用户实测截图】写长文写到一半，屏幕上出现：
+#   风灌进来，带着雨味，带着泥土味，带着…带着某种被遗忘的、带着…………带着某种被遗忘的、带着……
+# 根因不是"没检测"——事后检测器能判出来（`ngram_repeat` 实测命中）。问题是**流式已经把
+# delta 一个个推给浏览器了**，等这一段生成完再截断，用户早就看到那段垃圾了。
+# 所以这里在**推送通道**上加一道闸：边推边查，一旦出现复读就停止推送该段剩余内容，
+# 交给段级逻辑去截断 + 重试（那部分本来就有）。用户看到的顶多是"话说到一半停住又接上"，
+# 而不是"满屏同一句话打转"。
+class _StreamRepeatGuard:
+    """包一层 on_delta：滚动检测，复读一旦出现就停止向用户推送（内容仍完整喂给上级）。"""
+
+    def __init__(self, on_delta, every=80, window=400):
+        self.on_delta = on_delta
+        self.every = int(every)
+        self.window = int(window)
+        self.text = ""
+        self.blocked = False
+        self.hit = ""
+        self._n = 0
+
+    def __call__(self, piece):
+        s = str(piece or "")
+        if not s:
+            return
+        self.text += s
+        if self.blocked:
+            return                       # 已判定复读：不再往用户屏幕上推
+        self._n += len(s)
+        if self._n >= self.every:
+            self._n = 0
+            try:
+                from core.health import degeneration as _dg
+                det = _dg.DegenerationDetector()
+                if det.check(self.text[-self.window:], where="stream"):
+                    self.blocked = True
+                    self.hit = str(getattr(det, "hit", "") or "复读")
+                    LOG.warning("流式复读已拦截（%s）：这一段后面的内容不再推给界面，"
+                                "等段级截断+重试处理", self.hit[:60])
+                    return
+            except Exception as e:      # noqa: silent-ok — 检测器不可用就照常推
+                LOG.debug("流式复读检测不可用（忽略）：%s", e)
+        try:
+            self.on_delta(s)
+        except Exception as e:      # noqa: silent-ok
+            LOG.debug("流式推送失败（忽略）：%s", e)
+
+
 def _generate_long(task, system, on_chunk=None, on_delta=None):
     """按需生成任意长度并**无缝合并**；失败返回 None（回落普通单次回答，绝不把对话搞挂）。"""
     try:
@@ -3023,11 +3123,14 @@ def _generate_long(task, system, on_chunk=None, on_delta=None):
             sys.path.insert(0, root)
         from core import continuation as _c
         _CONT_STOP.clear()
+        _guard = _StreamRepeatGuard(on_delta) if on_delta else None
         res = _c.generate_unlimited(task, system, cfg=_continuation_cfg(), on_chunk=on_chunk,
                                     should_stop=_CONT_STOP.is_set,
                                     stream_fn=(_llm_stream if on_delta else None),
-                                    on_delta=on_delta,
+                                    on_delta=(_guard if _guard else None),
                                     quality_gate=_longform_quality_gate)
+        if _guard is not None and _guard.blocked:
+            LOG.warning("长文：这一段触发过流式复读拦截（%s）", _guard.hit[:60])
         LOG.info("长文续写：%d 段 / %d 字 / 去重裁掉 %d / 重试 %d / 停止=%s / 耗时 %.1fs",
                  len(res["chunks"]), res["chars"], res["dedup_chars"], res["retries"],
                  res["stopped"], res["elapsed_s"])
@@ -12303,6 +12406,12 @@ def _fast_carrier_answer(text):
             return _wrap("carrier_clock", _ck)
     except Exception:      # noqa: silent-ok
         pass
+    # ②b 问「你凭什么说你能」/「把自评和证据链亮出来」→ 亮可核查的那部分（别跑去审计上一轮）
+    try:
+        if re.search(r"(凭什么|你凭什么|什么底气|证明你能|证据链|自评.{0,6}(亮|给|看))", q):
+            return _wrap("capability_proof", _capability_proof_text(q))
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("快路·凭什么 失败（交回完整链路）：%s", e)
     # ③ 问载体自己的账 / 自审 / 换模型 / 旋钮 / 面板
     try:
         _tool, _args = None, {}
