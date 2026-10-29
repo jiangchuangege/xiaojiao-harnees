@@ -115,6 +115,13 @@ def dedupe(sid, new_text):
     返回 {"text", "dropped_paras", "dropped_sents", "seen_paras"}。
     """
     st = load(sid)
+    # 【同一份文本不重复去重】去重现在被两处调用（分块长文那条路 + 每一轮回答那条路）。
+    #   同一份文本第二次进来时，它自己的段落已经在「已写过」里了 → 会被**整篇删光**。
+    #   所以先认指纹：这份文本刚刚处理过，就原样返回，绝不再删一遍。
+    _tk = hashlib.sha256(str(new_text or "").encode("utf-8")).hexdigest()[:16]
+    if st.get("last_text_key") == _tk:
+        return {"text": str(new_text or ""), "dropped_paras": 0, "dropped_sents": 0,
+                "seen_paras": len(st.get("paras") or []), "already": True}
     seen_para = set(st.get("paras") or [])
     seen_sent = list(st.get("sents") or [])
     out, dropped_p = [], 0
@@ -168,6 +175,7 @@ def dedupe(sid, new_text):
     st["sents"] = (seen_sent + new_sents)[-4000:]
     st["paras"] = st["paras"][-4000:]
     st["chars"] = int(st.get("chars") or 0) + len(text)
+    st["last_text_key"] = _tk
     save(sid, st)
     if dropped_p or dropped_s:
         LOG.info("长文去重：丢掉重复段落 %d 段、重复句子 %d 句（与前面各阶段比对）",

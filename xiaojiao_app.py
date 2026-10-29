@@ -14816,6 +14816,50 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         _have = {id(x) for x in (tool_trace or [])}
         tool_trace = [x for x in _pre_trace if id(x) not in _have] + list(tool_trace or [])
 
+    # 4b-ter. 【创作轮跨阶段去重】每一轮回答都跟**同一会话前面写过的内容**比一遍。
+    # 【为什么必须在这里】实测（live）：写完第一段，接着说「接着写第二阶段」——
+    #   第二阶段开头是新写的（雨夜、楼下），**后面 4 段是第一阶段的原样复制**，
+    #   连「他站在原地，忽然觉得——自己好像也不是第一次回来了」都一字不差。
+    #   根因：每个阶段都是一次独立请求，模型看不到前面写过什么，于是把同一段重新发明一遍。
+    #   去重原来只挂在 `_generate_long`（分块长文）那条路上，而「写一段小说」走的是这条路，
+    #   压根没经过它 —— 所以用户看到的是「同一段说三次」。
+    # 【只对创作轮做】事实性回答的重复可能是必要的（把结论再说一遍强调），不能乱删。
+    try:
+        if answer and _is_creative_writing(user_input) and len(str(answer)) >= 120:
+            from core import longform_memory as _LMd
+            # 【换作品就清账】累积是按会话记的；用户说「写一个新的故事 / 重写一篇」时，
+            #   上一篇的段落对它是**另一部作品**，拿来做去重是误伤。
+            if re.search(r"(新故事|新小说|新的故事|另一个故事|换个故事|另一篇|重写|重新写|"
+                         r"从头写|另起一篇)", str(user_input or "")):
+                try:
+                    _LMd.reset(str(get_current_session()[0].get("id") or "default"))
+                    LOG.info("创作：用户要写新的作品 → 清掉上一个作品的重复账")
+                except Exception:      # noqa: silent-ok — 清不了就照旧累积，最多多删一段
+                    pass
+            _sid_d = ""
+            try:
+                _sid_d = str(get_current_session()[0].get("id") or "")
+            except Exception:      # noqa: silent-ok — 拿不到会话就当默认会话
+                _sid_d = ""
+            _dd = _LMd.dedupe(_sid_d or "default", str(answer))
+            if _dd.get("dropped_paras") or _dd.get("dropped_sents"):
+                LOG.info("创作轮跨阶段去重：去掉重复段落 %d 段、重复句子 %d 句（与前面各阶段比对）",
+                         _dd.get("dropped_paras"), _dd.get("dropped_sents"))
+                _rest = (_dd.get("text") or "").strip()
+                _note_d = ("\n\n—— （这一阶段有 %d 段 / %d 句是前面已经写过的，"
+                           "已自动去掉，留下的都是新写的）"
+                           % (_dd.get("dropped_paras") or 0, _dd.get("dropped_sents") or 0))
+                # 全篇都跟前文重复 → 不能回空，如实说清并给下一步
+                answer = (_rest + _note_d) if _rest else (
+                    "⚠️ 这一阶段写出来的内容与前面阶段**整段重复**，已经全部去掉（%d 段），"
+                    "没有一个字是新写的。\n\n"
+                    "这不是「没写」，是「又写了一遍同样的东西」。要往下走，给我一个**新方向**"
+                    "（时间往后推 / 换场景 / 加一个新人物），我再写。" % (_dd.get("dropped_paras") or 0))
+            else:
+                answer = _dd.get("text") or answer
+    except Exception as _dde:      # noqa: silent-ok — 去重挂了也必须把正文给出去
+        LOG.debug("创作轮跨阶段去重失败（忽略）：%s", _dde)
+
     # 4c. 【第 2 步】把这一轮对话永久写进向量库 + 回填"模型是否真用上了检索到的记忆"    #     为什么写回要放在这一轮结束时：只有答案出来了才知道记忆有没有被用上；
     #     这条回填就是验收里"使用率 ≥70%"的唯一依据，必须如实记，不能自己给自己打高分。
     if answer and not lean:
