@@ -14846,6 +14846,10 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 LOG.info("创作轮跨阶段去重：去掉重复段落 %d 段、重复句子 %d 句（与前面各阶段比对）",
                          _dd.get("dropped_paras"), _dd.get("dropped_sents"))
                 _rest = (_dd.get("text") or "").strip()
+                # 【去重后不许留半句】实测：最后一段是「他站在门口…忽然觉得——」，
+                #   紧随其后的那半句被判为重复删掉，于是正文停在一个破折号上。
+                #   只收尾，不改中间任何一个字（中间的同句是作者写的，保持原样）。
+                _rest = re.sub(r"(?:[，,、：:；;]|——|—|…|\.{3})\s*$", "", _rest).rstrip()
                 _note_d = ("\n\n—— （这一阶段有 %d 段 / %d 句是前面已经写过的，"
                            "已自动去掉，留下的都是新写的）"
                            % (_dd.get("dropped_paras") or 0, _dd.get("dropped_sents") or 0))
