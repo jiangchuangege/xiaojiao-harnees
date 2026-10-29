@@ -22,6 +22,7 @@ import io
 import json
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -40,6 +41,8 @@ _ALT = None
 _MODEL = ""
 
 MAX_MEMBERS = 8
+ACT_PROB = 0.45        # 每一轮里，一个"允许动手"的成员有这么大几率真的去动手
+ACT_MIN_GAP = 1        # 同一个成员最少隔几条消息才再动手（避免一直闷头干活不说话）
 
 # 【默认成员】建群时没指定成员，就放三个**不同**的人 —— 一个人自说自话不叫群聊。
 #   人设写在这里而不是空着：空人设的模型会互相顺着说，聊两句就成复读机。
@@ -110,7 +113,11 @@ def _norm_members(members):
         mem.append({"name": nm,
                     "persona": str((m or {}).get("persona") or "").strip(),
                     "model": str((m or {}).get("model") or "").strip(),
-                    "admin": bool((m or {}).get("admin"))})
+                    "admin": bool((m or {}).get("admin")),
+                    # 【自由但要能收回】allow_tools=它能不能在这个群里动手（调插件/写文件/写代码）。
+                    #   默认开；随时可以用 set_member_perm 关掉。
+                    "allow_tools": bool((m or {}).get("allow_tools", True)),
+                    "skills": list((m or {}).get("skills") or [])})
     for i, m in enumerate(mem):
         m["color"] = _COLORS[i % len(_COLORS)]
     return mem[:MAX_MEMBERS]
@@ -180,14 +187,19 @@ MAX_MSGS_STORE = 400        # 每个群只留最近这么多条
 CTX_MSGS = 14               # 拼给模型的最近消息条数
 
 
-def install(llm_fn=None, alt_fn=None, model_name=""):
-    global _LLM, _ALT, _MODEL
+_ACT = None          # 带工具的调用：act(member_dict, messages) -> (text, by, actions)
+
+
+def install(llm_fn=None, alt_fn=None, model_name="", act_fn=None):
+    global _LLM, _ALT, _MODEL, _ACT
     if llm_fn is not None:
         _LLM = llm_fn
     if alt_fn is not None:
         _ALT = alt_fn
     if model_name:
         _MODEL = str(model_name)
+    if act_fn is not None:
+        _ACT = act_fn
 
 
 def _ensure():
@@ -373,6 +385,42 @@ def set_avatar(gid, filename):
     return set_group(gid, avatar=filename)
 
 
+def set_member_perm(gid, name, allow_tools):
+    """开关某个成员"能不能动手"（调插件 / 写文件 / 写代码 / 造插件）。"""
+    with _LOCK:
+        d = _load()
+        for g in d.get("groups") or []:
+            if g.get("id") != gid:
+                continue
+            for m in g.get("members") or []:
+                if m.get("name") != name:
+                    continue
+                m["allow_tools"] = bool(allow_tools)
+                _save(d)
+                _event("set_perm", gid=gid, member=name, allow_tools=bool(allow_tools))
+                return {"ok": True, "member": m}
+            return {"ok": False, "error": "群里没有这个人：%s" % name}
+    return {"ok": False, "error": "没有这个群"}
+
+
+def _note_skill(gid, name, note):
+    """把"这次动手做了什么"记进成员身上（越用越强就靠这个接续）。"""
+    with _LOCK:
+        d = _load()
+        for g in d.get("groups") or []:
+            if g.get("id") != gid:
+                continue
+            for m in g.get("members") or []:
+                if m.get("name") != name:
+                    continue
+                sk = list(m.get("skills") or [])
+                sk.append({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "note": str(note)[:200]})
+                m["skills"] = sk[-20:]        # 只留最近 20 条，别把 prompt 撑爆
+                _save(d)
+                return True
+    return False
+
+
 def add_member(gid, name, persona="", model=""):
     """往群里加一个人（最多 MAX_MEMBERS）。同名不加。"""
     nm = str(name or "").strip()
@@ -498,6 +546,15 @@ def run_round(gid, rounds=1):
             per = _persona_of(m)
             if per:
                 sys_p += "\n你的人物设定：" + str(per)[:400]
+            # 【越用越强】把自己最近做过的事带上 —— 接着上次往前走，而不是每轮从零开始。
+            _sk = [x.get("note") for x in (m.get("skills") or [])[-3:] if x.get("note")]
+            if _sk:
+                sys_p += "\n你最近在这个群里做过的事：" + "；".join(str(x)[:80] for x in _sk)
+            # 【能动手就写进提示词】只有允许动手的成员才提工具，免得它想动又动不了。
+            _can_act = bool(m.get("allow_tools", True)) and (_ACT is not None)
+            if _can_act:
+                sys_p += ("\n你有工具可以用：查资料、读写文件、跑命令、画图，必要时用 forge_plugin 造新插件。"
+                          "该动手就动手，别只在嘴上说；做完用一两句话说清你做了什么、结果如何。")
             if g.get("style"):
                 sys_p += "\n群规矩：" + str(g.get("style"))[:300]
             usr = "群主题：%s\n\n最近的聊天记录：\n%s\n\n现在轮到你（%s）说话：" % (
@@ -505,8 +562,23 @@ def run_round(gid, rounds=1):
                 _transcript(recent) or "（还没有人说话，你起个头）",
                 m.get("name"))
             _t_say = time.time()
-            txt, who = _ask(m.get("model") or "", [{"role": "system", "content": sys_p},
-                                                   {"role": "user", "content": usr}])
+            _actions = []
+            _msgs_for_model = [{"role": "system", "content": sys_p},
+                               {"role": "user", "content": usr}]
+            txt, who = "", ""
+            # 载体掷骰：这一轮是"动手"还是"只说一句"（动手慢，不能每轮都动）
+            _act_roll = random.random()
+            _do_act = bool(_can_act and _act_roll < ACT_PROB)
+            if _do_act:
+                try:
+                    txt, who, _actions = _ACT(m, _msgs_for_model)
+                except Exception as e:      # noqa: silent-ok — 动手失败就退回"只说一句"
+                    LOG.debug("群组·动手失败（退回只说）：%s", e)
+                    txt, who, _actions = "", "", []
+                _event("act_try", gid=gid, member=m.get("name"), roll=round(_act_roll, 3),
+                       prob=ACT_PROB, ok=bool(txt), tools=[a.get("tool") for a in (_actions or [])][:6])
+            if not txt:
+                txt, who = _ask(m.get("model") or "", _msgs_for_model)
             _sec = round(time.time() - _t_say, 2)
             if not txt:
                 _event("silent", gid=gid, member=m.get("name"),
@@ -528,7 +600,7 @@ def run_round(gid, rounds=1):
                 continue
             msg = {"id": uuid.uuid4().hex[:8], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
                    "who": m.get("name"), "text": txt, "by": who, "sec": _sec,
-                   "round": r + 1}
+                   "round": r + 1, "actions": (_actions or [])[:6]}
             with _LOCK:
                 d = _load()
                 for gg in d.get("groups") or []:
@@ -538,7 +610,17 @@ def run_round(gid, rounds=1):
                     gg["messages"] = gg["messages"][-MAX_MSGS_STORE:]
                     _save(d)
             added.append(msg)
-            _event("say", gid=gid, member=m.get("name"), chars=len(txt), by=who, sec=_sec)
+            _event("say", gid=gid, member=m.get("name"), chars=len(txt), by=who, sec=_sec,
+                   actions=[a.get("tool") for a in (_actions or [])][:6])
+            # 动手了就记到这人身上（下一轮 prompt 会带"你最近做过什么"）
+            for _a in (_actions or [])[:3]:
+                try:
+                    _line = str(_a.get("result") or "").strip().splitlines()
+                    _line = (_line[0] if _line else "").strip()
+                    _note_skill(gid, m.get("name"),
+                                "用 %s 做了：%s" % (_a.get("tool"), _line[:40]))
+                except Exception as _e:      # noqa: silent-ok
+                    LOG.debug("群组·记 skills 失败：%s", _e)
     LOG.info("群组：%s 跑了 %d 轮，新增 %d 条消息", g.get("name"), rounds, len(added))
     return {"ok": True, "added": added, "group": get(gid)}
 

@@ -2891,12 +2891,97 @@ def _maybe_post_moment(user_input="", answer=""):
         LOG.debug("朋友圈自动发失败（忽略）：%s", e)
 
 
+def _group_act(member, messages):
+    """群成员「动手」：走载体的带工具大脑（同一套工具、同一套红线）。
+
+    返回 (正文, 用了谁, actions)。actions 是这次真调过的工具（名字+参数+结果摘要），
+    载体把它记进事件账与这个成员的 skills —— 下一轮它自己会看到"上次我做了什么"。
+
+    【为什么危险操作还是安全的】工具执行入口是同一个 `run_tool()`：
+    删除红线、危险命令〔待确认〕、本轮工具门都还在，群里动手**不是**绕过它们的后门。
+    """
+    _prev_model = None
+    _prev_input = None
+    try:
+        _prev_model = _CTX.get("force_model")
+        _prev_input = _CTX.get("user_input")
+        if member.get("model"):
+            _CTX["force_model"] = str(member.get("model"))
+        _CTX["user_input"] = "群聊：%s" % (member.get("name") or "")
+        _CTX["intent"] = "chat"
+        # 【为什么只给一小撮工具】实测：一次把 124 个工具全摆给一颗 4B，它干脆一个都不调
+        #   （事件账里 act_try 中了 5 次，tools 全是空）。干活常用的是这几个。
+        _work_tools = ["write_file", "edit_file", "read_file", "list_files", "run_command",
+                       "web_search", "get", "fetch", "now", "net_ip", "get_weather",
+                       "skill_list", "forge_plugin"]
+        _names = []
+        try:
+            _all = _build_tools() or []
+            _names = [str(((t or {}).get("function") or {}).get("name") or "") for t in _all]
+            _names = [x for x in _names if x]
+        except Exception as e:      # noqa: silent-ok — 建表失败就退化成"没有本轮上下文"
+            LOG.debug("群组动手·建工具表失败：%s", e)
+        _subset = [x for x in _work_tools if (not _names or x in _names)]
+        if _names:
+            try:
+                from core import tool_gate as _TG
+                _TG.set_turn(_names, user_text=str(member.get("name") or ""))
+            except Exception as e:      # noqa: silent-ok
+                LOG.debug("群组动手·工具门记账失败：%s", e)
+        _ans, _trace = llm_chat_tools(messages, max_rounds=3, budget_s=45,
+                                      tools_subset=(_subset or None), temperature=0.7)
+        if not _trace:
+            # 【再试一次】第一次没调工具：只给三个最可能用到的，并在话里直接点名要它动手。
+            _tiny = [x for x in ("write_file", "run_command", "web_search") if x in _subset]
+            if _tiny:
+                _retry = list(messages) + [
+                    {"role": "user",
+                     "content": "别只用嘴说：现在就调用工具做一件具体的事（可选：%s），"
+                                "做完再总结一句。" % "、".join(_tiny)}]
+                try:
+                    _ans2, _trace2 = llm_chat_tools(_retry, max_rounds=2, budget_s=40,
+                                                    tools_subset=_tiny, temperature=0.6)
+                    if _trace2:
+                        _ans, _trace = _ans2, _trace2
+                except Exception as e:      # noqa: silent-ok
+                    LOG.debug("群组动手·第二次也失败：%s", e)
+        LOG.info("群组动手：%s 拿到 %d 个工具（%s）→ 实际调用 %d 个",
+                 member.get("name"), len(_subset), "、".join(_subset[:4]), len(_trace or []))
+        _txt = str(_ans or "").strip()
+        _acts = []
+        for t in (_trace or []):
+            if not isinstance(t, dict):
+                continue
+            _acts.append({"tool": str(t.get("tool") or ""),
+                          "args": t.get("args") or {},
+                          "result": str(t.get("result") or "")[:160]})
+        _who = str(_CTX.get("route", {}).get("model") or member.get("model") or MODEL_NAME or "")
+        if _acts:
+            LOG.info("群组动手：%s 在群里调了 %d 个工具（%s）",
+                     member.get("name"), len(_acts),
+                     "、".join(a["tool"] for a in _acts[:4]))
+        return _txt, _who, _acts
+    finally:
+        try:
+            if _prev_model is None:
+                _CTX.pop("force_model", None)
+            else:
+                _CTX["force_model"] = _prev_model
+            if _prev_input is None:
+                _CTX.pop("user_input", None)
+            else:
+                _CTX["user_input"] = _prev_input
+        except Exception:      # noqa: silent-ok
+            pass
+
+
 def _social():
     """朋友圈 / 群组 / 人设：把火种与换火种能力注进去（幂等）。"""
     from core import moments as _M, ai_group as _G
     _M.install(llm_chat, alt_fn=_fuse_alt_llm, model_name=str(MODEL_NAME or ""),
                image_fn=_moment_image)
-    _G.install(llm_chat, alt_fn=_fuse_alt_llm, model_name=str(MODEL_NAME or ""))
+    _G.install(llm_chat, alt_fn=_fuse_alt_llm, model_name=str(MODEL_NAME or ""),
+               act_fn=_group_act)      # 群里的 AI 能动手（工具/写文件/造插件），不是只会聊
     try:
         _G.set_llm_base((LLM_BASE or "").rstrip("/"))
     except Exception as _e:      # noqa: silent-ok — 注不进去就走兜底
@@ -16089,6 +16174,18 @@ def api_aigroup_avatar_upload(gid):
         LOG.info("群组头像：%s → %s（%d 字节）", gid, os.path.basename(fp), len(blob))
         return jsonify({"ok": bool(r.get("ok")), "avatar": os.path.basename(fp),
                         "error": r.get("error") or ""})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/aigroups/<gid>/perm", methods=["POST"])
+def api_aigroup_perm(gid):
+    """开关某个成员「能不能动手」（调插件 / 写文件 / 写代码 / 造插件）。"""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        return jsonify(G.set_member_perm(gid, str(data.get("name") or ""),
+                                         bool(data.get("allow_tools", True))))
     except Exception as e:      # noqa: silent-ok
         return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
 

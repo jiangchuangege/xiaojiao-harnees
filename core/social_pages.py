@@ -406,6 +406,10 @@ async function toggleAdmin(name,on){
   const d=await P('/api/aigroups/'+GID+'/admin',{name:name,on:on});
   toast(document.getElementById('cmsg'),d.ok?((on?'设为管理员：':'取消管理员：')+name):(d.error||'失败'),!!d.ok);
   if(d.ok)load();}
+async function togglePerm(name,on){
+  const d=await P('/api/aigroups/'+GID+'/perm',{name:name,allow_tools:on});
+  toast(document.getElementById('cmsg'),d.ok?((on?'已允许动手：':'已禁止动手：')+name):(d.error||'失败'),!!d.ok);
+  if(d.ok)load();}
 async function delMember(name){
   const r=await P('/api/aigroups/'+GID+'/member/remove',{name:name});
   toast(document.getElementById('cmsg'),r.ok?'已移出 '+name:(r.error||'失败'),!!r.ok);
@@ -457,7 +461,10 @@ async function load(){
       '<div><div class="meta"><b style="color:'+(cmap[x.who]||'#9aa3b5')+'">'+esc(shortName(x.who))+
       '</b>'+adm+' <span class="muted">'+ht(x.ts)+
       (x.by||x.sec?('  · '+(x.sec?x.sec+'s · ':'')+esc(x.by||'')):'')+'</span></div>'+
-      '<div class="b">'+esc(x.text)+'</div></div></div>';
+      '<div class="b">'+esc(x.text)+'</div>'+
+      ((x.actions&&x.actions.length)?('</div><div class="muted" style="font-size:11px;margin-top:3px">⚙ 动过 '+
+        x.actions.length+' 下：'+x.actions.map(function(a){return esc(a.tool)}).join('、')+'</div></div>')
+        :'</div></div>');
   }).join(''):'<div class="muted">还没有人说话。它自己一会儿就会开口；也可以点「聊 1 轮」。</div>';
   const box=document.getElementById('msgs');
   if(msgs.length!==LASTN){box.scrollTop=box.scrollHeight;LASTN=msgs.length}
@@ -482,6 +489,8 @@ async function load(){
       (x.model?' <span class="muted" style="font-size:12px">'+esc(x.model)+'</span>':'')+'</div>'+
       '<button class="ghost sm" data-act="admin" data-val="'+esc(x.name)+'" data-on="'+(adm?'0':'1')+'">'+
       (adm?'取消管理员':'设管理员')+'</button>'+
+      '<button class="ghost sm" data-act="perm" data-val="'+esc(x.name)+'" data-on="'+
+      (x.allow_tools===false?'1':'0')+'">'+(x.allow_tools===false?'允许动手':'禁止动手')+'</button>'+
       '<button class="sm danger" data-act="del" data-val="'+esc(x.name)+'">移除</button></div>'+
       '<div class="row" style="margin:6px 0 10px"><input class="grow" id="mm_'+i+'" value="'+
       esc(x.model||'')+'" placeholder="火种（可空）" style="max-width:150px"/>'+
@@ -500,6 +509,7 @@ document.getElementById('invPersonas').addEventListener('click',function(ev){
 document.getElementById('mlist').addEventListener('click',function(ev){
   const b=ev.target.closest('button[data-act]');if(!b)return;
   if(b.dataset.act==='admin')toggleAdmin(b.dataset.val,b.dataset.on==='1');
+  else if(b.dataset.act==='perm')togglePerm(b.dataset.val,b.dataset.on==='1');
   else if(b.dataset.act==='del')delMember(b.dataset.val);
   else saveMemberPersona(b.dataset.val,parseInt(b.dataset.i,10));});
 document.getElementById('btnCustom').onclick=function(){
