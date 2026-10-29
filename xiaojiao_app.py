@@ -2702,6 +2702,76 @@ def _task_evidence_header(question, facts_text):
     return "【载体先核过的事实】\n" + "\n".join(out) + "\n\n【记录原文】\n"
 
 
+# ================== 「每一个都得是 AI 说」：模板答案统一收口 ==================
+# 【用户原话】「我是说不止这一条是所有的都要AI不要模板直接」。
+#   载体里拼模板的地方散在十几条路由上（IP / 点名工具 / 天气 / 技能 / 证据 / 漏洞 / 任务 / 项目…），
+#   逐个改必漏，以后新加一条又会忘。所以在回答定稿前统一认一遍形状、交给模型重讲。
+_TPL_EMOJI = ("🔧", "🌐", "💻", "📋", "🎯", "📈", "🧾", "🩺", "📊", "🧪", "🛠", "🚀", "📄", "🗂", "🔎")
+_TPL_PHRASES = ("实测结果", "载体实取", "未经模型转述", "极快直通", "原始数据如下")
+# 【不许改述的三类】安全原文（待确认/红线/禁区）改一个字都可能误导；
+# 工程类提问里的代码块本身就是用户要的东西；已走过解说流程的不重复烧一次。
+_TPL_SKIP = ("〔待确认〕", "红线", "禁区", "已拦截")
+
+
+def _looks_templated(answer, question=""):
+    """这条回答是不是载体拼的模板（而不是模型说的话）？"""
+    a = str(answer or "").strip()
+    q = str(question or "")
+    if not a or len(a) < 12:
+        return False
+    if any(w in a[:160] for w in _TPL_SKIP):
+        return False
+    # 工程类提问：代码块就是答案，不许改写
+    if "```" in a and re.search(r"(写代码|代码|函数|脚本|实现|报错|bug|debug|sql|正则|html|css|json)",
+                                q, re.I):
+        return False
+    if a.startswith(_TPL_EMOJI):
+        return True
+    if any(p in a for p in _TPL_PHRASES):
+        return True
+    # 「一行短标题 + 一个代码块」的整块形状（模板的典型长相）
+    if re.match(r"^[^\n]{0,60}\n+\s*```[\s\S]*```\s*$", a):
+        return True
+    return False
+
+
+def _speak_text(question, text):
+    """把载体拼的模板讲成模型自己的话。只改说法，不改事实。
+
+    返回空串表示模型这次没应答（调用方保留载体原文，并如实说这是载体读的）。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    _sys = ("你在替一个本地助手，把载体刚取到的结果讲给用户听。要求：\n"
+            "1. 用你自己的话，**不要复读原文的表格和代码块**；\n"
+            "2. 原文里的数字、ID、路径、日期**一个都不能改、不能少**；\n"
+            "3. 不要写「根据数据」「原始数据如下」「实测结果」这类机器腔；\n"
+            "4. 三到六句，先说结论，再说关键细节；\n"
+            "5. 原文是执行/查询结果时，说清做了什么、结果是什么；出错了就说错在哪、下一步怎么办。")
+    _txt = ""
+    for _try in (1, 2):        # 本机 llama-swap 偶发 500，试两次再放弃
+        try:
+            _txt = str(llm_chat([{"role": "system", "content": _sys},
+                                 {"role": "user",
+                                  "content": "用户问：%s\n\n载体结果：\n%s" % (
+                                      str(question or "")[:200], t[:2000])}],
+                                temperature=0.3) or "").strip()
+        except Exception as e:      # noqa: silent-ok — 第一次失败再试一次
+            LOG.debug("模板改述第 %d 次失败：%s", _try, e)
+            _txt = ""
+        if len(_txt) >= 4:
+            break
+    if len(_txt) < 4:
+        return ""
+    # 数字保真：原文里的量（两位以上或带小数）必须出现；缺的补一行原始要点
+    _miss = [n for n in dict.fromkeys(re.findall(r"\d+(?:\.\d+)?", t))
+             if ("." in n or len(n) >= 2) and n not in _txt]
+    if _miss:
+        _txt += "\n\n> 原始要点：%s —— 这一行是载体从记录里直接摘的。" % "、".join(_miss[:6])
+    return _txt
+
+
 def _facts_prose(facts, label=""):
     """把结构化记录**说成人话**（载体自己说，不调模型）。
 
@@ -2765,6 +2835,10 @@ def _answer_with_facts(question, facts, label="", fallback_head=""):
     _sn0 = [x for x in re.findall(r"\d+(?:\.\d+)?", _clean0) if len(x) <= 4]
     if not ((_raw0.count("|") >= 4) or (len(_sn0) >= 3) or (len(_raw0) >= 400)):
         return (fallback_head or "") + _raw0
+    try:
+        _CTX["_narrated"] = True      # 走过解说流程 → 收口时不再重复烧一次
+    except Exception:      # noqa: silent-ok
+        pass
     _n, _ok, _miss = _narrate_facts(question, facts, label)
     _raw = _raw0
     if _ok:
@@ -12875,6 +12949,19 @@ def _fast_carrier_answer(text):
         return None
 
     def _wrap(tool, ans):
+        # 【快路也要 AI 说】快路在 agent_run 之前就返回，那边定稿前的收口够不着它。
+        #   所以在这里再收一次：形状像模板（emoji 抬头 / 标题+代码块 / 含「实测结果」）就交给模型重讲。
+        #   数字保真与"模型没应答就保留原文"的处理都在 `_speak_text` 里。
+        try:
+            if ans and _looks_templated(ans, q):
+                _sp = _speak_text(q, ans)
+                if _sp:
+                    LOG.info("快路模板 → 已改成模型自己说（%s）", tool)
+                    ans = _sp
+                else:
+                    LOG.info("快路模板：模型这次没应答 → 保留载体原文（%s）", tool)
+        except Exception as _e:      # noqa: silent-ok — 改述失败也要把答案给出去
+            LOG.debug("快路模板收口失败（忽略）：%s", _e)
         try:
             e = _trace_entry(tool, {"q": q[:40]}, ans)
         except Exception:      # noqa: silent-ok — 轨迹记不上也要把答案给出去
@@ -12959,7 +13046,9 @@ def _fast_carrier_answer(text):
             _build_tools()
             _ipres = _asset_result_text(_tool_result_str(run_tool("net_ip", {}, force=True)))
             if _ipres and "未知工具" not in _ipres:
-                return _wrap("net_ip",
+                # 载体取到真 IP → 交给模型讲给用户听（原来这里直接套模板）
+                _ipans = _fuse_if_time(q, _ipres.strip(), label="net_ip 实测")
+                return _wrap("net_ip", _ipans or
                              "🌐 **我的公网 IP（net_ip 实测）**\n\n```\n%s\n```" % _ipres.strip())
     except Exception as e:      # noqa: silent-ok
         LOG.debug("快路·IP 失败（交回完整链路）：%s", e)
@@ -14980,6 +15069,30 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 answer = _dd.get("text") or answer
     except Exception as _dde:      # noqa: silent-ok — 去重挂了也必须把正文给出去
         LOG.debug("创作轮跨阶段去重失败（忽略）：%s", _dde)
+
+    # 4b-quater. 【每一个都得是 AI 说】模板答案在这里统一收口。
+    # 用户原话：「我是说不止这一条是所有的都要AI不要模板直接」。
+    # 判据见 `_looks_templated`；改写由 `_speak_text` 做（模型自己的话，数字一个不许改）。
+    try:
+        if answer and not _CTX.get("_narrated") and _looks_templated(answer, user_input):
+            _spent_t = 0.0
+            try:
+                _spent_t = sum(float(v or 0) for v in (_CTX.get("timings") or {}).values())
+            except Exception:      # noqa: silent-ok
+                _spent_t = 0.0
+            if _spent_t <= 14.0:
+                _spoke = _speak_text(user_input, answer)
+                if _spoke:
+                    LOG.info("模板答案 → 已改成模型自己说（%d 字 → %d 字）",
+                             len(str(answer)), len(_spoke))
+                    answer = _spoke
+                else:
+                    LOG.info("模板答案：模型这次没应答 → 保留载体原文（不假装是模型说的）")
+            else:
+                LOG.info("模板答案：这一轮已花 %.1fs → 不再改写（速度优先，如实保留载体原文）",
+                         _spent_t)
+    except Exception as _spe:      # noqa: silent-ok — 改写挂了也必须把答案给出去
+        LOG.debug("模板收口失败（忽略）：%s", _spe)
 
     # 4c. 【第 2 步】把这一轮对话永久写进向量库 + 回填"模型是否真用上了检索到的记忆"    #     为什么写回要放在这一轮结束时：只有答案出来了才知道记忆有没有被用上；
     #     这条回填就是验收里"使用率 ≥70%"的唯一依据，必须如实记，不能自己给自己打高分。
