@@ -41,8 +41,50 @@ _ALT = None
 _MODEL = ""
 
 MAX_MEMBERS = 8
-ACT_PROB = 0.45        # 每一轮里，一个"允许动手"的成员有这么大几率真的去动手
+ACT_PROB = 0.45        # 默认几率（群没设节奏时用）
 ACT_MIN_GAP = 1        # 同一个成员最少隔几条消息才再动手（避免一直闷头干活不说话）
+
+# 【按群的节奏】用户原话：「可以改成按群的节奏（比如"这个群是开发群，就多动手少聊天"）」
+PACES = {
+    "chat": {"label": "聊天群", "act_prob": 0.10, "interval": 22,
+             "hint": "这是一个聊天群，主要就是聊，别动不动就动工具。"},
+    "mixed": {"label": "混合", "act_prob": 0.45, "interval": 25,
+              "hint": "该聊就聊，该动手就动手。"},
+    "dev": {"label": "开发群", "act_prob": 0.75, "interval": 20,
+            "hint": "这是一个开发群：多动手、少空谈。能查就查、能写就写、能跑就跑。"},
+}
+
+
+def pace_of(g):
+    """这个群的节奏（没设就是 mixed）。"""
+    k = str((g or {}).get("pace") or "mixed")
+    return k if k in PACES else "mixed"
+
+
+def set_pace(gid, pace):
+    """改群节奏：chat / mixed / dev。改了之后自动聊的间隔也跟着变。"""
+    k = str(pace or "").strip()
+    if k not in PACES:
+        return {"ok": False, "error": "节奏只能是 chat / mixed / dev"}
+    with _LOCK:
+        d = _load()
+        for g in d.get("groups") or []:
+            if g.get("id") != gid:
+                continue
+            g["pace"] = k
+            _save(d)
+            _event("set_pace", gid=gid, pace=k)
+            LOG.info("群组：%s 的节奏改成 %s（动手几率 %.2f）",
+                     g.get("name"), PACES[k]["label"], PACES[k]["act_prob"])
+            break
+    try:
+        st = _AUTO.get(gid) or {}
+        if st.get("on"):
+            set_auto(gid, False)
+            set_auto(gid, True, interval_s=PACES[k]["interval"], rounds=0)
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("群组·切节奏后重启自动聊失败：%s", e)
+    return {"ok": True, "pace": k, "label": PACES[k]["label"]}
 
 # 【默认成员】建群时没指定成员，就放三个**不同**的人 —— 一个人自说自话不叫群聊。
 #   人设写在这里而不是空着：空人设的模型会互相顺着说，聊两句就成复读机。
@@ -188,10 +230,12 @@ CTX_MSGS = 14               # 拼给模型的最近消息条数
 
 
 _ACT = None          # 带工具的调用：act(member_dict, messages) -> (text, by, actions)
+_DISTILL = None      # 蒸馏：distill(messages) -> "经验1；经验2"（app 注入）
+_EXEC_PROP = None    # 执行提议：exec(member_dict, 提议文本) -> (正文, 谁, actions)（app 注入）
 
 
-def install(llm_fn=None, alt_fn=None, model_name="", act_fn=None):
-    global _LLM, _ALT, _MODEL, _ACT
+def install(llm_fn=None, alt_fn=None, model_name="", act_fn=None, distill_fn=None):
+    global _LLM, _ALT, _MODEL, _ACT, _DISTILL
     if llm_fn is not None:
         _LLM = llm_fn
     if alt_fn is not None:
@@ -200,6 +244,8 @@ def install(llm_fn=None, alt_fn=None, model_name="", act_fn=None):
         _MODEL = str(model_name)
     if act_fn is not None:
         _ACT = act_fn
+    if distill_fn is not None:
+        _DISTILL = distill_fn
 
 
 def _ensure():
@@ -237,7 +283,7 @@ def _event(kind, **kw):
 
 
 # ==================== 群的管理 ====================
-def create(name, topic="", members=None, style=""):
+def create(name, topic="", members=None, style="", pace="mixed"):
     """建群。members: [{"name": "小焦", "persona": "…", "model": ""}] 或 ["小焦","小C"]。"""
     name = str(name or "").strip()
     if not name:
@@ -260,6 +306,8 @@ def create(name, topic="", members=None, style=""):
         g = {"id": uuid.uuid4().hex[:8], "name": name, "topic": str(topic or "").strip(),
              "style": str(style or "").strip(), "avatar": "",
              "notice": str(style or "").strip(),
+             "pace": (pace if pace in PACES else "mixed"),
+             "distilled": [], "proposals": [],
              "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
              "members": mem, "messages": []}
         d["groups"].append(g)
@@ -288,6 +336,10 @@ def list_groups():
         out.append({"id": g.get("id"), "name": g.get("name"), "topic": g.get("topic"),
                     "members": [m.get("name") for m in (g.get("members") or [])],
                     "member_detail": g.get("members") or [],
+                    "pace": pace_of(g),
+                    "pace_label": (PACES.get(pace_of(g)) or {}).get("label"),
+                    "distilled": len(g.get("distilled") or []),
+                    "proposals": len(g.get("proposals") or []),
                     "messages": len(g.get("messages") or []),
                     "auto": auto_state(g.get("id")),
                     "created": g.get("created")})
@@ -557,6 +609,17 @@ def run_round(gid, rounds=1):
                           "该动手就动手，别只在嘴上说；做完用一两句话说清你做了什么、结果如何。")
             if g.get("style"):
                 sys_p += "\n群规矩：" + str(g.get("style"))[:300]
+            _pc = PACES.get(pace_of(g)) or PACES["mixed"]
+            sys_p += "\n本群节奏：" + str(_pc.get("hint") or "")[:160]
+            # 【互相蒸馏】把本群已经聊出来的共识带上 —— 越聊越聪明靠这一条
+            _ds = [x.get("note") for x in (g.get("distilled") or [])[-6:] if x.get("note")]
+            if _ds:
+                sys_p += "\n本群已有的共识（别重复讨论，直接用）：\n" + "\n".join(
+                    "· " + str(x)[:120] for x in _ds)
+            if _can_act:
+                sys_p += ("\n如果你认为该做一件具体的事（写文件/跑命令/查资料/造插件），"
+                          "就在回答末尾单独写一行：〔提议：工具名 + 一句话说明〕，"
+                          "载体会把提议记下来并执行。不要删除或移动任何文件。")
             usr = "群主题：%s\n\n最近的聊天记录：\n%s\n\n现在轮到你（%s）说话：" % (
                 g.get("topic") or "（没设主题，随意聊）",
                 _transcript(recent) or "（还没有人说话，你起个头）",
@@ -568,7 +631,8 @@ def run_round(gid, rounds=1):
             txt, who = "", ""
             # 载体掷骰：这一轮是"动手"还是"只说一句"（动手慢，不能每轮都动）
             _act_roll = random.random()
-            _do_act = bool(_can_act and _act_roll < ACT_PROB)
+            _act_prob = float((PACES.get(pace_of(g)) or PACES["mixed"]).get("act_prob") or ACT_PROB)
+            _do_act = bool(_can_act and _act_roll < _act_prob)
             if _do_act:
                 try:
                     txt, who, _actions = _ACT(m, _msgs_for_model)
@@ -576,7 +640,8 @@ def run_round(gid, rounds=1):
                     LOG.debug("群组·动手失败（退回只说）：%s", e)
                     txt, who, _actions = "", "", []
                 _event("act_try", gid=gid, member=m.get("name"), roll=round(_act_roll, 3),
-                       prob=ACT_PROB, ok=bool(txt), tools=[a.get("tool") for a in (_actions or [])][:6])
+                       prob=_act_prob, pace=pace_of(g), ok=bool(txt),
+                       tools=[a.get("tool") for a in (_actions or [])][:6])
             if not txt:
                 txt, who = _ask(m.get("model") or "", _msgs_for_model)
             _sec = round(time.time() - _t_say, 2)
@@ -612,6 +677,54 @@ def run_round(gid, rounds=1):
             added.append(msg)
             _event("say", gid=gid, member=m.get("name"), chars=len(txt), by=who, sec=_sec,
                    actions=[a.get("tool") for a in (_actions or [])][:6])
+            # 【自己提议】它写了〔提议：工具+说明〕就记下来，载体之后真去执行
+            try:
+                for _pm in re.finditer(r"[〔\[【]\s*提议\s*[:：]\s*([^〕\]】\n]{4,120})[〕\]】]",
+                                       txt):
+                    _prop = _pm.group(1).strip()
+                    with _LOCK:
+                        _d2 = _load()
+                        for _gg in _d2.get("groups") or []:
+                            if _gg.get("id") != gid:
+                                continue
+                            _ps = list(_gg.get("proposals") or [])
+                            _ps.append({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                        "who": m.get("name"), "text": _prop[:160],
+                                        "done": False})
+                            _gg["proposals"] = _ps[-20:]
+                            _save(_d2)
+                    _event("propose", gid=gid, member=m.get("name"), text=_prop[:120])
+                    LOG.info("群组：%s 提议 → %s", m.get("name"), _prop[:80])
+                    if _EXEC_PROP is not None:
+                        try:
+                            _rtxt, _rwho, _racts = _EXEC_PROP(
+                                {"name": m.get("name"),
+                                 "persona": _persona_of(m),
+                                 "model": m.get("model") or ""}, _prop)
+                            if _rtxt:
+                                _rm = {"id": uuid.uuid4().hex[:8],
+                                       "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                       "who": "载体", "text": "〔已执行 %s〕%s" % (
+                                           "、".join(a.get("tool") for a in (_racts or [])[:3]) or "提议",
+                                           str(_rtxt)[:300]),
+                                       "by": _rwho or "", "sec": 0, "round": r + 1,
+                                       "actions": (_racts or [])[:6]}
+                                with _LOCK:
+                                    _d3 = _load()
+                                    for _g3 in _d3.get("groups") or []:
+                                        if _g3.get("id") != gid:
+                                            continue
+                                        _g3.setdefault("messages", []).append(_rm)
+                                        _g3["messages"] = _g3["messages"][-MAX_MSGS_STORE:]
+                                        _save(_d3)
+                                added.append(_rm)
+                                _event("propose_done", gid=gid, member=m.get("name"),
+                                       tools=[a.get("tool") for a in (_racts or [])][:6])
+                        except Exception as _pe:      # noqa: silent-ok
+                            LOG.debug("群组·执行提议失败：%s", _pe)
+            except Exception as _pme:      # noqa: silent-ok — 提议解析失败不能影响群聊
+                LOG.debug("群组·解析提议失败：%s", _pme)
+
             # 动手了就记到这人身上（下一轮 prompt 会带"你最近做过什么"）
             for _a in (_actions or [])[:3]:
                 try:
@@ -621,6 +734,26 @@ def run_round(gid, rounds=1):
                                 "用 %s 做了：%s" % (_a.get("tool"), _line[:40]))
                 except Exception as _e:      # noqa: silent-ok
                     LOG.debug("群组·记 skills 失败：%s", _e)
+    # 【互相蒸馏】一轮结束就把这一轮压成经验，存进本群共识（下一轮 prompt 会带上）
+    try:
+        if _DISTILL is not None and added:
+            _new = [{"who": x.get("who"), "text": x.get("text")} for x in added]
+            _note = str(_DISTILL(_new) or "").strip()
+            if _note:
+                with _LOCK:
+                    _d4 = _load()
+                    for _g4 in _d4.get("groups") or []:
+                        if _g4.get("id") != gid:
+                            continue
+                        _dl = list(_g4.get("distilled") or [])
+                        _dl.append({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                    "note": _note[:400]})
+                        _g4["distilled"] = _dl[-12:]
+                        _save(_d4)
+                _event("distill", gid=gid, chars=len(_note), note=_note[:120])
+                LOG.info("群组蒸馏：%s → %s", g.get("name"), _note[:80])
+    except Exception as _de:      # noqa: silent-ok — 蒸馏失败不影响群聊
+        LOG.debug("群组·蒸馏失败：%s", _de)
     LOG.info("群组：%s 跑了 %d 轮，新增 %d 条消息", g.get("name"), rounds, len(added))
     return {"ok": True, "added": added, "group": get(gid)}
 

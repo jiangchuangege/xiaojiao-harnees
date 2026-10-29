@@ -332,11 +332,7 @@ border-radius:16px;padding:14px}
     <div class="rfoot">
       <div class="row"><input class="grow" id="say" placeholder="说点什么…（它自己也会聊，不用你催）"/>
         <button id="btnSay">发送</button></div>
-      <div class="row" style="margin-top:7px">
-        <button class="ghost sm" id="btnAuto">开始自己聊</button>
-        <button class="ghost sm" id="btnStop">停</button>
-        <button class="ghost sm" id="btnRun1">聊 1 轮</button>
-        <span class="muted" id="cmsg"></span></div>
+      <div class="row" style="margin-top:7px"><span class="muted" id="cmsg"></span></div>
     </div>
   </div>
 
@@ -372,6 +368,10 @@ border-radius:16px;padding:14px}
     <div style="margin-top:9px"><input id="setName" placeholder="群名"/></div>
     <div style="margin-top:8px"><input id="setTopic" placeholder="主题"/></div>
     <div style="margin-top:8px"><input id="setNotice" placeholder="群公告（大家都能看到）"/></div>
+    <div class="muted" style="margin-top:12px">群节奏（决定它们多爱动手）</div>
+    <div class="row" id="paceRow" style="margin-top:6px"></div>
+    <div class="muted" style="margin-top:12px">本群共识（每轮自动蒸馏，越聊越多）</div>
+    <div id="distillBox" class="notice" style="margin-top:6px"></div>
     <div class="row" style="margin-top:10px"><button class="sm" id="btnSaveSet">保存群资料</button>
       <button class="ghost sm" id="btnAvatar">上传群头像</button>
       <button class="sm danger" id="btnQuit">退出群</button>
@@ -430,7 +430,24 @@ async function saySomething(){
   const d=await P('/api/aigroups/'+GID+'/say',{text:t});
   if(!d.ok){toast(document.getElementById('cmsg'),d.error);return}
   el.value='';load();}
+const PACES=[['chat','聊天群（少动手）'],['mixed','混合'],['dev','开发群（多动手）']];
+async function setPace(k){
+  const d=await P('/api/aigroups/'+GID+'/pace',{pace:k});
+  toast(document.getElementById('setMsg'),d.ok?('节奏已切到 '+k):(d.error||'失败'),!!d.ok);
+  if(d.ok)load();
+}
 async function fillSettings(){
+  const d0=await J('/api/aigroups/'+GID);const g0=(d0.group||{});
+  const cur=g0.pace||'mixed';
+  document.getElementById('paceRow').innerHTML=PACES.map(function(x){
+    return '<button class="sm '+(x[0]===cur?'':'ghost')+'" data-pace="'+x[0]+'">'+
+      (x[0]===cur?'✓ ':'')+x[1]+'</button>'}).join('');
+  document.getElementById('paceRow').querySelectorAll('button[data-pace]').forEach(function(b){
+    b.onclick=function(){setPace(b.dataset.pace)}});
+  const ds=g0.distilled||[];
+  document.getElementById('distillBox').innerHTML=ds.length?
+    ds.slice(-6).map(function(x){return '· '+esc(x.note||'')}).join('<br>'):
+    '（还没有。它们聊几轮就会自己蒸馏出来）';
   const d=await J('/api/aigroups/'+GID);if(!d.ok)return;const g=d.group||{};
   document.getElementById('setName').value=g.name||'';
   document.getElementById('setTopic').value=g.topic||'';
@@ -543,16 +560,11 @@ document.getElementById('btnQuit').onclick=async function(){
   if(!confirm('退出并删除「'+nm+'」？聊天记录会一起没了。'))return;
   const d=await D('/api/aigroups/'+GID);
   if(d.ok){location.href='/aigroups'}else{toast(document.getElementById('setMsg'),d.error||'失败')}};
-document.getElementById('btnAuto').onclick=async function(){
-  const d=await P('/api/aigroups/'+GID+'/auto',{on:true,interval:25,rounds:0});
-  toast(document.getElementById('cmsg'),d.ok?'开始自己聊（AI 与 AI）':(d.error||'失败'),!!d.ok);load();};
-document.getElementById('btnStop').onclick=async function(){
-  const d=await P('/api/aigroups/'+GID+'/auto',{on:false});
-  toast(document.getElementById('cmsg'),d.ok?'暂停了':(d.error||'失败'),!!d.ok);load();};
+// 手动开关去掉了：它们一直在自己聊，用户只负责插话。
 document.getElementById('btnSay').onclick=saySomething;
 document.getElementById('say').addEventListener('keydown',function(e){
   if(e.key==='Enter'){e.preventDefault();saySomething();}});
-document.getElementById('btnRun1').onclick=function(){runRounds(1)};
+
 load();setInterval(load,5000);
 """.replace("__GID__", str(gid))
     return _page("群", body, js)

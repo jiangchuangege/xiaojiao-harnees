@@ -2891,6 +2891,41 @@ def _maybe_post_moment(user_input="", answer=""):
         LOG.debug("朋友圈自动发失败（忽略）：%s", e)
 
 
+def _group_distill(messages):
+    """把一轮群聊蒸馏成几条可复用经验（写入本群共识，下一轮带进 prompt）。
+
+    为什么要它：用户要「让他们聊天的时候互相蒸馏，这样模型会越来越强」——
+    光有聊天记录不算变强；要压成**能带回去的结论**，下一轮直接站在这个结论上。
+    """
+    try:
+        _lines = "\n".join("%s：%s" % (m.get("who"), str(m.get("text"))[:120])
+                           for m in (messages or [])[-8:])
+        if len(_lines.strip()) < 10:
+            return ""
+        _sys = ("把下面这段群聊压成 1~3 条**可复用的结论**（要具体、能用、别空话），"
+                "每条一行、不要编号、不要复述谁说了什么。只输出结论本身。")
+        _t = str(llm_chat([{"role": "system", "content": _sys},
+                           {"role": "user", "content": _lines}], temperature=0.3) or "").strip()
+        _out = [x.strip(" -·\t") for x in _t.splitlines() if len(x.strip()) >= 6]
+        return "；".join(_out[:3])[:400]
+    except Exception as e:      # noqa: silent-ok — 蒸馏失败不影响群聊
+        LOG.debug("群组蒸馏失败：%s", e)
+        return ""
+
+
+def _group_exec_prop(member, prop):
+    """执行它们自己提的〔提议：…〕—— 用同一套带工具大脑，**删除类操作一律拒绝**。"""
+    try:
+        _msg = [{"role": "system", "content":
+                 "你在群里提议做一件事，现在载体让你**真的去做**。只做这一件事，做完一句话说结果。"},
+                {"role": "user", "content": "你的提议：%s\n注意：不许删除、移动、覆盖删除本机任何文件。"
+                                            % str(prop)[:200]}]
+        return _group_act(member, _msg)
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("群组执行提议失败：%s", e)
+        return "", "", []
+
+
 def _group_act(member, messages):
     """群成员「动手」：走载体的带工具大脑（同一套工具、同一套红线）。
 
@@ -2902,7 +2937,11 @@ def _group_act(member, messages):
     """
     _prev_model = None
     _prev_input = None
+    _prev_gm = _CTX.get("group_mode")
     try:
+        # 【群聊动手的硬规矩】打上 group_mode：工具入口看到它就拒绝任何删除/移动/覆盖删除。
+        #   用户原话：「这个群里聊天操作电脑的时候不准删除电脑的任何东西」。
+        _CTX["group_mode"] = True
         _prev_model = _CTX.get("force_model")
         _prev_input = _CTX.get("user_input")
         if member.get("model"):
@@ -2971,6 +3010,10 @@ def _group_act(member, messages):
                 _CTX.pop("user_input", None)
             else:
                 _CTX["user_input"] = _prev_input
+            if _prev_gm is None:
+                _CTX.pop("group_mode", None)
+            else:
+                _CTX["group_mode"] = _prev_gm
         except Exception:      # noqa: silent-ok
             pass
 
@@ -2981,7 +3024,12 @@ def _social():
     _M.install(llm_chat, alt_fn=_fuse_alt_llm, model_name=str(MODEL_NAME or ""),
                image_fn=_moment_image)
     _G.install(llm_chat, alt_fn=_fuse_alt_llm, model_name=str(MODEL_NAME or ""),
-               act_fn=_group_act)      # 群里的 AI 能动手（工具/写文件/造插件），不是只会聊
+               act_fn=_group_act,          # 群里的 AI 能动手（工具/写文件/造插件）
+               distill_fn=_group_distill)  # 一轮一蒸馏：越聊越强
+    try:
+        _G._EXEC_PROP = _group_exec_prop    # 它们自己提的活，载体接着真去做
+    except Exception as _e:      # noqa: silent-ok
+        LOG.debug("群组·注入执行提议失败：%s", _e)
     try:
         _G.set_llm_base((LLM_BASE or "").rstrip("/"))
     except Exception as _e:      # noqa: silent-ok — 注不进去就走兜底
@@ -6278,6 +6326,29 @@ def _carrier_block_answer(kind, detail=""):
     return head + ("\n\n" + body if body else "") + tail
 
 
+_GROUP_DEL_TOOLS = ("delete_file", "remove_file", "delete_dir", "rmdir", "unlink",
+                    "trash", "move_file", "rename_file", "clean_dir", "format_disk")
+_GROUP_DEL_RE = re.compile(
+    r"(\brm\b|\bdel\b|\berase\b|rmdir|rd\s+/|Remove-Item|rmtree|shutil\.rmtree|"
+    r"os\.remove|os\.unlink|del\s+/[fsq]|format\s+[a-z]:|清空|删除|移除|覆盖删除)", re.I)
+
+
+def _group_delete_guard(name, args):
+    """群聊里动手时，删除/移动/覆盖删除一律拒绝。返回拒绝文案或空串。"""
+    try:
+        if not _CTX.get("group_mode"):
+            return ""
+        _blob = ("%s %s" % (name or "", json.dumps(args or {}, ensure_ascii=False)))
+        if str(name or "") in _GROUP_DEL_TOOLS or _GROUP_DEL_RE.search(_blob):
+            LOG.warning("群聊动手被拦：%s 想删除/移动东西（%s）→ 拒绝", name,
+                        str(_blob)[:120])
+            return ("〔群聊禁止〕群里聊天时**不准删除、移动或覆盖删除本机任何文件**（载体硬规矩）。"
+                    "这一条被拦下了：%s。要改要删，请由用户在主对话里明确要求。" % str(name))
+        return ""
+    except Exception:      # noqa: silent-ok — 判不出来就放行（不能因噎废食）
+        return ""
+
+
 def run_tool(name, args, force=False):
     """工具调用的**唯一入口**：红线拦截 → 本轮去重 → 真执行 → 留档。
 
@@ -6287,6 +6358,9 @@ def run_tool(name, args, force=False):
     包一层就没有这个风险：出口只有一个。删除红线同理 —— **只有放在唯一入口上，
     "所有文件/命令入口都拦得住"这句话才成立**。
     """
+    _gdeny = _group_delete_guard(name, args or {})
+    if _gdeny:
+        return _gdeny
     args = _fix_args_paths(name, args or {})   # 补充任务 7：先把 [用户名] 这类占位符展开成真实路径
     # ---- 本轮工具门（2026-10-17）：**这一轮没装载的工具，执行时也不许调** ----
     # 【为什么必须有这一道】`core/tool_isolation.py` 只决定"工具表里摆哪几个"，
@@ -16174,6 +16248,17 @@ def api_aigroup_avatar_upload(gid):
         LOG.info("群组头像：%s → %s（%d 字节）", gid, os.path.basename(fp), len(blob))
         return jsonify({"ok": bool(r.get("ok")), "avatar": os.path.basename(fp),
                         "error": r.get("error") or ""})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/aigroups/<gid>/pace", methods=["POST"])
+def api_aigroup_pace(gid):
+    """群节奏：chat（聊天群，少动手）/ mixed / dev（开发群，多动手少空谈）。"""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        return jsonify(G.set_pace(gid, str(data.get("pace") or "mixed")))
     except Exception as e:      # noqa: silent-ok
         return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
 
