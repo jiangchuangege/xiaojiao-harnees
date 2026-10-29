@@ -45,9 +45,14 @@ _IMG = None          # 生成图片的函数：img(prompt) -> 路径 或 ""
 # 载体侧的发帖节奏（都由 `_CTX` 之外的常量决定，用户可在 xiaojiao_control.json 覆盖）
 DEFAULTS = {
     "enabled": True,
-    "min_gap_min": 45,        # 两条动态至少隔多久（分钟）
+    # 【他自己发】不是"你点一下他生成"：后台每隔 check_interval_s 秒读一次自己的状态
+    #   （情绪/精力/没说出口的话/刚聊过的事/逛世界看到的），想说的程度 ≥ min_score 就发。
+    "auto_enabled": True,
+    "check_interval_s": 120,
+    "min_score": 0.35,   # 实测：只有"刚聊过"+"有精力"时粗糙算出来是 0.35，门槛 0.5 会让它几乎永远不发
+    "min_gap_min": 20,        # 两条动态至少隔多久（分钟）
     "turn_prob": 0.18,        # 每轮对话后发一条的概率
-    "max_per_day": 8,         # 一天最多几条
+    "max_per_day": 10,         # 一天最多几条
     "reply_prob": 0.6,        # 一条用户评论被回复的概率
 }
 _CFG = dict(DEFAULTS)
@@ -188,7 +193,7 @@ def compose(context="", topic="", with_image=False, author="小焦"):
     return txt, who, img
 
 
-def publish(text, image="", source="self", topic="", author="小焦", by=""):
+def publish(text, image="", source="self", topic="", author="小焦", by="", why=""):
     """把一条动态落盘。返回 post dict。"""
     text = str(text or "").strip()
     if not text:
@@ -198,7 +203,8 @@ def publish(text, image="", source="self", topic="", author="小焦", by=""):
         post = {"id": uuid.uuid4().hex[:10], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "author": str(author or "小焦"), "text": text,
                 "image": str(image or ""), "source": str(source or "self"),
-                "topic": str(topic or ""), "likes": [], "comments": [], "by": str(by or "")}
+                "topic": str(topic or ""), "likes": [], "comments": [], "by": str(by or ""),
+                "why": str(why or "")}
         d["posts"].append(post)
         d["posts"] = d["posts"][-500:]        # 只留最近 500 条，磁盘别无限长
         _save(d)
@@ -219,14 +225,14 @@ def auto_try(context="", topic="", with_image=False, author="小焦", force=Fals
     posts = d.get("posts") or []
     today = time.strftime("%Y-%m-%d")
     n_today = sum(1 for p in posts if str(p.get("ts") or "").startswith(today))
-    _max_day = _cfg_int("max_per_day", 8)
+    _max_day = _cfg_int("max_per_day", 10)
     if not force and n_today >= _max_day:
         return None, "今天已经发了 %d 条（上限 %d），不再发" % (n_today, _max_day)
     if not force and posts:
         try:
             last = time.mktime(time.strptime(str(posts[-1]["ts"]), "%Y-%m-%dT%H:%M:%S"))
             gap_min = (time.time() - last) / 60.0
-            _gap_need = _cfg_num("min_gap_min", 45)
+            _gap_need = _cfg_num("min_gap_min", 20)
             if gap_min < _gap_need:
                 return None, "距上一条才 %.0f 分钟（至少 %d 分钟）" % (gap_min, _gap_need)
         except Exception:      # noqa: silent-ok — 时间算不出来就当作可以发
@@ -243,6 +249,181 @@ def auto_try(context="", topic="", with_image=False, author="小焦", force=Fals
         return None, "模型这次没应答 → 这条不发了（不编一条假的糊弄你）"
     post = publish(text, image=img, source="auto", topic=topic, author=author, by=who)
     return post, "已发（%s）" % (who or "模型")
+
+
+# ==================== 他自己想发：读自己的状态 ====================
+def _read_json_tail(path, keys=("text", "content", "unsaid", "why"), limit=1):
+    """从 jsonl/json 里读最后几条里能当"素材"的文字（读不到就空，不猜）。"""
+    out = []
+    try:
+        if not os.path.isfile(path):
+            return out
+        with io.open(path, encoding="utf-8") as f:
+            lines = f.readlines()[-200:]
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:      # noqa: silent-ok
+                continue
+            if not isinstance(r, dict):
+                continue
+            for k in keys:
+                v = r.get(k)
+                if isinstance(v, str) and len(v.strip()) >= 6:
+                    out.append(v.strip()[:160])
+                    break
+            if len(out) >= limit:
+                break
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("读素材失败（%s）：%s", path, e)
+    return out
+
+
+def _newest_file(d, pat=""):
+    try:
+        cand = [os.path.join(d, x) for x in os.listdir(d)
+                if os.path.isfile(os.path.join(d, x)) and (not pat or x.endswith(pat))]
+        if not cand:
+            return ""
+        cand.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        return cand[0]
+    except Exception:      # noqa: silent-ok
+        return ""
+
+
+def motivation(ignore_gap=False):
+    """他此刻"为什么想发一条" —— 素材 + 理由 + 分数，全部来自真实状态。
+
+    分数不是玄学：每读到一样真实的东西就加一份权重，读不到就不加。
+    这样"这一轮没发"也能解释清楚（分不够），而不是"随机了"。
+    """
+    mat, why, score = [], [], 0.0
+    # 1) 情绪（psyche）
+    try:
+        from core import psyche as _PS
+        st = _PS.state() or {}
+        _emo = None
+        for k in ("emotion", "feeling", "mood", "心"):
+            if isinstance(st.get(k), str) and st.get(k).strip():
+                _emo = st[k].strip()
+                break
+        if not _emo:
+            try:
+                _emo = str(_PS.render() or "").strip()[:160]
+            except Exception:      # noqa: silent-ok
+                _emo = ""
+        if _emo:
+            mat.append("我此刻的心情：%s" % _emo[:160])
+            why.append("心里有情绪")
+            score += 0.3
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("motivation·psyche 读不到：%s", e)
+    # 2) 精力（energy）
+    try:
+        from core import energy as _EN
+        lv = float(_EN.level() or 0.0)
+        if lv:
+            mat.append("我的精力值：%.2f（1.00 最充沛）" % lv)
+            if lv < 0.35:
+                why.append("有点累了")
+                score += 0.15
+            elif lv > 0.8:
+                why.append("精神很足")
+                score += 0.1
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("motivation·energy 读不到：%s", e)
+    # 3) 心里没说出口的话（mind_stream）
+    try:
+        _f = _newest_file(os.path.join(_ROOT, "logs", "mind_stream"), ".json")
+        if _f:
+            with io.open(_f, encoding="utf-8") as fh:
+                _d = json.load(fh)
+            if isinstance(_d, dict):
+                for k in ("unsaid", "thought", "note", "last_unsaid"):
+                    v = _d.get(k)
+                    if isinstance(v, str) and len(v.strip()) >= 6:
+                        mat.append("我心里没说出口的一句：%s" % v.strip()[:160])
+                        why.append("有句话没说出来")
+                        score += 0.35
+                        break
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("motivation·mind_stream 读不到：%s", e)
+    # 4) 最近跟用户聊过什么
+    try:
+        _t = _read_json_tail(os.path.join(_ROOT, "logs", "xiaojiao_memory_vec.jsonl"), limit=1)
+        if _t:
+            mat.append("最近我跟用户聊到：%s" % _t[0][:160])
+            why.append("刚聊过一件有话可说的事")
+            score += 0.25
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("motivation·memory 读不到：%s", e)
+    # 5) 他逛世界看到的东西
+    try:
+        _wf = _newest_file(os.path.join(_ROOT, "logs", "world"), ".jsonl")
+        _w = _read_json_tail(_wf, limit=1) if _wf else []
+        if _w:
+            mat.append("我逛世界时看到的：%s" % _w[0][:160])
+            why.append("在外面看到点东西")
+            score += 0.3
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("motivation·world 读不到：%s", e)
+    # 6) 距上一条多久（越久越想发）
+    try:
+        posts = _load().get("posts") or []
+        if posts:
+            last = time.mktime(time.strptime(str(posts[-1]["ts"]), "%Y-%m-%dT%H:%M:%S"))
+            mins = (time.time() - last) / 60.0
+            if mins >= 60:
+                why.append("已经 %.0f 分钟没发过" % mins)
+                score += min(0.35, mins / 600.0)
+            if mins < float(_cfg_num("min_gap_min", 20)) and not ignore_gap:
+                return {"score": -1.0, "material": "\n".join(mat),
+                        "why": ["才 %.0f 分钟前发过，先不连发" % mins], "blocked": "cooldown"}
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("motivation·间隔算不出来：%s", e)
+    return {"score": round(min(score, 1.0), 2), "material": "\n".join(mat), "why": why,
+            "blocked": ""}
+
+
+def auto_tick(force=False):
+    """载体自己决定这一轮发不发。返回 (post 或 None, 说明)。
+
+    门槛：开关 → 每日上限 → 冷却 → `motivation().score` ≥ `_cfg_num("min_score", 0.5)`。
+    过了就让模型拿"他自己的状态"写一条；理由与素材一起落盘（页面上直接显示）。
+    """
+    if not _CFG.get("enabled", True) and not force:
+        return None, "朋友圈开关是关的"
+    d = _load()
+    posts = d.get("posts") or []
+    today = time.strftime("%Y-%m-%d")
+    n_today = sum(1 for p in posts if str(p.get("ts") or "").startswith(today))
+    if not force and n_today >= _cfg_int("max_per_day", 10):
+        return None, "今天已经发了 %d 条（上限 %d）" % (n_today, _cfg_int("max_per_day", 10))
+    # force = 用户明确催了一条：这一条**可以**不看他自己的冷却，
+    #   但理由里必须写清「是你催的」——不能冒充"他自己想发"。
+    mt = motivation(ignore_gap=bool(force))
+    if mt.get("blocked") == "cooldown" and not force:
+        return None, "刚发过（%s）" % "、".join(mt.get("why") or [])
+    need = _cfg_num("min_score", 0.35)
+    if not force and float(mt.get("score") or 0) < need:
+        _event("skip", why="想发的程度不够", score=mt.get("score"), need=need,
+               reasons=mt.get("why"))
+        return None, "想说的程度 %.2f < %.2f（%s）" % (
+            float(mt.get("score") or 0), need, "、".join(mt.get("why") or []) or "没读到什么")
+    text, who, img = compose(context=mt.get("material") or "", topic="",
+                             with_image=bool(mt.get("score", 0) > 0.8), author="小焦")
+    if not text:
+        _event("skip", why="模型没应答，宁可不发也不编")
+        return None, "模型这次没应答 → 不发（不编一条假的）"
+    _why = list(mt.get("why") or [])
+    if force:
+        _why = ["你催我发一条"] + _why
+    post = publish(text, image=img, source=("manual" if force else "self"), topic="",
+                   author="小焦", by=who, why="；".join(_why))
+    return post, ("你催的（%s）" if force else "自己发的（%s）") % "、".join(_why)
 
 
 # ==================== 点赞 / 评论 / 回复 ====================

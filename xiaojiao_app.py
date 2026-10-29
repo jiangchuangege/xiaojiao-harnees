@@ -2819,6 +2819,62 @@ def _moment_intent(text):
     return ""
 
 
+_MOMENT_SCHED = {"started": False, "last": 0.0, "checks": 0, "posts": 0, "last_why": ""}
+
+
+def _moment_scheduler():
+    """后台：每隔一会儿看一眼**他自己的状态**，想说的程度够了就自己发一条。
+
+    【为什么不是"点一下才发"】用户原话：「应该是他自己会有自己的想法去发朋友圈，
+    不是我点一下他发模板还不是生成」。所以主路径是这条循环：读状态 → 攒理由 → 够想就发。
+    每一轮都记账（分数/理由/为什么没发），页面上能看到"他为什么发这条"。
+    """
+    while True:
+        try:
+            import core.moments as _MM
+            _cfg = _MM._CFG if hasattr(_MM, "_CFG") else {}
+            _wait = int(_MM._cfg_num("check_interval_s", 180))
+            if not _MM._cfg_num("auto_enabled", 1):
+                _wait = 300
+            else:
+                _MOMENT_SCHED["checks"] += 1
+                _mt = _MM.motivation()
+                LOG.info("朋友圈·看一眼自己：想发程度=%.2f ｜ 理由=%s ｜ 素材=%d 字%s",
+                         float(_mt.get("score") or 0.0), "、".join(_mt.get("why") or []) or "无",
+                         len(_mt.get("material") or ""),
+                         "（冷却中）" if _mt.get("blocked") == "cooldown" else "")
+                _post, _why = _MM.auto_tick()
+                _MOMENT_SCHED["last"] = time.time()
+                _MOMENT_SCHED["last_why"] = _why
+                if _post:
+                    _MOMENT_SCHED["posts"] += 1
+                    LOG.info("朋友圈·他自己发了一条：%s", _why)
+                else:
+                    LOG.info("朋友圈·这一轮没发：%s", _why)
+        except Exception as e:      # noqa: silent-ok — 调度挂了绝不影响对话
+            LOG.warning("朋友圈调度异常：%s: %s（60 秒后重试）", type(e).__name__, e)
+            _wait = 60
+        try:
+            time.sleep(max(45, int(_wait)))
+        except Exception:      # noqa: silent-ok
+            return
+
+
+def start_moment_scheduler():
+    """启动调度（幂等）。放在服务启动时调一次。"""
+    if _MOMENT_SCHED.get("started"):
+        return False
+    try:
+        import threading as _th4
+        _th4.Thread(target=_moment_scheduler, daemon=True, name="xj-moment-sched").start()
+        _MOMENT_SCHED["started"] = True
+        LOG.info("朋友圈调度已起：它会按自己的状态自己发（不是等你点按钮）")
+        return True
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("朋友圈调度起不来：%s", e)
+        return False
+
+
 def _maybe_post_moment(user_input="", answer=""):
     """载体决定这一轮要不要发一条朋友圈（冷却 / 上限 / 掷骰全在 core/moments 里，账可查）。"""
     try:
@@ -15888,10 +15944,8 @@ def api_moments_post():
             post = M.publish(str(data.get("text")).strip(), source="manual",
                              author=str(data.get("author") or "小焦"))
             return jsonify({"ok": bool(post), "post": post, "why": "按你给的内容发了"})
-        ctx = "%s\n%s" % (str(data.get("context") or ""),
-                          _CTX.get("_last_turn") or "")
-        post, why = M.auto_try(context=ctx, topic=str(data.get("topic") or ""),
-                               with_image=bool(data.get("with_image")), force=True)
+        # 走 `auto_tick`：即使是你催他，也让他**按自己的状态**说理由（不会被套成模板）
+        post, why = M.auto_tick(force=True)
         if not post:
             return jsonify({"ok": False, "error": why, "why": why})
         return jsonify({"ok": True, "post": post, "why": why})
@@ -15956,6 +16010,46 @@ def api_aigroups_create():
         return jsonify(r)
     except Exception as e:      # noqa: silent-ok
         return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/aigroups/<gid>")
+def aigroup_room_page(gid):
+    """单个群的**独立房间页**：建完群就跳到这里。"""
+    from core import social_pages as _SP
+    return Response(_SP.group_room_html(gid), mimetype="text/html")
+
+
+@app.route("/api/aigroups/<gid>/invite", methods=["POST"])
+def api_aigroup_invite(gid):
+    """邀请模型进群。
+
+    data: {"model": "coder", "name": "阿码", "persona": "..."} ——
+      · `model` 留空 = 用当前默认火种；`name` 留空 = 用模型名当成员名；
+      · 想一次邀多个：`models: ["coder","deepseek-v4"]`。
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        want = []
+        if data.get("model") or data.get("name"):
+            want.append({"model": str(data.get("model") or "").strip(),
+                         "name": str(data.get("name") or "").strip(),
+                         "persona": str(data.get("persona") or "").strip()})
+        for m in (data.get("models") or []):
+            want.append({"model": str(m).strip(), "name": "", "persona": ""})
+        if not want:
+            return jsonify({"ok": False, "error": "没说要邀请谁（给 model 或 name）"})
+        added, failed = [], []
+        for w in want:
+            nm = w["name"] or (w["model"] or "新成员")
+            r = G.add_member(gid, nm, persona=w["persona"], model=w["model"])
+            (added if r.get("ok") else failed).append(
+                nm if r.get("ok") else "%s（%s）" % (nm, r.get("error")))
+        LOG.info("群组邀请：%s → 成功 %s ／ 失败 %s", gid, added, failed)
+        return jsonify({"ok": bool(added), "added": added, "failed": failed,
+                        "group": G.get(gid), "error": "" if added else "一个都没邀进去"})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
 
 
 @app.route("/api/aigroups/<gid>")
@@ -20997,3 +21091,11 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+try:
+    # 【必须放在模块导入时】`start_xiaojiao.py` 是 `import xiaojiao_app` 之后调 `app.run(...)`，
+    #   放进 `if __name__ == "__main__"` 等于永远不启动 —— 实测就是这么漏的。
+    start_moment_scheduler()
+except Exception as _e:      # noqa: silent-ok — 起不来也照常服务
+    LOG.debug("朋友圈调度启动失败（忽略）：%s", _e)
