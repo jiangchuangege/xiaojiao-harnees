@@ -3436,6 +3436,28 @@ def _generate_long(task, system, on_chunk=None, on_delta=None):
         LOG.info("长文续写：%d 段 / %d 字 / 去重裁掉 %d / 重试 %d / 停止=%s / 耗时 %.1fs",
                  len(res["chunks"]), res["chars"], res["dedup_chars"], res["retries"],
                  res["stopped"], res["elapsed_s"])
+        # 【跨阶段去重】每一阶段是独立请求，模型看不到前面写过的内容 →
+        #   于是"收尾金句"被反复重新发明（用户实测：同一段结尾出现了三次）。
+        #   这里跟**同一会话前面各阶段**比一遍：重复段落整段丢掉、相邻同句连排只留两次。
+        try:
+            from core import longform_memory as _LM
+            _sid = ""
+            try:
+                _sid = str(get_current_session()[0].get("id") or "")
+            except Exception:      # noqa: silent-ok
+                _sid = ""
+            _dd = _LM.dedupe(_sid or "default", res["text"] or "")
+            if _dd.get("dropped_paras") or _dd.get("dropped_sents"):
+                LOG.info("长文跨阶段去重：去掉重复段落 %s 段、重复句子 %s 句",
+                         _dd.get("dropped_paras"), _dd.get("dropped_sents"))
+                res["text"] = (_dd.get("text") or "") + (
+                    "\n\n—— （已自动去掉与前面阶段**完全重复**的 %d 段 / %d 句，"
+                    "剩下的都是这次新写的）" % (_dd.get("dropped_paras") or 0,
+                                              _dd.get("dropped_sents") or 0))
+            else:
+                res["text"] = _dd.get("text") or res["text"]
+        except Exception as _de:      # noqa: silent-ok — 去重失败也要把正文给出去
+            LOG.debug("长文跨阶段去重失败（忽略）：%s", _de)
         return res["text"] or None
     except Exception as e:
         LOG.warning("长文续写失败，回落单次回答：%s", e)
@@ -14841,9 +14863,14 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         except Exception:      # noqa: silent-ok
             _has_claim = True
         _tiny = len(str(answer or "").strip()) <= 30 and not _has_claim
+        # 【创作类不挂免责】实测：每写完一阶段都挂一句「自评 B：这题我没把握」，
+        #   而创意写作没有"可核查断言"这回事，挂上去纯噪音（用户明确说"我要麻了"）。
+        _creative = bool(re.search(
+            r"(写|续写|接着写|下一阶段|第[一二三四五六七八九十]+阶段|小说|故事|章节|字数|"
+            r"剧本|台词|大纲|角色)", str(user_input or "")))
         try:
             if _meta_route == "answer_with_caveat" and answer and "元认知" not in answer \
-                    and not _carrier_direct and not _self_intro and not _tiny:
+                    and not _carrier_direct and not _self_intro and not _tiny and not _creative:
                 answer = answer.rstrip() + ("\n\n（元认知 · 自评 B：这题我没有把握，"
                                             "上面是尽力给的答案，建议你自己再核一遍）")
                 LOG.info("元认知标注：已给回答加上\u201c没把握\u201d说明")
@@ -14863,7 +14890,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             #   给它挂"没查到可核实来源"同样是噪音（用户实测截图里就是这条最刺眼）。
             _ov_turn = bool(_OVERRIDE_RE.search(str(user_input or "")))
             if (_meta_route == "use_tool" and not tool_trace and answer
-                    and "元认知" not in answer and not _ov_turn
+                    and "元认知" not in answer and not _ov_turn and not _creative
                     and not _self_intro and not _carrier_direct):
                 answer = answer.rstrip() + (
                     "\n\n（元认知 · 自评 C：这题我没有把握，而且本轮**没能查到可核实的来源**，"
