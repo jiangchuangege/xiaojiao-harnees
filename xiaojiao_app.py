@@ -2649,6 +2649,35 @@ def _answer_with_facts(question, facts, label="", fallback_head=""):
             % (fallback_head or "", _raw[:2000]))
 
 
+def _fuse_if_time(question, facts, label="", fallback_head="", budget_s=8.0):
+    """载体取到数据 → 让模型讲给用户听；但先看这一轮的时间账。
+
+    【为什么带预算】用户最狠的一句抱怨是「回复速度慢点要死」。解说要多一次模型调用
+    （2~4 秒）。所以：这一轮前面已经花掉超过 `budget_s` 秒，就**直给载体原始数据**，
+    并在末尾如实标一句「这次没解说，是怕再拖时间」。
+
+    两件事都要说清楚，不能两头都吹：
+      · 模型讲得成 → 是「载体给结果、模型解答」，这是要的方向；
+      · 讲不成/来不及 → 是「载体原始数据」，照样能用，但**不许说成模型讲的**。
+    """
+    _raw0 = str(facts or "").strip()
+    if not _raw0:
+        return ""
+    _spent = 0.0
+    try:
+        _spent = float(time.time() - float(_CTX.get("_stage_t") or time.time()))
+    except Exception:      # noqa: silent-ok — 算不出就当 0
+        _spent = 0.0
+    try:
+        _spent += sum(float(v or 0) for v in (_CTX.get("timings") or {}).values())
+    except Exception:      # noqa: silent-ok
+        pass
+    if _spent > float(budget_s):
+        LOG.info("这一轮已经 %.1fs > %.1fs 预算 → 载体数据直接给，不再解说", _spent, budget_s)
+        return (fallback_head or "") + _raw0
+    return _answer_with_facts(question, facts, label=label, fallback_head=fallback_head)
+
+
 def _stored_fact_answer(question):
     """问自己存过的事 → 从记忆库/画像库直接取答案。返回答案或空串。"""
     q = str(question or "").strip()
@@ -13529,7 +13558,13 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 _ve["result"] = ("NVD 漏洞表：%d 行（%s，最近 %d 天）"
                                  % (_rows, _vq["severity"], _vq["days"]))
                 tool_trace.append(_ve)
-                answer = _vbody or ("⚠️ 漏洞查询失败：%s" % (_verr or "接口没有返回内容，请稍后重试"))
+                # 【载体给结果、模型解答】原来这张表是**原样**甩给用户的。
+                #   现在把表交给模型讲成人话（仍然限预算：这一轮已经太久就直给表）。
+                answer = _fuse_if_time(
+                    user_input,
+                    _vbody or ("⚠️ 漏洞查询失败：%s" % (_verr or "接口没有返回内容，请稍后重试")),
+                    label="NVD 漏洞表（载体实取，%s / 最近 %s 天）" % (_vq.get("severity"), _vq.get("days")),
+                    budget_s=12.0)
                 if _asks_asset_list(user_input):
                     # **真实缺陷**：用户问的是"含这些漏洞的 IP / 主机 / 资产"，而这条路只会
                     # 把同一张 NVD 表原样吐回去 —— 于是不管怎么问，看到的都是"那张表，一点没变"。
@@ -13897,7 +13932,10 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                     LOG.info("电子书路由：%s（%s）", _ebt, _summarize_args_for_log(_ebt, _ebargs))
                     tool_trace.append(_trace_entry(_ebt, _ebargs, _ebres))
                     _note_tool_path(tool_trace, path="ebook")
-                    answer = _ebres
+                    # 【载体给结果、模型解答】书单很长，模型只讲"这本书有几本、怎么分批下"，
+                    #   原始清单仍可用「核对一下」要回来（去重/预算都在 _fuse_if_time 里）。
+                    answer = _fuse_if_time(user_input, _ebres,
+                                           label="电子书清单（载体实取）", budget_s=12.0)
                     _eb_answered = True
                 else:
                     LOG.info("电子书路由 %s 没成（%s）→ 交给后面的流程", _ebt, str(_ebres)[:60])
