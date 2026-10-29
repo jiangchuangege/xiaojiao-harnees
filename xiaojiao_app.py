@@ -2842,6 +2842,13 @@ def _social():
                image_fn=_moment_image)
     _G.install(llm_chat, alt_fn=_fuse_alt_llm, model_name=str(MODEL_NAME or ""))
     try:
+        import requests as _rq
+        _j = _rq.get((LLM_BASE or "").rstrip("/") + "/models", timeout=3).json()
+        _G.set_available_models([str(m.get("id") or "") for m in (_j.get("data") or [])
+                                 if m.get("id")])
+    except Exception as _e:      # noqa: silent-ok — 列不出火种也不影响建群
+        LOG.debug("可用火种列表读取失败（忽略）：%s", _e)
+    try:
         _cfg = (CONTROL or {}).get("moments") or {}
         if _cfg:
             _M.configure(**_cfg)
@@ -16003,6 +16010,51 @@ def api_aigroup_member(gid):
                                     model=data.get("model")))
     except Exception as e:      # noqa: silent-ok
         return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/aigroups/<gid>/member/add", methods=["POST"])
+def api_aigroup_member_add(gid):
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        return jsonify(G.add_member(gid, str(data.get("name") or ""),
+                                    persona=str(data.get("persona") or ""),
+                                    model=str(data.get("model") or "")))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/aigroups/<gid>/member/remove", methods=["POST"])
+def api_aigroup_member_remove(gid):
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        return jsonify(G.remove_member(gid, str(data.get("name") or "")))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/aigroups/<gid>/auto", methods=["POST"])
+def api_aigroup_auto(gid):
+    """自动聊开关：开着就每隔 N 秒自己聊一轮（AI 与 AI 自己对话），可以随时停。"""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        _M, G = _social()
+        return jsonify(G.set_auto(gid, bool(data.get("on")),
+                                  interval_s=int(data.get("interval") or 16),
+                                  rounds=int(data.get("rounds") or 12)))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/aigroups/models")
+def api_aigroup_models():
+    """可用火种（建群/加人时给用户选）。"""
+    try:
+        _M, G = _social()
+        return jsonify({"ok": True, "models": G.available_models()})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160], "models": []}), 500
 
 
 @app.route("/api/central")

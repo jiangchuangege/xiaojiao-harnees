@@ -22,6 +22,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -38,7 +39,113 @@ _LLM = None
 _ALT = None
 _MODEL = ""
 
-MAX_MEMBERS = 6
+MAX_MEMBERS = 8
+
+# 【默认成员】建群时没指定成员，就放三个**不同**的人 —— 一个人自说自话不叫群聊。
+#   人设写在这里而不是空着：空人设的模型会互相顺着说，聊两句就成复读机。
+DEFAULT_MEMBERS = [
+    {"name": "小焦", "model": "",
+     "persona": "我是小焦，住在这台电脑里。说话直接、不装，喜欢把事拆小了做；"
+                "别人说空话我会顶一句「具体怎么弄」。"},
+    {"name": "阿码", "model": "",
+     "persona": "我是写代码的，说话很短，爱挑毛病，见到含糊的方案会直接问「边界条件呢」。"
+                "不耐烦但说的是真话。"},
+    {"name": "老曲", "model": "",
+     "persona": "我比较轴，喜欢唱反调，习惯从用户角度问「这玩意儿有人真需要吗」。"
+                "不骂人，但会把风险摆出来。"},
+]
+_COLORS = ["#7c6cf5", "#3d7bfd", "#35c07f", "#e0a33e", "#e06b8b", "#41c7d4", "#a86be0", "#d4743c"]
+
+_AVAILABLE_MODELS = []          # app 注入：当前可用的火种名（给前端选）
+
+
+def set_available_models(names):
+    global _AVAILABLE_MODELS
+    _AVAILABLE_MODELS = [str(x) for x in (names or [])][:12]
+    return _AVAILABLE_MODELS
+
+
+def available_models():
+    return list(_AVAILABLE_MODELS)
+
+
+def _norm_members(members):
+    """统一成员结构，并给每个人一个头像颜色。"""
+    mem = []
+    for m in (members or []):
+        if isinstance(m, str):
+            m = {"name": m}
+        nm = str((m or {}).get("name") or "").strip()
+        if not nm:
+            continue
+        if any(x.get("name") == nm for x in mem):      # 同名只留一个（否则页面上分不清谁在说）
+            continue
+        mem.append({"name": nm,
+                    "persona": str((m or {}).get("persona") or "").strip(),
+                    "model": str((m or {}).get("model") or "").strip()})
+    for i, m in enumerate(mem):
+        m["color"] = _COLORS[i % len(_COLORS)]
+    return mem[:MAX_MEMBERS]
+
+
+# ==================== 自动聊（AI 自己跟自己聊）====================
+_AUTO = {}          # gid -> {"on": bool, "interval": int, "rounds": int, "th": Thread}
+
+
+def set_auto(gid, on, interval_s=18, rounds=12):
+    """开关自动聊。开着时后台每隔 interval 秒跑一轮，跑到 rounds 轮自动停。"""
+    g = get(gid)
+    if not g:
+        return {"ok": False, "error": "没有这个群"}
+    st = _AUTO.get(gid) or {}
+    if not on:
+        st["on"] = False
+        _AUTO[gid] = st
+        _event("auto_off", gid=gid)
+        LOG.info("群组：%s 关掉自动聊", g.get("name"))
+        return {"ok": True, "auto": {"on": False}}
+    if st.get("on"):
+        return {"ok": True, "auto": {"on": True, "interval": st.get("interval"),
+                                     "rounds": st.get("rounds")}}
+    st.update({"on": True, "interval": max(6, int(interval_s or 18)),
+               "rounds": max(1, min(int(rounds or 12), 40))})
+    _AUTO[gid] = st
+
+    def _loop(_gid=gid):
+        import threading as _th
+        _done = 0
+        while (_AUTO.get(_gid) or {}).get("on"):
+            _s = _AUTO.get(_gid) or {}
+            try:
+                run_round(_gid, rounds=1)
+            except Exception as e:      # noqa: silent-ok — 自动聊挂了不能把服务带崩
+                LOG.debug("自动聊一轮失败：%s", e)
+            _done += 1
+            if _done >= int(_s.get("rounds") or 12):
+                _s["on"] = False
+                _AUTO[_gid] = _s
+                _event("auto_done", gid=_gid, rounds=_done)
+                LOG.info("群组：自动聊跑满 %d 轮，停", _done)
+                break
+            _th.Event().wait(float(_s.get("interval") or 18))
+
+    st["th"] = None
+    _AUTO[gid] = st
+    import threading as _threading
+    _threading.Thread(target=_loop, daemon=True, name="xj-group-auto").start()
+    _event("auto_on", gid=gid, interval=st["interval"], rounds=st["rounds"])
+    LOG.info("群组：%s 开始自动聊（每 %ds 一轮，最多 %d 轮）",
+             g.get("name"), st["interval"], st["rounds"])
+    return {"ok": True, "auto": {"on": True, "interval": st["interval"],
+                                 "rounds": st["rounds"]}}
+
+
+def auto_state(gid):
+    st = _AUTO.get(gid) or {}
+    return {"on": bool(st.get("on")), "interval": st.get("interval"), "rounds": st.get("rounds")}
+
+
+MAX_MEMBERS_OLD = 6
 MAX_MSGS_STORE = 400        # 每个群只留最近这么多条
 CTX_MSGS = 14               # 拼给模型的最近消息条数
 
@@ -104,8 +211,8 @@ def create(name, topic="", members=None, style=""):
                     "persona": str((m or {}).get("persona") or "").strip(),
                     "model": str((m or {}).get("model") or "").strip()})
     if not mem:
-        mem = [{"name": "小焦", "persona": "", "model": ""}]
-    mem = mem[:MAX_MEMBERS]
+        mem = list(DEFAULT_MEMBERS)      # 没指定就来三个不同的人，不是一个人说五句
+    mem = _norm_members(mem)
     with _LOCK:
         d = _load()
         g = {"id": uuid.uuid4().hex[:8], "name": name, "topic": str(topic or "").strip(),
@@ -125,7 +232,9 @@ def list_groups():
     for g in d.get("groups") or []:
         out.append({"id": g.get("id"), "name": g.get("name"), "topic": g.get("topic"),
                     "members": [m.get("name") for m in (g.get("members") or [])],
+                    "member_detail": g.get("members") or [],
                     "messages": len(g.get("messages") or []),
+                    "auto": auto_state(g.get("id")),
                     "created": g.get("created")})
     out.sort(key=lambda x: str(x.get("created") or ""), reverse=True)
     return out
@@ -173,6 +282,49 @@ def set_member(gid, member, persona=None, model=None):
                 _event("set_member", gid=gid, member=member)
                 return {"ok": True, "member": m}
             return {"ok": False, "error": "群里没有这个人：%s" % member}
+    return {"ok": False, "error": "没有这个群"}
+
+
+def add_member(gid, name, persona="", model=""):
+    """往群里加一个人（最多 MAX_MEMBERS）。同名不加。"""
+    nm = str(name or "").strip()
+    if not nm:
+        return {"ok": False, "error": "成员名字不能空"}
+    with _LOCK:
+        d = _load()
+        for g in d.get("groups") or []:
+            if g.get("id") != gid:
+                continue
+            ms = g.get("members") or []
+            if any(m.get("name") == nm for m in ms):
+                return {"ok": False, "error": "群里已经有「%s」了" % nm}
+            if len(ms) >= MAX_MEMBERS:
+                return {"ok": False, "error": "一个群最多 %d 个人" % MAX_MEMBERS}
+            ms.append({"name": nm, "persona": str(persona or "").strip(),
+                       "model": str(model or "").strip()})
+            g["members"] = _norm_members(ms)
+            _save(d)
+            _event("add_member", gid=gid, member=nm)
+            return {"ok": True, "members": g["members"]}
+    return {"ok": False, "error": "没有这个群"}
+
+
+def remove_member(gid, name):
+    nm = str(name or "").strip()
+    with _LOCK:
+        d = _load()
+        for g in d.get("groups") or []:
+            if g.get("id") != gid:
+                continue
+            ms = [m for m in (g.get("members") or []) if m.get("name") != nm]
+            if len(ms) == len(g.get("members") or []):
+                return {"ok": False, "error": "群里没有这个人"}
+            if not ms:
+                return {"ok": False, "error": "不能把最后一个人删掉（那样就没人说话了）"}
+            g["members"] = _norm_members(ms)
+            _save(d)
+            _event("remove_member", gid=gid, member=nm)
+            return {"ok": True, "members": g["members"]}
     return {"ok": False, "error": "没有这个群"}
 
 
@@ -275,6 +427,15 @@ def run_round(gid, rounds=1):
             txt = _strip_name_prefix(txt, m.get("name"))
             if not txt:
                 continue
+            # 【拦住复读】实测：后一个人把前一个人那句一字不差抄一遍，看着像两个 AI 互相复读。
+            #   判据落在载体（提示词拦不住小模型），重合度 ≥0.8 就丢这条并记账。
+            _dup, _dup_who, _ratio = _too_similar(txt, msgs)
+            if _dup:
+                _event("repeat_dropped", gid=gid, member=m.get("name"),
+                       like=_dup_who, ratio=_ratio)
+                LOG.info("群组：%s 这句跟 %s 说的太像（%.2f）→ 丢掉不记",
+                         m.get("name"), _dup_who or "别人", _ratio)
+                continue
             msg = {"id": uuid.uuid4().hex[:8], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
                    "who": m.get("name"), "text": txt, "by": who, "round": r + 1}
             with _LOCK:
@@ -289,6 +450,30 @@ def run_round(gid, rounds=1):
             _event("say", gid=gid, member=m.get("name"), chars=len(txt), by=who)
     LOG.info("群组：%s 跑了 %d 轮，新增 %d 条消息", g.get("name"), rounds, len(added))
     return {"ok": True, "added": added, "group": get(gid)}
+
+
+def _bigrams(t):
+    t = re.sub(r"[\s，。！？；：、,.!?;:~…\-—「」（）()【】\"'’‘“”]", "", str(t or ""))
+    return {t[i:i + 2] for i in range(len(t) - 1)} if len(t) > 2 else set()
+
+
+def _too_similar(text, recent, floor=0.8):
+    """这句话是不是把别人刚说过的又抄了一遍？返回 (是否重复, 跟谁像, 相似度)。"""
+    tb = _bigrams(text)
+    if not tb:
+        return False, "", 0.0
+    for m in (recent or [])[-3:]:
+        ob = _bigrams(m.get("text") or "")
+        if not ob:
+            continue
+        inter = len(tb & ob)
+        if not inter:
+            continue
+        jac = inter / float(len(tb) + len(ob) - inter)
+        cont = inter / float(min(len(tb), len(ob)))
+        if max(jac, cont) >= floor:
+            return True, m.get("who") or "", round(max(jac, cont), 2)
+    return False, "", 0.0
 
 
 def _strip_name_prefix(text, name):
