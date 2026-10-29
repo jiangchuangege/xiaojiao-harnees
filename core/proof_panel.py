@@ -282,13 +282,15 @@ def render(d=None):
     if not fu.get("events"):
         out.append('<p class="muted">还没有记录。说一句话就会有一条（logs/fusion.jsonl）。</p>')
     else:
-        out.append('<p>共 <b>%d</b> 条输出判定 ｜ <b>AI 说 %d</b> ｜ 保留载体原文 %d ｜ '
-                   '按规矩不改述 %d ｜ 太慢没改 %d ｜ 本来就不是模板 %d</p>'
-                   % (fu.get("events") or 0, fu.get("ai") or 0, fu.get("kept") or 0,
-                      fu.get("exempt") or 0, fu.get("budget") or 0, fu.get("clean") or 0))
-        out.append('<p>模型复述占比 <b>%.1f%%</b> ｜ 模型没应答而保留原文 <b>%.1f%%</b>'
-                   '（后者如实标出来，不假装是模型说的）</p>'
-                   % ((fu.get("ai_ratio") or 0) * 100, (fu.get("kept_ratio") or 0) * 100))
+        out.append('<p>共 <b>%d</b> 条输出判定 ｜ <b>模型说 %d</b> ｜ '
+                   '所有火种都没应答、载体组织成人话 %d ｜ 按规矩不改述 %d ｜ '
+                   '本来就不是模板 %d</p>'
+                   % (fu.get("events") or 0, fu.get("ai") or 0, fu.get("prose") or 0,
+                      fu.get("exempt") or 0, fu.get("clean") or 0))
+        out.append('<p>模型复述占比 <b>%.1f%%</b> ｜ 载体兜底人话 <b>%.1f%%</b>'
+                   '（后者是"所有火种都没应答"时的载体自述，如实标出来，不假装是模型说的；'
+                   '两种情况都**不出死模板**）</p>'
+                   % ((fu.get("ai_ratio") or 0) * 100, (fu.get("prose_ratio") or 0) * 100))
         rows = d.get("fusion_tail") or []
         if rows:
             out.append('<table><tr><th>时间</th><th>状态</th><th>来源</th><th>字数</th>'

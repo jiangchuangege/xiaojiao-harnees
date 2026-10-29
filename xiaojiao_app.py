@@ -2641,6 +2641,18 @@ def _narrate_facts(question, facts, label=""):
         if _txt and len(_txt) >= 4:
             break
     if not _txt or len(_txt) < 4:
+        # 【主火种两次都没应答 → 换火种】用户要的是"没有死模板"，不是"必须这颗说"。
+        try:
+            _t_alt, _who = _fuse_alt_llm(
+                [{"role": "system", "content": _NARRATE_SYS},
+                 {"role": "user", "content": "用户问：%s\n\n%s数据：\n%s" % (
+                     q, (label or "载体取到的"), f[:1200])}], 0.3)
+            if _t_alt and len(_t_alt) >= 4:
+                LOG.info("数据解答：主火种没应答 → 由 %s 说通了", _who or "备用火种")
+                _txt = _t_alt
+        except Exception as e:      # noqa: silent-ok
+            LOG.debug("数据解答·换火种失败：%s", e)
+    if not _txt or len(_txt) < 4:
         return "", False, []
     # 【关键数字】只从"可核查的短数值"里挑，且**只用来补原始要点，不再用来否决**。
     _cleanv = re.sub(r"[\w]*\d{5,}[\w]*", " ", f)
@@ -2707,10 +2719,53 @@ def _task_evidence_header(question, facts_text):
 #   都是通过 AI。载体的所有都要融入到 AI，AI 也要融入到载体，成为一体。」
 # 【为什么把实现挪走】模板判据如果留在 app 里，路由各拼一份、以后新加一条又会漏；
 #   现在只有一个边界 `core/fusion.py`，写法只此一份，账也只记一份（logs/fusion.jsonl）。
+def _fuse_alt_llm(messages, temperature=0.3):
+    """主火种没应答 → **换一颗火种**再说。
+
+    【为什么要有这一级】用户的话：「宁愿牺牲一部分时间，我也不要死模板」。
+    载体能换火（`core/model_router` 与 llama-swap 的 /v1/models 都摆在那儿），
+    那就没有理由在主火种抽风时直接把模板甩给用户。
+    限时 25 秒、最多试 3 颗，避免全挂时把一轮拖成几分钟。
+    """
+    _t0 = time.time()
+    try:
+        import requests as _rq
+        _base = (LLM_BASE or "").rstrip("/")
+        _j = _rq.get(_base + "/models", timeout=3).json()
+        _ids = [str(m.get("id") or "") for m in (_j.get("data") or []) if m.get("id")]
+    except Exception as e:      # noqa: silent-ok — 列不出来就当作没有备用火种
+        LOG.debug("融合·列火种失败：%s", e)
+        return "", ""
+    _cur = str(MODEL_NAME or "")
+    _cand = [m for m in _ids if m != _cur][:3]
+    _prev = _CTX.get("force_model")
+    try:
+        for _m in _cand:
+            if time.time() - _t0 > 25:
+                LOG.info("融合·换火种超时（已 %.1fs），不再试", time.time() - _t0)
+                break
+            try:
+                _CTX["force_model"] = _m
+                _t = str(llm_chat(messages, temperature=temperature) or "").strip()
+                if len(_t) >= 4:
+                    LOG.info("融合·主火种没应答 → 换火种 %s 说通了（%.1fs）",
+                             _m, time.time() - _t0)
+                    return _t, _m
+            except Exception as e:      # noqa: silent-ok — 这颗不行换下一颗
+                LOG.debug("融合·换火种 %s 失败：%s", _m, e)
+    finally:
+        if _prev is None:
+            _CTX.pop("force_model", None)
+        else:
+            _CTX["force_model"] = _prev
+    LOG.info("融合·备用火种都没应答（试了 %d 颗 / %.1fs）", len(_cand), time.time() - _t0)
+    return "", ""
+
+
 def _fus():
-    """拿到融合层，并把模型调用注进去（幂等）。"""
+    """拿到融合层，并把火种注进去（幂等）。"""
     from core import fusion as _F
-    _F.install(llm_chat, model_name=str(MODEL_NAME or ""))
+    _F.install(llm_chat, model_name=str(MODEL_NAME or ""), alt_fn=_fuse_alt_llm)
     return _F
 
 
@@ -2724,10 +2779,14 @@ def _looks_templated(answer, question=""):
 
 
 def _speak_text(question, text, kind=""):
-    """把模板讲成模型自己的话。真身在 core/fusion.answer。"""
+    """把死模板讲成人话。真身在 core/fusion.answer。
+
+    返回非空即"可以替换掉原模板"：模型说的（ai）用，所有火种都没应答时
+    载体自己组织的人话（prose）也用 —— 用户要的是"没有死模板"，不是"必须由这颗模型说"。
+    """
     try:
         out, _st = _fus().answer(question, text, kind=kind)
-        return out if _st == "ai" else ""
+        return out if _st in ("ai", "prose") else ""
     except Exception as e:      # noqa: silent-ok
         LOG.debug("融合改述失败（忽略）：%s", e)
         return ""
@@ -2742,18 +2801,12 @@ def _fuse_outgoing(question, text):
             return text
         if not _looks_templated(text, question):
             return text
-        _spent = 0.0
-        try:
-            _spent = sum(float(v or 0) for v in (_CTX.get("timings") or {}).values())
-        except Exception:      # noqa: silent-ok
-            _spent = 0.0
-        out, st = _fus().answer(question, text, kind="outgoing",
-                                budget=(14.0 - _spent))
-        if st == "ai":
+        # 【不许因为慢就不说】用户原话：「宁愿牺牲一部分时间，我也不要死模板」。
+        #   所以这里没有"太慢就跳过"的分支：要么模型说，要么载体自己组织成人话。
+        out, st = _fus().answer(question, text, kind="outgoing")
+        if st in ("ai", "prose"):
             _CTX["_spoken"] = True
-            LOG.info("出口融合：模板 → 模型自己说（%d 字 → %d 字）", len(str(text)), len(out))
-        elif st in ("kept", "budget"):
-            LOG.info("出口融合：%s（如实保留载体原文）", st)
+            LOG.info("出口融合：%s（%d 字 → %d 字）", st, len(str(text)), len(out))
         return out
     except Exception as e:      # noqa: silent-ok — 出口兜底挂了也必须把答案给出去
         LOG.debug("出口融合失败（忽略）：%s", e)
@@ -2761,50 +2814,13 @@ def _fuse_outgoing(question, text):
 
 
 def _facts_prose(facts, label=""):
-    """把结构化记录**说成人话**（载体自己说，不调模型）。
-
-    只在模型真调不通时用。原则：只说记录里有的，按状态归类，不推测因果。
-    —— 这是"没有模型也能把事说清"的兜底，所以措辞里不出现"模型"二字。
-    """
-    raw = str(facts or "").strip()
-    lines = [l.strip() for l in raw.splitlines() if l.strip()]
-    body = [l for l in lines if not l.startswith(("📋", "|", "```"))]
-    rows = [l for l in body if l.startswith(("-", "*", "·"))]
-    if not rows:
-        rows = [l for l in body if len(l) > 6][:8]
-    st = {"完成": 0, "失败": 0, "进行": 0, "待": 0}
-    for r in rows:
-        if "完成" in r:
-            st["完成"] += 1
-        elif "失败" in r:
-            st["失败"] += 1
-        elif "进行" in r or "跑" in r:
-            st["进行"] += 1
-        elif "待" in r or "pending" in r.lower():
-            st["待"] += 1
-    out = []
-    what = (label or "记录").replace("（载体实取）", "").strip()
-    if rows:
-        out.append("%s一共 %d 条。" % (what, len(rows)))
-        bits = []
-        for k in ("完成", "失败", "进行", "待"):
-            if st[k]:
-                bits.append("%s %d 条" % (k, st[k]))
-        if bits:
-            out.append("按状态分：%s。" % "、".join(bits))
-
-    def _pick(r):
-        t = re.sub(r"^[-*·\s`]+", "", r)
-        t = re.sub(r"`", "", t)
-        return t[:120]
-
-    if rows:
-        out.append("最近一条是：%s" % _pick(rows[0]))
-    if len(rows) > 1:
-        out.append("更早的还有：%s" % _pick(rows[-1]))
-    if not out:
-        out = ["记录原文如下：" + raw[:300].replace("\n", " ／ ")]
-    return "\n".join(out)
+    """把记录说成人话（兜底用）。真身在 core/fusion._prose_from —— 只留一份实现。"""
+    try:
+        from core import fusion as _F
+        return _F._prose_from(facts, label)
+    except Exception as e:      # noqa: silent-ok — 融合层不在也不能让回答空着
+        LOG.debug("载体组织人话失败（忽略）：%s", e)
+        return re.sub(r"\s+", " ", str(facts or ""))[:400]
 
 
 def _answer_with_facts(question, facts, label="", fallback_head=""):
@@ -2861,19 +2877,9 @@ def _fuse_if_time(question, facts, label="", fallback_head="", budget_s=8.0):
     _raw0 = str(facts or "").strip()
     if not _raw0:
         return ""
-    _spent = 0.0
-    try:
-        _spent = float(time.time() - float(_CTX.get("_stage_t") or time.time()))
-    except Exception:      # noqa: silent-ok — 算不出就当 0
-        _spent = 0.0
-    try:
-        _spent += sum(float(v or 0) for v in (_CTX.get("timings") or {}).values())
-    except Exception:      # noqa: silent-ok
-        pass
-    if _spent > float(budget_s):
-        LOG.info("这一轮已经 %.1fs > %.1fs 预算 → 载体数据直接给，不再解说", _spent, budget_s)
-        return (fallback_head or "") + _raw0
-    return _answer_with_facts(question, facts, label=label, fallback_head=fallback_head)
+    # 【不再按时间跳过解说】用户原话：「宁愿牺牲一部分时间，我也不要死模板」。
+    #   带上 `fallback_head`（那是 emoji 抬头）反而更容易露出模板相，所以不再用它。
+    return _answer_with_facts(question, facts, label=label)
 
 
 def _stored_fact_answer(question):
@@ -15067,23 +15073,15 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     # 判据见 `_looks_templated`；改写由 `_speak_text` 做（模型自己的话，数字一个不许改）。
     try:
         if answer and not _CTX.get("_narrated") and _looks_templated(answer, user_input):
-            _spent_t = 0.0
-            try:
-                _spent_t = sum(float(v or 0) for v in (_CTX.get("timings") or {}).values())
-            except Exception:      # noqa: silent-ok
-                _spent_t = 0.0
-            if _spent_t <= 14.0:
-                _spoke = _speak_text(user_input, answer)
-                if _spoke:
-                    LOG.info("模板答案 → 已改成模型自己说（%d 字 → %d 字）",
-                             len(str(answer)), len(_spoke))
-                    _CTX["_spoken"] = True
-                    answer = _spoke
-                else:
-                    LOG.info("模板答案：模型这次没应答 → 保留载体原文（不假装是模型说的）")
-            else:
-                LOG.info("模板答案：这一轮已花 %.1fs → 不再改写（速度优先，如实保留载体原文）",
-                         _spent_t)
+            # 【没有"太慢就跳过"这一支】用户原话：「宁愿牺牲一部分时间，我也不要死模板」。
+            #   `_speak_text` 内部会先问主火种、再换火种、最后载体自己组织成人话，
+            #   所以它返回空串只可能是"连话都组织不出来"这种极端情况。
+            _spoke = _speak_text(user_input, answer)
+            if _spoke:
+                LOG.info("模板答案 → 已改成 %d 字人话（原 %d 字）",
+                         len(_spoke), len(str(answer)))
+                _CTX["_spoken"] = True
+                answer = _spoke
     except Exception as _spe:      # noqa: silent-ok — 改写挂了也必须把答案给出去
         LOG.debug("模板收口失败（忽略）：%s", _spe)
 
