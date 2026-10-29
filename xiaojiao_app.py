@@ -2235,10 +2235,32 @@ def _gate_intent(text):
     return any(w in t for w in hits)
 
 
+_CREATIVE_RE = re.compile(
+    r"(写小说|写一段|写一章|写个故事|写故事|续写|接着写|往下写|下一段|下一章|"
+    r"第[一二三四五六七八九十\d]+(?:阶段|章|段|回|幕|节)|"
+    r"小说|故事|剧本|台词|人物设定|角色设定|大纲|文笔|字数|字左右|"
+    r"散文|诗歌|歌词|作文)")
+
+# 为什么单列一个函数：这个判据现在有两处要用（长文路线、项目路线），
+# 写两份迟早会走偏，而它们必须**同时**认同一句话是不是"创作"。
+def _is_creative_writing(text):
+    """这句话是不是要它写/续写创作类内容（小说、故事、剧本…）。"""
+    t = str(text or "").strip()
+    if not t:
+        return False
+    return bool(_CREATIVE_RE.search(t))
+
+
 def _project_intent(text):
     """这一轮是不是「把一件要很久的事交出去 / 接着做项目」？返回 (工具名, 参数) 或 None。"""
     t = str(text or "").strip()
     if not t:
+        return None
+    # 【创作类不算项目】实测事故：说「接着写**第二**阶段，**2**00字左右」——
+    #   「阶段」+ 数字「2」命中了下面"多阶段"的判据 → 真去 project_start →
+    #   那条路当时回「未知工具」，用户看到的回答就是三个字：未知工具。
+    #   写小说不是项目管理：创作先排除，免得它把"第几段"当成里程碑。
+    if _is_creative_writing(t):
         return None
     m = re.search(r"\b(20\d{6}_\d{6}_[0-9a-f]{4,8})\b", t)
     resume_marks = ("接着做", "继续做", "接着跑", "续上", "接着来")
@@ -13804,7 +13826,18 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
         _pj = _project_intent(user_input)
         if _pj and _pj[0] in ("project_start", "project_resume"):
             try:
+                # 【先装载】漏洞表那条路早就这么做了（`_build_tools()` 填 `_TOOL2PLUGIN`）；
+                #   这里漏了，于是 project_* 可能根本没注册进来 → run_tool 回「未知工具」。
+                try:
+                    _build_tools()
+                except Exception:      # noqa: silent-ok — 装载失败下面会如实反映
+                    pass
                 _pjres = _tool_result_str(run_tool(_pj[0], _pj[1] or {}, force=True))
+                # 【「未知工具」绝不许当回答给用户】实测：它原样成了整轮回答。
+                #   没装载 ≠ 有答案；这种时候必须**退回正常问答**，让模型就着上下文说人话。
+                if _pjres and "未知工具" in _pjres:
+                    LOG.warning("项目工具没装载（%s 回未知工具）→ 不拿它当回答，退回正常问答", _pj[0])
+                    _pjres = ""
                 if _pjres and not _pjres.startswith("⚠️"):
                     LOG.info("长时项目：用户交出的是一批事 → %s", _pj[0])
                     tool_trace.append(_trace_entry(_pj[0], _pj[1] or {}, _pjres))
