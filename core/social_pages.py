@@ -152,8 +152,6 @@ def _moments_inner():
   <div class="row" id="authorRow" style="margin-bottom:10px"></div>
   <div class="row">
     <select id="postAs" style="max-width:170px"></select>
-    <button id="btnPost">让它发一条</button>
-    <button class="ghost" id="btnPostImg">发一条（带图）</button>
     <span class="grow"></span>
     <span class="muted" id="st"></span>
   </div>
@@ -591,28 +589,219 @@ def groups_html():
     return _page("模型群组", b, j)
 
 
+# ==================== 好友（一对一）====================
+def _friends_inner():
+    """好友：左列表 + 右聊天 + 他的朋友圈 + 定义角色。"""
+    body = """
+<div class="im">
+  <div class="rail">
+    <div class="railhead">
+      <div class="row"><b style="font-size:14px">好友</b><span class="grow"></span>
+        <button class="sm" id="btnNewFriend">＋ 新好友</button></div>
+      <div class="muted" style="font-size:12px;margin-top:4px">他们会自己找你说话</div>
+    </div>
+    <div class="glist" id="flist"></div>
+  </div>
+  <div class="pane">
+    <div class="phead">
+      <div class="gav" id="fav">友</div>
+      <div style="flex:1;min-width:0">
+        <div class="row"><b id="fName">还没有好友</b>
+          <span class="tag" id="fRel" style="display:none"></span></div>
+        <div class="muted" id="fSub" style="font-size:12px">点左上「＋ 新好友」定义一个人</div>
+      </div>
+      <button class="ghost sm" data-fview="chat">聊天</button>
+      <button class="ghost sm" data-fview="moments">他的朋友圈</button>
+      <button class="ghost sm" data-fview="set">定义角色</button>
+    </div>
+
+    <!-- 聊天 -->
+    <div class="fview" id="fv-chat">
+      <div class="pbody" id="fmsgs"><div class="muted">左边选一个好友。</div></div>
+      <div class="pfoot">
+        <div class="row"><input class="grow" id="fsay" placeholder="跟他说点什么…（他不回你也会自己找你）"/>
+          <button id="btnFSay">发送</button></div>
+        <div class="muted" id="fmsg" style="margin-top:6px"></div>
+      </div>
+    </div>
+
+    <!-- 朋友圈（只查看） -->
+    <div class="fview" id="fv-moments" style="display:none">
+      <div class="pbody" id="fmoments"><div class="muted">他的朋友圈是**他自己发的**，你只能看、能点赞、能评论。</div></div>
+    </div>
+
+    <!-- 定义角色 -->
+    <div class="fview" id="fv-set" style="display:none">
+      <div class="pbody">
+        <div class="muted" style="font-size:13px">定义一次，他就是一个"人"：有自己的性格、关系、头像，
+          有自己的朋友圈，会主动找你说话。</div>
+        <div style="margin-top:10px"><input id="dName" placeholder="名字（例如：小丽）"/></div>
+        <div style="margin-top:8px"><input id="dRel" placeholder="关系/身份（女朋友、室友、搭档…你定）"/></div>
+        <div style="margin-top:8px"><input id="dModel" placeholder="火种（可空=默认）"/></div>
+        <textarea id="dPersona" placeholder="他的性格：说话方式、在意什么、习惯…" style="margin-top:8px"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button class="sm" id="btnSaveFriend">保存这个好友</button>
+          <button class="ghost sm" id="btnFAvatar">上传他的头像</button>
+          <span class="muted" id="dMsg"></span>
+        </div>
+        <input type="file" id="dAvatarFile" accept="image/*" style="display:none"/>
+      </div>
+    </div>
+  </div>
+</div>
+"""
+    js = """
+let FCUR='',F_PROS=[];
+function fToast(el,m,ok){if(!el)return;el.textContent=m;el.className=ok?'ok':'err';
+  setTimeout(function(){if(el.textContent===m)el.textContent=''},4000)}
+function showFView(v){
+  ['chat','moments','set'].forEach(function(x){
+    document.getElementById('fv-'+x).style.display=(x===v)?'block':'none'});
+}
+document.querySelectorAll('button[data-fview]').forEach(function(b){
+  b.onclick=function(){showFView(b.dataset.fview)}});
+async function loadFriends(){
+  const d=await J('/api/friends');F_PROS=d.friends||[];
+  const box=document.getElementById('flist');
+  box.innerHTML=F_PROS.length?F_PROS.map(function(f){
+    const un=f.unread||0;
+    return '<div class="gitem '+(f.name===FCUR?'on':'')+'" data-fname="'+esc(f.name)+'">'+
+      '<span class="av" style="background:'+(f.color||'#7c6cf5')+';overflow:hidden">'+
+      (f.avatar?'<img src="/personas/avatar/'+encodeURIComponent(f.name)+'?t='+Date.now()+
+        '" style="width:100%;height:100%;object-fit:cover"/>':esc((f.name||'友').slice(0,1)))+'</span>'+
+      '<div style="flex:1;min-width:0"><div class="row"><b style="font-size:14px">'+esc(f.name)+'</b>'+
+      (un?'<span class="badge">'+(un>99?'99+':un)+'</span>':'')+'</div>'+
+      '<div class="muted ell">'+esc((f.last_from==='friend'?'他：':'你：')+(f.last||f.relation||'—'))+
+      '</div></div></div>';
+  }).join(''):'<div class="muted" style="padding:10px">还没有好友。点上面「＋ 新好友」定义一个人。</div>';
+}
+document.getElementById('flist').addEventListener('click',function(ev){
+  const it=ev.target.closest('[data-fname]');if(!it)return;openFriend(it.dataset.fname);
+});
+async function openFriend(name){
+  FCUR=name;showFView('chat');await loadFriends();
+  try{await P('/api/friends/'+encodeURIComponent(name)+'/read',{})}catch(e){}
+  const d=await J('/api/friends/'+encodeURIComponent(name));
+  if(!d.ok)return;
+  const f=d.friend||{};
+  document.getElementById('fName').textContent=f.name||name;
+  const rel=document.getElementById('fRel');
+  if(f.relation){rel.textContent=f.relation;rel.style.display=''}else{rel.style.display='none'}
+  document.getElementById('fSub').textContent=(f.persona||'').slice(0,40)+
+    (((d.moments||[]).length)?(' ｜ 动态 '+(d.moments||[]).length+' 条'):'');
+  const fav=document.getElementById('fav');
+  fav.innerHTML=f.avatar?'<img src="/personas/avatar/'+encodeURIComponent(name)+'?t='+Date.now()+
+    '" style="width:100%;height:100%;object-fit:cover"/>':esc((f.name||'友').slice(0,1));
+  const hs=d.history||[];
+  document.getElementById('fmsgs').innerHTML=hs.length?hs.map(function(m){
+    const me=(m.from==='user');
+    const tag=(!me&&m.why&&m.why!=='回你')?'<span class="tag">他主动找你</span>':'';
+    return '<div class="msg '+(me?'me':'')+'"><div><div class="meta">'+
+      '<b>'+esc(me?'你':(f.name||name))+'</b> '+tag+
+      '<span class="muted">'+ht(m.ts)+(m.by?(' · 火种 '+esc(m.by)):'')+'</span></div>'+
+      '<div class="b">'+esc(m.text)+'</div></div></div>';
+  }).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
+  const box=document.getElementById('fmsgs');box.scrollTop=box.scrollHeight;
+  // 他的朋友圈（只读）
+  const ms=d.moments||[];
+  document.getElementById('fmoments').innerHTML=ms.length?ms.map(function(p){
+    const cm=(p.comments||[]).map(function(c){
+      return '<div class="cmt"><b>'+esc(c.who)+'</b>：'+esc(c.text)+
+        (c.reply?'<div class="reply">↳ '+esc(c.reply)+'</div>':'')+'</div>'}).join('');
+    return '<div class="card" style="background:var(--card2)">'+
+      '<div class="row"><b>'+esc(p.author)+'</b><span class="muted">'+ht(p.ts)+'</span>'+
+      '<span class="grow"></span><span class="pill">'+esc(p.why||'自己想发的')+'</span></div>'+
+      '<div class="mtext">'+esc(p.text)+'</div>'+
+      '<div class="likebar"><span style="cursor:pointer" data-likeid="'+p.id+'">❤️ '+
+      (p.likes||[]).length+'</span><span>💬 '+(p.comments||[]).length+'</span></div>'+
+      (cm||'')+
+      '<div class="row" style="margin-top:8px"><input class="grow" id="fc_'+p.id+'" placeholder="评一句…"/>'+
+      '<button class="sm" data-cmtid="'+p.id+'">评论</button></div></div>';
+  }).join(''):'<div class="muted">他还没发过动态。**他自己会发**，不用你催。</div>';
+  document.getElementById('fmoments').querySelectorAll('[data-likeid]').forEach(function(el){
+    el.onclick=async function(){await P('/api/moments/like',{id:el.dataset.likeid,who:'你'});openFriend(FCUR)}});
+  document.getElementById('fmoments').querySelectorAll('[data-cmtid]').forEach(function(b){
+    b.onclick=async function(){
+      const el=document.getElementById('fc_'+b.dataset.cmtid);const t=(el.value||'').trim();if(!t)return;
+      const r=await P('/api/moments/comment',{id:b.dataset.cmtid,text:t,who:'你'});
+      const rp=(r.reply||{});
+      fToast(document.getElementById('fmsg'), rp.replied?('他回了：'+(rp.text||'')):('评论发出了。他这次没回 —— '+(rp.why||'')),true);
+      openFriend(FCUR)}});
+  // 定义角色
+  document.getElementById('dName').value=f.name||name;
+  document.getElementById('dRel').value=f.relation||'';
+  document.getElementById('dModel').value=f.model||'';
+  document.getElementById('dPersona').value=f.persona||'';
+}
+document.getElementById('fsay').addEventListener('keydown',function(e){
+  if(e.key==='Enter'){e.preventDefault();fSay()}});
+document.getElementById('btnFSay').onclick=fSay;
+async function fSay(){
+  const el=document.getElementById('fsay');const t=(el.value||'').trim();if(!t||!FCUR)return;
+  el.value='';fToast(document.getElementById('fmsg'),'他在想怎么回…',true);
+  const d=await P('/api/friends/'+encodeURIComponent(FCUR)+'/say',{text:t});
+  if(!d.ok){fToast(document.getElementById('fmsg'),d.error||'发送失败');return}
+  if(!d.reply)fToast(document.getElementById('fmsg'),'他这次没回：'+((d.why)||''),true);
+  else fToast(document.getElementById('fmsg'),'他回了',true);
+  openFriend(FCUR);
+}
+document.getElementById('btnNewFriend').onclick=function(){
+  showFView('set');
+  document.getElementById('dName').value='';
+  document.getElementById('dRel').value='';
+  document.getElementById('dModel').value='';
+  document.getElementById('dPersona').value='';
+  fToast(document.getElementById('dMsg'),'填好下面几项，点「保存这个好友」',true);
+};
+document.getElementById('btnSaveFriend').onclick=async function(){
+  const nm=(document.getElementById('dName').value||'').trim();
+  if(!nm){fToast(document.getElementById('dMsg'),'先给他起个名字');return}
+  const d=await P('/api/personas',{name:nm,
+    persona:document.getElementById('dPersona').value,
+    relation:document.getElementById('dRel').value,
+    model:document.getElementById('dModel').value});
+  fToast(document.getElementById('dMsg'),d.ok?'已保存，他现在是你的好友了':(d.error||'失败'),!!d.ok);
+  if(d.ok){FCUR=nm;await loadFriends();openFriend(nm);showFView('chat')}
+};
+document.getElementById('btnFAvatar').onclick=function(){document.getElementById('dAvatarFile').click()};
+document.getElementById('dAvatarFile').onchange=function(){
+  const f=this.files&&this.files[0];if(!f)return;
+  const nm=(document.getElementById('dName').value||FCUR||'').trim();
+  if(!nm){fToast(document.getElementById('dMsg'),'先在名字里填好他的名字');return}
+  const rd=new FileReader();
+  rd.onload=async function(){
+    const d=await P('/api/personas/avatar',{name:nm,data:rd.result});
+    fToast(document.getElementById('dMsg'),d.ok?'头像已换':(d.error||'失败'),!!d.ok);
+    if(d.ok){await loadFriends();openFriend(nm)}};
+  rd.readAsDataURL(f);this.value='';};
+loadFriends();setInterval(function(){loadFriends();if(FCUR&&FCUR&&
+  document.getElementById('fv-chat').style.display!=='none'){}},6000);
+"""
+    return body, js
+
+
 # ==================== 统一社交页：朋友圈 + 群组同页切换 ====================
 def social_hub_html(tab="moments", embed=False):
     """一个页面装下社交模块：顶部页签切换，样式统一（不再一个模块一页）。"""
-    _mb, _mj = _moments_inner()
+    _fb, _fj = _friends_inner()
     _gb, _gj = _groups_inner()
     body = """
 <div class="row" style="align-items:center">
   <h1 style="margin:0">🌤️ 社交</h1>
   <div class="tabs" style="margin-left:14px">
-    <button class="tab" data-tab="moments">朋友圈</button>
-    <button class="tab" data-tab="groups">模型群组</button>
+    <button class="tab" data-tab="friends">好友</button>
+    <button class="tab" data-tab="groups">群组</button>
   </div>
   <span class="grow"></span>
   <a href="/">← 回到单聊</a>
 </div>
-<div class="sub">它自己发动态、自己也建群聊；你随时能点赞、评论、插话、传文件。</div>
+<div class="sub">定义一个人，他就是你的好友：有自己的朋友圈、会跟你聊天，也会**自己找你**说话。</div>
 
-<div id="tab-moments" class="tabpane">__MOMENTS__</div>
+<div id="tab-friends" class="tabpane">__FRIENDS__</div>
 <div id="tab-groups" class="tabpane">__GROUPS__</div>
-""".replace("__MOMENTS__", _mb).replace("__GROUPS__", _gb)
+""".replace("__FRIENDS__", _fb).replace("__GROUPS__", _gb)
 
-    js = _mj + "\n" + _gj + """
+    js = _fj + "\n" + _gj + """
 function showTab(t){
   document.querySelectorAll('.tabpane').forEach(function(el){
     el.style.display=(el.id==='tab-'+t)?'block':'none'});
@@ -624,6 +813,7 @@ document.querySelectorAll('.tab').forEach(function(b){
   b.onclick=function(){showTab(b.dataset.tab)}});
 (function(){
   const q=new URLSearchParams(location.search).get('tab')||'%s';
+  if(q==='moments'){try{showTab('friends')}catch(e){}}
   showTab(q);
   const gid=new URLSearchParams(location.search).get('gid');
   if(gid&&typeof openGroup==='function'){setTimeout(function(){openGroup(gid)},300)}

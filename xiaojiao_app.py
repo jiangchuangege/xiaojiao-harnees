@@ -3044,6 +3044,56 @@ def _group_act(member, messages):
             pass
 
 
+_FRIENDS_STARTED = {"on": False}
+
+
+def _friends():
+    """好友模块：注入火种与换火种能力（幂等）。"""
+    from core import friends as FR
+    FR.install(llm_chat, alt_fn=_fuse_alt_llm, model_name=str(MODEL_NAME or ""))
+    try:
+        _cfg = (CONTROL or {}).get("friends") or {}
+        if _cfg:
+            FR.configure(**_cfg)
+    except Exception as _e:      # noqa: silent-ok
+        LOG.debug("好友节奏配置读取失败（用默认）：%s", _e)
+    return FR
+
+
+def _friends_loop():
+    """后台：每隔一会儿看看有没有好友"想说话"，想说就让他自己发。"""
+    while True:
+        try:
+            FR = _friends()
+            _wait = int(float(FR._cfg_num("check_interval_s", 180)))
+            if FR._cfg_num("enabled", 1):
+                _sent = FR.proactive_tick() or []
+                for x in _sent:
+                    LOG.info("好友主动找上门：%s → %s", x.get("friend"), str(x.get("text"))[:50])
+        except Exception as e:      # noqa: silent-ok — 调度挂了绝不影响对话
+            LOG.debug("好友调度异常（忽略）：%s", e)
+            _wait = 300
+        try:
+            time.sleep(max(60, int(_wait)))
+        except Exception:      # noqa: silent-ok
+            return
+
+
+def start_friends_scheduler():
+    """启动好友主动说话的调度（幂等）。"""
+    if _FRIENDS_STARTED.get("on"):
+        return False
+    try:
+        import threading as _th5
+        _th5.Thread(target=_friends_loop, daemon=True, name="xj-friends").start()
+        _FRIENDS_STARTED["on"] = True
+        LOG.info("好友调度已起：他们会自己找你说话（不是等你先发）")
+        return True
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("好友调度起不来：%s", e)
+        return False
+
+
 _GROUP_RESUMED = False
 
 
@@ -16159,14 +16209,14 @@ def social_hub_page():
     except Exception as _e:      # noqa: silent-ok
         LOG.debug("社交页注入火种失败（忽略）：%s", _e)
     _embed = str(request.args.get("embed") or "") in ("1", "true", "yes")
-    return Response(_SP.social_hub_html(request.args.get("tab") or "moments", embed=_embed),
+    return Response(_SP.social_hub_html(request.args.get("tab") or "friends", embed=_embed),
                     mimetype="text/html")
 
 
 @app.route("/moments")
 def moments_page():
     """旧链接：统一到 /social?tab=moments。"""
-    return redirect("/social?tab=moments")
+    return redirect("/social?tab=friends")
 
 
 @app.route("/aigroups")
@@ -16310,6 +16360,59 @@ def api_persona_avatar():
         return jsonify({"ok": True, "avatar": fn})
     except Exception as e:      # noqa: silent-ok
         return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:120])}), 500
+
+
+@app.route("/api/friends")
+def api_friends():
+    """好友列表（每个人设就是一个好友）。"""
+    try:
+        FR = _friends()
+        return jsonify({"ok": True, "friends": FR.list_friends(), "stats": FR.stats()})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/friends/<name>")
+def api_friend(name):
+    """好友详情：资料 + 最近聊天 + 他自己的朋友圈。"""
+    try:
+        FR = _friends()
+        from core import personas as PS, moments as MO
+        p = PS.get(name)
+        return jsonify({"ok": True, "friend": p, "history": FR.history(name, limit=120),
+                        "moments": MO.list_posts(limit=20, author=name)})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/friends/<name>/say", methods=["POST"])
+def api_friend_say(name):
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        FR = _friends()
+        return jsonify(FR.say(name, str(data.get("text") or "")))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/friends/<name>/read", methods=["POST"])
+def api_friend_read(name):
+    try:
+        FR = _friends()
+        return jsonify(FR.mark_read(name))
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:160]}), 500
+
+
+@app.route("/api/friends/<name>/proactive", methods=["POST"])
+def api_friend_proactive(name):
+    """让他现在就想一句发给你（force，调试/演示用；平时由调度自己决定）。"""
+    try:
+        FR = _friends()
+        msg, why = FR.proactive(name, force=True)
+        return jsonify({"ok": bool(msg), "message": msg, "why": why})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
 
 
 @app.route("/api/personas", methods=["GET", "POST"])
@@ -20494,7 +20597,7 @@ HTML = r"""<!DOCTYPE html>
   <div class="hdr-right">
     <button class="icon-btn" id="toolsBtn" onclick="toggleTools()">🛠️ 工具</button>
     <button class="icon-btn" onclick="openBrain()">🧠 小脑</button>
-    <button class="icon-btn" onclick="openSocial('moments')" title="朋友圈 + 群聊（同一屏）">🌤️ 社交</button>
+    <button class="icon-btn" onclick="openSocial('friends')" title="好友 + 群组（同一屏）">🌤️ 社交</button>
     <button class="icon-btn" onclick="openSettings()">⚙️ 设置</button>
     <button class="icon-btn" onclick="copyPage()">📄 Session log ⚡</button>
   </div>
@@ -20524,7 +20627,7 @@ HTML = r"""<!DOCTYPE html>
   <div style="height:44px;display:flex;align-items:center;gap:10px;padding:0 14px;
               background:#0e1118;border-bottom:1px solid #222a38">
     <b style="color:#e6e9f0">🌤️ 社交</b>
-    <span style="color:#8b93a5;font-size:12px">朋友圈 + 模型群组（同一屏，页签切换）</span>
+    <span style="color:#8b93a5;font-size:12px">好友 + 群组（同一屏，页签切换）</span>
     <span style="flex:1"></span>
     <button onclick="closeSocial()" style="background:#222a3a;color:#e6e9f0;border:0;
       border-radius:8px;padding:6px 12px;cursor:pointer">关闭</button>
@@ -20648,7 +20751,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')closeSocial(
       <div class="setnav-item" data-sec="model" onclick="setSec(this,'model')">🎛️ 模型</div>
       <div class="setnav-item" data-sec="plugins" onclick="setSec(this,'plugins')">🧩 插件</div>
       <div class="setnav-item" data-sec="presets" onclick="setSec(this,'presets')">🎭 Agent 预设</div>
-      <div class="setnav-item" onclick="closeSettings();openSocial('moments')">🌤️ 朋友圈</div>
+      <div class="setnav-item" onclick="closeSettings();openSocial('friends')">💬 好友</div>
       <div class="setnav-item" onclick="closeSettings();openSocial('groups')">👥 模型群组</div>
     </div>
     <div class="setbody">
@@ -21619,3 +21722,8 @@ try:
     start_moment_scheduler()
 except Exception as _e:      # noqa: silent-ok — 起不来也照常服务
     LOG.debug("朋友圈调度启动失败（忽略）：%s", _e)
+
+try:
+    start_friends_scheduler()
+except Exception as _fe:      # noqa: silent-ok — 起不来也照常服务
+    LOG.debug("好友调度启动失败（忽略）：%s", _fe)
