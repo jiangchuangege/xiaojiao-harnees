@@ -85,9 +85,12 @@ text-align:left;min-width:2em}
 html,body{height:100%;overflow:hidden}
 .wrap{height:100%;display:flex;flex-direction:column;overflow:hidden}
 /* 页签面板承接剩余高度，超出的只在内部滚，绝不把整页顶高 */
+/* 【必须是竖排 flex】面板里除了聊天区还有标题行；以前用 height:100% 让 .im 撑满，
+   再加上标题就比面板高出一截，多出来的正好把输入框顶到裁切线外（群页实测差 86px）。 */
 .tabpane{flex:1 1 auto;min-height:0;overflow:hidden}
+#tab-friends,#tab-groups{display:flex;flex-direction:column}
 .im{display:grid;grid-template-columns:288px 1fr;gap:12px;align-items:stretch;
-flex:1 1 auto;height:100%;min-height:0;max-width:1080px;margin:0 auto;width:100%}
+flex:1 1 auto;min-height:0;max-width:1080px;margin:0 auto;width:100%}
 @media(max-width:860px){.im{grid-template-columns:1fr;height:auto}}
 .rail{background:var(--card);border:1px solid var(--line);border-radius:16px;
 display:flex;flex-direction:column;overflow:hidden;min-height:0}
@@ -1047,8 +1050,10 @@ def social_hub_html(tab="moments", embed=False, dbg=False):
 
     js = _fj + "\n" + _gj + """
 function showTab(t){
+  // 【用 flex 不用 block】面板里是"标题 + 聊天区"竖排，block 会让聊天区按内容长高，
+  // 长高的那部分会把底部输入框顶出可视区（群页实测丢过输入框）。
   document.querySelectorAll('.tabpane').forEach(function(el){
-    el.style.display=(el.id==='tab-'+t)?'block':'none'});
+    el.style.display=(el.id==='tab-'+t)?'flex':'none'});
   document.querySelectorAll('.tab').forEach(function(b){
     b.classList.toggle('on',b.dataset.tab===t)});
   // 保留 f / gid，不要一换页签就把「选中了谁」抹掉
@@ -1104,15 +1109,37 @@ setTimeout(function(){
     'viewport '+W+'x'+H+'\\n'+(out.length?out.join('\\n'):'没有超过 35% 的元素')+'\\n'+
     (function(){
       var r=[];
-      ['fr_pane','fr_msgs','fr_foot','fr_say','msgs','pfoot'].forEach(function(id){
+      ['fr_pane','fr_msgs','fr_foot','fr_say','msgs','say','cmsg'].forEach(function(id){
         var e=document.getElementById(id);if(!e)return;
         var b=e.getBoundingClientRect();
         r.push(id+' top='+Math.round(b.top)+' bottom='+Math.round(b.bottom)+
           ' '+Math.round(b.width)+'x'+Math.round(b.height)+
           (b.bottom>H+1?' 【在屏幕外！】':(b.height<=0?' 【高0，看不见】':'')));
       });
+      // 群聊那几个没有 id，用选择器报（输入框就在 .pfoot 里）
+      ['.pane','#tab-groups .pane','#tab-groups .pane .phead','#tab-groups .pane .pbody',
+       '#tab-groups .pane .filebar','#tab-groups .pane .pfoot'].forEach(function(sel){
+        var e=document.querySelector(sel);if(!e)return;
+        var b=e.getBoundingClientRect();
+        r.push(sel+' top='+Math.round(b.top)+' bottom='+Math.round(b.bottom)+
+          ' '+Math.round(b.width)+'x'+Math.round(b.height)+
+          ' 内容高='+e.scrollHeight+' 可见高='+e.clientHeight+
+          (b.bottom>H+1?' 【在屏幕外！】':(b.height<=0?' 【高0，看不见】':'')));
+      });
       var de=document.scrollingElement;
       r.push('页面滚动高度='+de.scrollHeight+' 视口高度='+H+(de.scrollHeight>H+1?' 【整页在滚，不该发生】':''));
+      // 【到底是谁盖住了它】输入框中心那个点上，浏览器说最上层是谁？
+      var sy=document.getElementById('say');
+      if(sy){
+        var b=sy.getBoundingClientRect();
+        var cx=Math.round(b.left+b.width/2), cy=Math.round(b.top+b.height/2);
+        var top=document.elementFromPoint(cx,cy);
+        r.push('输入框中心('+cx+','+cy+') 最上层是 '+(top?(top.tagName+(top.id?('#'+top.id):'')+
+          (top.className?('.'+String(top.className).split(' ').join('.')):'')):'null'));
+        var cs=getComputedStyle(sy);
+        r.push('输入框 display='+cs.display+' visibility='+cs.visibility+' opacity='+cs.opacity+
+               ' zIndex='+cs.zIndex);
+      }
       return r.join('\\n');
     })();
 },1500);
