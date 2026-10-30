@@ -125,12 +125,6 @@ border-radius:10px;display:block}
 .msg>span{flex:0 0 auto!important}
 /* 【用 !important 钉死头像尺寸】—— 群里那张巨图就是"容器尺寸被覆盖"造成的，
    普通优先级挡不住，这里一律钉死：头像格最大 46px，头像图 100% 撑满格子。 */
-/* 【群聊区里只允许头像图片】其它任何 img（不管哪来的）一律隐藏 —— 消息是纯文本，
-   真需要看图就看群文件。这样那张说不清来路的巨图一定消失。 */
-#msgs img{display:none!important}
-#msgs .msg>span img{display:block!important;width:34px!important;height:34px!important;
-object-fit:contain!important}
-#msgs{overflow-x:hidden!important}
 .msg>span{width:34px!important;max-width:34px!important;height:34px!important;
 max-height:34px!important;overflow:hidden!important}
 .msg>span img{width:34px!important;max-width:34px!important;height:34px!important;
@@ -144,8 +138,12 @@ display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff
 .favatar img{width:100%;height:100%;object-fit:contain;display:block;background:#0f141d}
 .fview{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:hidden}
 font-size:12px;color:#c9d4ec;text-decoration:none}
-.drawer{display:none;margin:12px auto 0;max-width:1080px;background:var(--card);
-border:1px solid var(--line);border-radius:16px;padding:14px}
+/* 【抽屉必须是浮层】原来它排在 .im 之后，而页面为了锁高度设了 overflow:hidden，
+   抽屉被排到视口外、页面又不能滚 → 「退出群聊」永远点不到。改成 fixed 居中浮层。 */
+.drawer{display:none;position:fixed;left:50%;top:60px;transform:translateX(-50%);
+width:min(720px,94vw);max-height:calc(100vh - 120px);overflow:auto;z-index:60;
+background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;
+box-shadow:0 24px 60px rgba(0,0,0,.55)}
 .drawer.on{display:block}
 .mrow{display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px dashed #222a38}
 .mrow:last-child{border-bottom:0}
@@ -235,15 +233,18 @@ function renderKeepScroll(box, html){
 }
 // 【同一个人的头像到处一样】有上传的头像就显示图片，没有就退回首字色块。
 //   好友列表 / 一对一聊天 / 群聊 / 朋友圈 都用这一个函数，不会再一会字母一会照片。
+// 【头像不用 <img>】固定尺寸格子 + background-image：
+//   <img> 会被任何一条宽松规则放大成巨图（我们被这个坑了三轮），background 不会。
 function avImg(name,color,size){
   const px=size||38;const c=color||'#7c6cf5';const nm=String(name||'友');
-  // 方形圆角 + contain：**整张照片都显示**，不裁不切；只有没图时才显示首字
-  const st='width:'+px+'px;height:'+px+'px;border-radius:10px;overflow:hidden;background:'+c+
-    ';display:inline-flex;align-items:center;justify-content:center;font-size:'+Math.round(px*0.42)+
-    'px;color:#fff;flex:0 0 auto;vertical-align:middle';
-  return '<span style="'+st+'"><img src="/personas/avatar/'+encodeURIComponent(nm)+'?t='+Date.now()+
-    '" style="width:100%;height:100%;object-fit:contain;display:block;background:#0f141d" '+
-    'onerror="this.parentNode.textContent=&quot;'+esc(nm.slice(0,1))+'&quot;"/></span>';
+  const st='width:'+px+'px;height:'+px+'px;min-width:'+px+'px;max-width:'+px+'px;'+
+    'min-height:'+px+'px;max-height:'+px+'px;border-radius:10px;overflow:hidden;'+
+    'background-color:'+c+';background-image:url(&quot;/personas/avatar/'+
+    encodeURIComponent(nm)+'?t='+Date.now()+'&quot;);background-size:contain;'+
+    'background-position:center;background-repeat:no-repeat;'+
+    'display:inline-flex;align-items:center;justify-content:center;font-size:'+
+    Math.round(px*0.42)+'px;color:#fff;flex:0 0 auto;vertical-align:middle';
+  return '<span style="'+st+'">'+esc(nm.slice(0,1))+'</span>';
 }
 function shortName(n){n=String(n||'');return n.length>14?(n.slice(0,12)+'\u2026'):n}
 """
@@ -528,8 +529,17 @@ async function loadChat(){
   document.getElementById('pSub').textContent=(g.topic||'无主题')+' ｜ '+(g.members||[]).length+' 人'+
     ((g.files||[]).length?(' ｜ 文件 '+(g.files||[]).length):'');
   const pav=document.getElementById('pav');
-  pav.innerHTML=g.avatar?('<img src="/aigroups/avatar/'+CUR+'?t='+Date.now()+
-    '" style="width:44px;height:44px;object-fit:contain;display:block"/>'):esc((g.name||'焦').slice(0,1));
+  if(g.avatar){
+    pav.innerHTML=esc((g.name||'焦').slice(0,1));
+    pav.style.backgroundImage='url(/aigroups/avatar/'+CUR+'?t='+Date.now()+')';
+    pav.style.backgroundSize='contain';
+    pav.style.backgroundPosition='center';
+    pav.style.backgroundRepeat='no-repeat';
+    pav.style.backgroundColor='#0f141d';
+  }else{
+    pav.innerHTML=esc((g.name||'焦').slice(0,1));
+    pav.style.backgroundImage='';
+  }
   const M=g.members||[];const cmap={};const mm={};
   M.forEach(function(x){cmap[x.name]=x.color;mm[x.name]=x});
   const msgs=g.messages||[];
@@ -854,25 +864,7 @@ document.getElementById('fr_list').addEventListener('click',function(ev){
 async function frOpen(name){
   FRCUR=name;frShow('chat');await frLoadList();
 
-// 【临时探针】把"超过 100px 的图片"到底是什么元素报回服务端（查完就删）
-function imgProbe(){
-  try{
-    const box=document.getElementById('msgs');if(!box)return;
-    const bad=[];
-    box.querySelectorAll('img').forEach(function(im){
-      const w=im.getBoundingClientRect().width||0;
-      if(w>100){
-        bad.push({w:Math.round(w),src:String(im.src||'').slice(0,120),
-                  parent:String(im.parentElement&&im.parentElement.outerHTML||'').slice(0,200)});
-      }
-    });
-    if(bad.length){
-      fetch('/api/_debug/imgprobe',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({page:'groups',items:bad})});
-    }
-  }catch(e){}
-}
-setInterval(imgProbe,4000);
+
 
   try{await P('/api/friends/'+encodeURIComponent(name)+'/read',{})}catch(e){}
   const d=await J('/api/friends/'+encodeURIComponent(name));
@@ -883,9 +875,13 @@ setInterval(imgProbe,4000);
   if(f.relation){rel.textContent=f.relation;rel.style.display=''}else{rel.style.display='none'}
   document.getElementById('fr_sub').textContent=(f.persona||'还没写性格').slice(0,40)+
     ' ｜ 动态 '+((d.moments||[]).length)+' 条';
-  document.getElementById('fr_avatar').innerHTML=f.avatar?
-    '<img src="/personas/avatar/'+encodeURIComponent(name)+'?t='+Date.now()+
-    '" style="width:100%;height:100%;object-fit:cover"/>':esc((f.name||'友').slice(0,1));
+  const fav=document.getElementById('fr_avatar');
+  fav.innerHTML=esc((f.name||'友').slice(0,1));
+  fav.style.backgroundImage=f.avatar?('url(/personas/avatar/'+encodeURIComponent(name)+
+    '?t='+Date.now()+')'):'';
+  fav.style.backgroundSize='contain';
+  fav.style.backgroundPosition='center';
+  fav.style.backgroundRepeat='no-repeat';
   const hs=d.history||[];
   FRHIST=hs;
   const frOneHtml=function(m){
