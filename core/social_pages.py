@@ -592,7 +592,7 @@ def groups_html():
 
 
 # ==================== 统一社交页：朋友圈 + 群组同页切换 ====================
-def social_hub_html(tab="moments"):
+def social_hub_html(tab="moments", embed=False):
     """一个页面装下社交模块：顶部页签切换，样式统一（不再一个模块一页）。"""
     _mb, _mj = _moments_inner()
     _gb, _gj = _groups_inner()
@@ -629,7 +629,12 @@ document.querySelectorAll('.tab').forEach(function(b){
   if(gid&&typeof openGroup==='function'){setTimeout(function(){openGroup(gid)},300)}
 })();
 """ % (tab or "moments")
-    return _page("社交", body, js)
+    page = _page("社交", body, js)
+    if embed:
+        # 被主界面用 iframe 嵌进来时：去掉外层留白，内容铺满容器（尺寸就不会"不对"了）
+        page = page.replace("<style>", "<style>\n.wrap{max-width:none;padding:8px 10px 12px}\n"
+                            ".im{height:calc(100vh - 150px)}\n", 1)
+    return page
 
 
 # ==================== 兼容旧链接：/aigroups/<gid> 直接跳到新页面 ====================

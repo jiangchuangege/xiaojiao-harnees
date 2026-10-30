@@ -16158,7 +16158,8 @@ def social_hub_page():
         _social()
     except Exception as _e:      # noqa: silent-ok
         LOG.debug("社交页注入火种失败（忽略）：%s", _e)
-    return Response(_SP.social_hub_html(request.args.get("tab") or "moments"),
+    _embed = str(request.args.get("embed") or "") in ("1", "true", "yes")
+    return Response(_SP.social_hub_html(request.args.get("tab") or "moments", embed=_embed),
                     mimetype="text/html")
 
 
@@ -20493,6 +20494,7 @@ HTML = r"""<!DOCTYPE html>
   <div class="hdr-right">
     <button class="icon-btn" id="toolsBtn" onclick="toggleTools()">🛠️ 工具</button>
     <button class="icon-btn" onclick="openBrain()">🧠 小脑</button>
+    <button class="icon-btn" onclick="openSocial('moments')" title="朋友圈 + 群聊（同一屏）">🌤️ 社交</button>
     <button class="icon-btn" onclick="openSettings()">⚙️ 设置</button>
     <button class="icon-btn" onclick="copyPage()">📄 Session log ⚡</button>
   </div>
@@ -20517,6 +20519,39 @@ HTML = r"""<!DOCTYPE html>
 </footer>
   </div>
 </div>
+
+<div id="socialOv" style="display:none;position:fixed;inset:0;z-index:9998;background:#0b0e14">
+  <div style="height:44px;display:flex;align-items:center;gap:10px;padding:0 14px;
+              background:#0e1118;border-bottom:1px solid #222a38">
+    <b style="color:#e6e9f0">🌤️ 社交</b>
+    <span style="color:#8b93a5;font-size:12px">朋友圈 + 模型群组（同一屏，页签切换）</span>
+    <span style="flex:1"></span>
+    <button onclick="closeSocial()" style="background:#222a3a;color:#e6e9f0;border:0;
+      border-radius:8px;padding:6px 12px;cursor:pointer">关闭</button>
+  </div>
+  <div style="position:absolute;top:44px;left:0;right:0;bottom:0">
+    <iframe id="socialFrame" src="about:blank" title="社交"
+      style="width:100%;height:100%;border:0;background:#0b0e14;display:block"></iframe>
+  </div>
+</div>
+<script>
+function openSocial(tab){
+  var ov=document.getElementById('socialOv');
+  var f=document.getElementById('socialFrame');
+  f.src='/social?embed=1&tab='+(tab||'moments');
+  ov.style.display='block';
+  document.body.style.overflow='hidden';
+}
+function closeSocial(){
+  var ov=document.getElementById('socialOv');
+  if(!ov)return;
+  ov.style.display='none';
+  var f=document.getElementById('socialFrame');
+  if(f)f.src='about:blank';
+  document.body.style.overflow='';
+}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeSocial();});
+</script>
 
 <div id="modalBg" class="modal-bg" style="display:none">
   <div class="modal">
@@ -20613,8 +20648,8 @@ HTML = r"""<!DOCTYPE html>
       <div class="setnav-item" data-sec="model" onclick="setSec(this,'model')">🎛️ 模型</div>
       <div class="setnav-item" data-sec="plugins" onclick="setSec(this,'plugins')">🧩 插件</div>
       <div class="setnav-item" data-sec="presets" onclick="setSec(this,'presets')">🎭 Agent 预设</div>
-      <a class="setnav-item" href="/moments" target="_blank" style="display:flex;text-decoration:none">🌤️ 朋友圈</a>
-      <a class="setnav-item" href="/aigroups" target="_blank" style="display:flex;text-decoration:none">👥 模型群组</a>
+      <div class="setnav-item" onclick="closeSettings();openSocial('moments')">🌤️ 朋友圈</div>
+      <div class="setnav-item" onclick="closeSettings();openSocial('groups')">👥 模型群组</div>
     </div>
     <div class="setbody">
       <div class="sec" id="sec-presets">
