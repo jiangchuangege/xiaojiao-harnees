@@ -284,8 +284,12 @@ def groups_html():
 
 <!-- 抽屉：成员 -->
 <div class="drawer" id="d-mem">
-  <div class="row"><b>群成员</b><span class="muted">（可设管理员 / 允许动手 / 移除）</span>
+  <div class="row"><b>群成员</b><span class="muted">（可设管理员 / 允许动手 / 换火种 / 移除）</span>
     <span class="grow"></span><button class="ghost sm" data-close="mem">收起</button></div>
+  <div class="muted" style="margin-top:6px;font-size:12px">
+    这里的「小焦 / 阿码 / 老曲」是**角色**，不是模型：建群时自带的三个人设。
+    没绑火种的用当前默认火种（现在就是 xiaojiao1.0-4B）—— 所以它们同一个脑子、靠不同人设说话。
+    想让某个角色更聪明/更会说，就点下面那排火种，给它单独绑一颗。</div>
   <div id="mlist" style="margin-top:8px"></div>
 </div>
 
@@ -364,13 +368,16 @@ async function loadChat(){
   document.getElementById('msgs').innerHTML=msgs.length?msgs.map(function(x){
     const me=(x.who==='你');
     const adm=(mm[x.who]||{}).admin?' <span class="tag">管理员</span>':'';
-    const meta=ht(x.ts)+(x.sec?(' · '+x.sec+'s'):'')+(x.by?(' · '+esc(x.by)):'');
+    const meta=ht(x.ts)+(x.sec?(' · '+x.sec+'s'):'')+(x.by?(' · 火种 '+esc(x.by)):'');
+    const isDefault=!((mm[x.who]||{}).model);
     const acts=(x.actions&&x.actions.length)?
       ('<div class="muted" style="font-size:11px;margin-top:3px">⚙ 动过 '+x.actions.length+
        ' 下：'+x.actions.map(function(a){return esc(a.tool)}).join('、')+'</div>'):'';
     return '<div class="msg '+(me?'me':'')+'">'+av(x.who,cmap[x.who]||'#5a6478')+
       '<div><div class="meta"><b style="color:'+(cmap[x.who]||'#9aa3b5')+'">'+
-      esc(shortName(x.who))+'</b>'+adm+' <span class="muted">'+meta+'</span></div>'+
+      esc(shortName(x.who))+'</b>'+adm+
+      (isDefault?' <span class="tag">默认角色</span>':'')+
+      ' <span class="muted">'+meta+'</span></div>'+
       '<div class="b">'+esc(x.text)+'</div>'+acts+'</div></div>';
   }).join(''):'<div class="muted">还没有人说话。它们自己一会儿就开口。</div>';
   const box=document.getElementById('msgs');
@@ -385,23 +392,30 @@ async function loadChat(){
       return '<a class="fchip" href="/api/aigroups/'+CUR+'/file/'+f.id+'" target="_blank" '+
         'title="'+esc(f.by||'')+' 上传">📄 '+esc(f.name)+'</a>'}).join('')):
     '<span class="muted" style="font-size:12px">还没有群文件（可以自己传，AI 写出的文件也会出现在这）</span>';
-  // 成员抽屉
+  // 邀请抽屉要先知道有哪些火种（成员行的火种点选也用这一份）
+  const names={};M.forEach(function(x){names[x.name]=1});
+  const lm=await J('/api/aigroups/models');const MODELS=lm.models||[];
+  // 成员抽屉（火种用点选，不打字）
   document.getElementById('mlist').innerHTML=M.map(function(x,i){
     const adm=x.admin;const allow=(x.allow_tools!==false);
-    return '<div class="mrow">'+av(x.name,x.color)+
+    const cur=String(x.model||'');
+    const chips=[''].concat(MODELS).map(function(mv){
+      const on=(mv===cur);
+      const lab=mv?mv:'默认火种';
+      return '<button class="sm '+(on?'':'ghost')+'" data-act="setmodel" data-val="'+esc(x.name)+
+        '" data-model="'+esc(mv)+'">'+(on?'✓ ':'')+esc(lab)+'</button>'}).join('');
+    return '<div class="mrow" style="flex-wrap:wrap">'+av(x.name,x.color)+
       '<div style="flex:1;min-width:0"><b>'+esc(shortName(x.name))+'</b>'+
       (adm?' <span class="tag">管理员</span>':'')+
-      (allow?'':' <span class="tag" style="background:#3a2230;color:#ff9db0">只看不说手</span>')+
-      (x.model?' <span class="muted" style="font-size:12px">'+esc(x.model)+'</span>':'')+'</div>'+
+      (allow?'':' <span class="tag" style="background:#3a2230;color:#ff9db0">不许动手</span>')+
+      '<div class="muted" style="font-size:12px">火种：'+esc(cur||'默认')+'</div></div>'+
       '<button class="ghost sm" data-act="admin" data-val="'+esc(x.name)+'" data-on="'+(adm?'0':'1')+'">'+
       (adm?'取消管理员':'设管理员')+'</button>'+
       '<button class="ghost sm" data-act="perm" data-val="'+esc(x.name)+'" data-on="'+(allow?'0':'1')+'">'+
       (allow?'禁止动手':'允许动手')+'</button>'+
-      '<button class="sm danger" data-act="del" data-val="'+esc(x.name)+'">移除</button></div>';
+      '<button class="sm danger" data-act="del" data-val="'+esc(x.name)+'">移除</button>'+
+      '<div class="row" style="width:100%;margin-top:6px">'+chips+'</div></div>';
   }).join('');
-  // 邀请抽屉：火种/人设按钮
-  const names={};M.forEach(function(x){names[x.name]=1});
-  const lm=await J('/api/aigroups/models');const MODELS=lm.models||[];
   const lp=await J('/api/personas');const PN=((lp.personas||[]).map(function(x){return x.name}));
   document.getElementById('invModels').innerHTML=(MODELS.length?MODELS:['（默认火种）']).map(function(x){
     const on=!!names[x];
@@ -463,7 +477,8 @@ document.getElementById('mlist').addEventListener('click',async function(ev){
   const b=ev.target.closest('button[data-act]');if(!b||!CUR)return;
   const act=b.dataset.act,v=b.dataset.val;
   let d;
-  if(act==='admin')d=await P('/api/aigroups/'+CUR+'/admin',{name:v,on:b.dataset.on==='1'});
+  if(act==='setmodel')d=await P('/api/aigroups/'+CUR+'/member',{member:v,model:b.dataset.model});
+  else if(act==='admin')d=await P('/api/aigroups/'+CUR+'/admin',{name:v,on:b.dataset.on==='1'});
   else if(act==='perm')d=await P('/api/aigroups/'+CUR+'/perm',{name:v,allow_tools:b.dataset.on==='1'});
   else d=await P('/api/aigroups/'+CUR+'/member/remove',{name:v});
   toast(document.getElementById('cmsg'),d.ok?'已处理':(d.error||'失败'),!!d.ok);if(d.ok)loadChat();});
