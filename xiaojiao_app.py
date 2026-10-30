@@ -2841,6 +2841,52 @@ def _weather_file_task(text):
     return city, path, want_print
 
 
+def _wf_natural_fallback(rows, path):
+    """模型不肯说人话时，载体用**自然句子**复述真实结果（不是报告体）。"""
+    weather = ""
+    readback = ""
+    for ln in str(rows or "").splitlines():
+        if "天气工具返回" in ln and not weather:
+            weather = ln.split("是", 1)[-1].strip()
+        if "读回文件内容" in ln and not readback:
+            readback = ln.split("是", 1)[-1].strip()
+    weather = weather or "没拿到天气数据"
+    bits = ["我查到了：%s。" % weather[:120]]
+    if path:
+        bits.append("这句话我已经写进 `%s` 了。" % path)
+    if readback:
+        bits.append("我又读回来核了一遍，里面是：%s。" % readback[:120])
+    return "".join(bits)
+
+
+def _wf_answer(question, rows, path=""):
+    """这一步的结果由**模型**讲给用户听；模型不肯讲，载体用自然句子说。"""
+    _facts = str(rows or "").strip()
+    if not _facts:
+        return ""
+    _sys = ("你刚刚替用户做了三件事：查天气 → 把结果写进文件 → 读回文件内容。"
+            "现在用**你自己的话**告诉他结果：一到三句中文，像人说话那样自然；"
+            "**不要写代码**，不要贴「工具返回」「步骤」这种机器格式，也不要罗列参数。"
+            "可以说清楚：天气是什么、文件写在哪、读回来对不对。")
+    _usr = "你要告诉用户的事实：\n%s\n\n文件路径：%s" % (_facts[:1200], path or "（未提供）")
+    for _try in (1, 2):
+        try:
+            _t = str(llm_chat([{"role": "system", "content": _sys},
+                               {"role": "user", "content": _usr}], temperature=0.5) or "").strip()
+        except Exception as e:      # noqa: silent-ok
+            LOG.debug("天气+文件：模型解说第 %d 次失败：%s", _try, e)
+            _t = ""
+        if _t and "```" not in _t and len(_t) >= 6:
+            LOG.info("天气+文件：模型已用自己的话说清结果")
+            return ("%s\n\n> 这几步是真的跑了：查天气 → 写文件 → 读回（`read_file` 核过）。"
+                    % _t)
+        if _t and "```" in _t:
+            _sys += "\n重要：**只输出中文句子，绝对不要输出任何代码或代码块。**"
+    _txt = _wf_natural_fallback(_facts, path)
+    LOG.info("天气+文件：模型没给成人话 → 载体自己用自然句子说（如实标注）")
+    return ("%s\n\n> （上面这句是载体按实跑结果说的：这一轮模型没把结果讲成人话。）" % _txt)
+
+
 def _run_weather_file_task(text):
     """真做：查天气 → 写文件 → （可选）读回来。返回 (结果文本, 轨迹)。"""
     spec = _weather_file_task(text)
@@ -14331,7 +14377,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
             if _wftxt:
                 tool_trace = list(tool_trace or []) + list(_wftrace or [])
                 _note_tool_path(tool_trace, path="weather_file")
-                answer = _answer_with_facts(user_input, _wftxt, label="载体实跑的结果")
+                answer = _wf_answer(user_input, _wftxt, _CTX.get("_wf_path") or "")
                 LOG.info("天气+文件直通：已执行 %d 步 ｜ 答案开头=%s ｜ 含代码块=%s",
                          len(_wftrace or []), str(answer)[:60].replace("\n", " "),
                          "```" in str(answer))
@@ -15696,10 +15742,9 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     #   但模型仍然用一段 Python 代码当回答。这里按"这一轮真跑过什么"直接换掉它。
     try:
         if answer and _CTX.get("_wf_rows") and ("```" in str(answer)):
-            _real = _facts_prose(_CTX.get("_wf_rows"), "载体实跑的结果")
-            answer = (_real + "\n\n> （以上是载体这一轮**真的**跑出来的：查天气 → 写文件 → 读回。"
-                             "不是代码示例。）")
-            LOG.info("天气+文件：最终回答原本是代码块 → 已换成载体实跑结果")
+            answer = _wf_answer(user_input, _CTX.get("_wf_rows"),
+                                _CTX.get("_wf_path") or "")
+            LOG.info("天气+文件：最终回答原本是代码块 → 已换成模型/载体的人话版本")
     except Exception as _we:      # noqa: silent-ok
         LOG.debug("天气+文件兜底失败（忽略）：%s", _we)
 
