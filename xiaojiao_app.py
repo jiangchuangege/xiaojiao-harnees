@@ -16605,6 +16605,21 @@ def api_friend_proactive(name):
         return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
 
 
+@app.route("/api/_debug/imgprobe", methods=["POST"])
+def api_imgprobe():
+    """临时：接收页面报回来的"巨图是什么元素"，写进 logs/imgprobe.log。"""
+    import io as _io
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        fp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "imgprobe.log")
+        with _io.open(fp, "a", encoding="utf-8") as f:
+            f.write("%s %s\n" % (time.strftime("%H:%M:%S"),
+                                  json.dumps(data, ensure_ascii=False)[:1200]))
+        return jsonify({"ok": True})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:120]}), 500
+
+
 @app.route("/api/personas", methods=["GET", "POST"])
 def api_personas():
     from core import personas as PS

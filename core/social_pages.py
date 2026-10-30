@@ -125,6 +125,12 @@ border-radius:10px;display:block}
 .msg>span{flex:0 0 auto!important}
 /* 【用 !important 钉死头像尺寸】—— 群里那张巨图就是"容器尺寸被覆盖"造成的，
    普通优先级挡不住，这里一律钉死：头像格最大 46px，头像图 100% 撑满格子。 */
+/* 【群聊区里只允许头像图片】其它任何 img（不管哪来的）一律隐藏 —— 消息是纯文本，
+   真需要看图就看群文件。这样那张说不清来路的巨图一定消失。 */
+#msgs img{display:none!important}
+#msgs .msg>span img{display:block!important;width:34px!important;height:34px!important;
+object-fit:contain!important}
+#msgs{overflow-x:hidden!important}
 .msg>span{width:34px!important;max-width:34px!important;height:34px!important;
 max-height:34px!important;overflow:hidden!important}
 .msg>span img{width:34px!important;max-width:34px!important;height:34px!important;
@@ -847,6 +853,27 @@ document.getElementById('fr_list').addEventListener('click',function(ev){
 });
 async function frOpen(name){
   FRCUR=name;frShow('chat');await frLoadList();
+
+// 【临时探针】把"超过 100px 的图片"到底是什么元素报回服务端（查完就删）
+function imgProbe(){
+  try{
+    const box=document.getElementById('msgs');if(!box)return;
+    const bad=[];
+    box.querySelectorAll('img').forEach(function(im){
+      const w=im.getBoundingClientRect().width||0;
+      if(w>100){
+        bad.push({w:Math.round(w),src:String(im.src||'').slice(0,120),
+                  parent:String(im.parentElement&&im.parentElement.outerHTML||'').slice(0,200)});
+      }
+    });
+    if(bad.length){
+      fetch('/api/_debug/imgprobe',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({page:'groups',items:bad})});
+    }
+  }catch(e){}
+}
+setInterval(imgProbe,4000);
+
   try{await P('/api/friends/'+encodeURIComponent(name)+'/read',{})}catch(e){}
   const d=await J('/api/friends/'+encodeURIComponent(name));
   if(!d.ok)return;
