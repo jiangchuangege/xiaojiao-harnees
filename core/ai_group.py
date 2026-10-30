@@ -772,7 +772,7 @@ def _transcript(msgs, who_filter=None):
     return "\n".join(out)
 
 
-def run_round(gid, rounds=1, speakers=None, allow_act=True):
+def run_round(gid, rounds=1, speakers=None, allow_act=True, focus=""):
     """跑若干轮：每轮按成员顺序各说一句。返回这一步新增的消息。"""
     g = get(gid)
     if not g:
@@ -782,7 +782,7 @@ def run_round(gid, rounds=1, speakers=None, allow_act=True):
     if not _got:
         return {"ok": False, "error": "别的群正在发言，等太久先放弃这一轮（稍后自动会再聊）"}
     try:
-        return _run_round_locked(gid, rounds, speakers, allow_act)
+        return _run_round_locked(gid, rounds, speakers, allow_act, focus)
     finally:
         try:
             _ROUND_LOCK.release()
@@ -790,7 +790,7 @@ def run_round(gid, rounds=1, speakers=None, allow_act=True):
             pass
 
 
-def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True):
+def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
     g = get(gid)
     if not g:
         return {"ok": False, "error": "没有这个群"}
@@ -867,9 +867,16 @@ def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True):
                 g.get("topic") or "（没设主题，随意聊）",
                 _transcript(recent) or "（还没有人说话，你起个头）",
                 m.get("name"))
-            if not allow_act:
-                # 回应"用户插话"的快速轮：直接回答用户，不折腾工具
-                usr += "\n（刚才是用户在说话，直接回答用户的问题，一到两句，别东拉西扯。）"
+            if focus:
+                # 【你说话必须被听见】实测：把用户的话追加在长上下文后面，4B 直接忽略，
+                #   还在聊上上句的技术细节。所以把用户原话**放到最前面**，上下文压到 4 条。
+                usr = ("【用户刚在群里说】%s\n\n"
+                       "你必须**回应他这句话**（一到两句，直接答，别继续聊别的话题、别绕开）。\n\n"
+                       "（下面只是最近几句背景，仅供参考）\n%s"
+                       % (str(focus)[:160],
+                          _transcript((recent or [])[-4:]) or "（无）"))
+            elif not allow_act:
+                usr += "\n（刚才有人说话，直接接话，一到两句，别东拉西扯。）"
             _t_say = time.time()
             _actions = []
             _msgs_for_model = [{"role": "system", "content": sys_p},
@@ -1096,8 +1103,8 @@ def user_say(gid, text, who="你", respond=True):
         try:
             import threading as _th
             # 回应走快速通道：两个人、不动工具 —— 用户问一句不该等一分钟
-            _th.Thread(target=run_round, kwargs={"gid": gid, "rounds": 1,
-                                                 "speakers": 2, "allow_act": False},
+            _th.Thread(target=run_round, kwargs={"gid": gid, "rounds": 1, "speakers": 2,
+                                                 "allow_act": False, "focus": text},
                        daemon=True, name="xj-group-reply").start()
             _event("reply_trigger", gid=gid, why="用户说话了 → 起一轮回应")
         except Exception as e:      # noqa: silent-ok — 起不来也不影响消息落盘

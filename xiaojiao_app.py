@@ -2881,7 +2881,16 @@ def _maybe_post_moment(user_input="", answer=""):
         M, _G = _social()
         ctx = "我刚才跟用户聊：%s\n我回的是：%s" % (
             str(user_input or "")[:300], str(answer or "")[:600])
-        post, why = M.auto_try(context=ctx, author="小焦")
+        # 不是小焦一个人的朋友圈：按已有人设轮流发（你说谁是女朋友，她也会发自己的）
+        _who = "小焦"
+        try:
+            from core import personas as _PS2
+            _names = [r.get("name") for r in (_PS2.list_all() or []) if r.get("name")]
+            if _names:
+                _who = _names[int(time.time() // 600) % len(_names)]
+        except Exception:      # noqa: silent-ok
+            _who = "小焦"
+        post, why = M.auto_tick(author=_who)
         if post:
             LOG.info("朋友圈：自己发了一条（%s，%d 字%s）", why, len(post.get("text") or ""),
                      "，带图" if post.get("image") else "")
@@ -11003,9 +11012,23 @@ def _health_hooks():
 
         为什么不是 os._exit / 杀进程：见 `_HEALTH_EMERGENCY` 的注释 ——
         能说话的停服比猝死有用得多。用户看到的是明确的"急诊"提示 + 原因 + 建议。
+
+        【2026-10-30 加冷却】原来这里置 True 之后**全文件没有任何一处复位**，
+        于是"误报一次 = 永久不答"，只能重启进程（日志里 20~30 秒一次的重启就是它）。
+        现在改走 `core/health/emergency_guard`：带 TTL 地停，到点自己站起来重评。
+        真有病会再触发（那就再停），误报则只影响这一小段。
         """
+        _ttl = None
+        try:
+            from core.health import emergency_guard as _EG1
+            _EG1.configure(((CONTROL.get("health") or {}) if isinstance(CONTROL, dict) else {}))
+            _EG1.trip(reason)
+            _ttl = _EG1.status().get("ttl")
+        except Exception as _eg1_e:      # noqa: silent-ok — 守卫挂了也必须按原行为停
+            LOG.debug("急诊守卫接入失败（按原行为停机）：%s", _eg1_e)
         _HEALTH_EMERGENCY.update({"on": True, "reason": str(reason)[:300], "at": time.time()})
-        LOG.error("健康急诊：已停止服务（拒绝继续生成），原因：%s", str(reason)[:200])
+        LOG.error("健康急诊：已停止服务（拒绝继续生成），原因：%s（冷却 %.0fs 后自动重评）",
+                  str(reason)[:200], float(_ttl or 180))
         return True
 
     def _h_snapshot(reason=""):
@@ -11109,6 +11132,26 @@ def _health_gate(user_input, answer, tool_trace, elapsed_ms=None, session_extra=
         sess.update(session_extra or {})
         diag = H["diagnose"].diagnose(symptoms, sess) or {}
         severity = diag.get("severity") or "LIGHT"
+        # ================== 急诊守卫：没证据不许进四级 ==================
+        # 【为什么拦在这里】四级治疗 = **停服**，代价是用户一句话都问不了。
+        #   而实测日志里它反复这样停过：等级写 4（"必须马上停"）、依据写"无明显症状"、
+        #   建议写"继续回答即可" —— 三句话互相打架，却取了最狠的那条去执行。
+        #   停服是这套系统里最重的动作，它必须有**能拿出来的证据**；
+        #   "看起来不太对"不够。所以这里在进入治疗层之前先过一次证据门：
+        #     · 有硬证据（安全类 / 显存+超时 / 连续三轮乱码或拒答）→ 照停，不拦；
+        #     · 没有 → 降级成 MEDIUM，让二级治疗去清上下文重试，服务**继续可用**。
+        #   ⚠️ 降级不是"假装没病"：守卫每一次拦下都落盘（logs/health/emergency_guard.jsonl），
+        #      并且当同一窗口拦满 3 次时会报"监测层判级可能失准"，把矛头指向该修的地方。
+        try:
+            from core.health import emergency_guard as _EG0
+            _EG0.configure(((CONTROL.get("health") or {}) if isinstance(CONTROL, dict) else {}))
+            if str(severity).strip().upper() in ("EMERGENCY", "4"):
+                _do_stop, _stop_why = _EG0.should_stop(diag, symptoms, severity)
+                if not _do_stop:
+                    LOG.warning("急诊守卫：拦下无证据停机 → 降级 MEDIUM（%s）", _stop_why)
+                    severity = "MEDIUM"
+        except Exception as _eg0_e:      # noqa: silent-ok — 守卫失效不影响原有治疗链
+            LOG.debug("急诊守卫（判级前）不可用，按原判执行：%s", _eg0_e)
         sess["cause"] = diag.get("cause")
         LOG.warning("健康监测：检出 %d 个症状 %s → 诊断 %s（判因 %s）：%s",
                     len(symptoms), [getattr(s, "code", "?") for s in symptoms],
@@ -13447,6 +13490,21 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     except Exception:      # noqa: silent-ok — 自主性缺席不影响对话
         pass
     # 健康急诊：已经停机了就不再生成（但要**如实告诉用户**为什么，不装死）
+    if _HEALTH_EMERGENCY.get("on"):
+        # 【2026-10-30 补：停了要能起来】`_HEALTH_EMERGENCY` 原来只被置 True、
+        #   全文件没有复位处 —— 一次误报就永久拒绝回答，只能重启进程。
+        #   这里在**每次进对话前**问一次守卫：冷却期过了就自己站起来重评。
+        #   真有病 → 下一次健康检查会再触发（那就再停，行为不变）；
+        #   误报   → 只影响这一小段，不再需要用户手动救它。
+        try:
+            from core.health import emergency_guard as _EG9
+            _EG9.configure(((CONTROL.get("health") or {}) if isinstance(CONTROL, dict) else {}))
+            if not _EG9.is_on():
+                _was = str(_HEALTH_EMERGENCY.get("reason") or "")[:120]
+                _HEALTH_EMERGENCY.update({"on": False, "reason": "", "at": 0.0})
+                LOG.warning("急诊守卫：冷却到期 → 已自动恢复服务（原急诊原因：%s）", _was)
+        except Exception as _eg9_e:      # noqa: silent-ok — 守卫挂了就维持原判断
+            LOG.debug("急诊守卫（进对话前）不可用：%s", _eg9_e)
     if _HEALTH_EMERGENCY.get("on"):
         return _health_emergency_text(), False, [], False, []
     # 用户回来了 → **立刻醒**（不等它睡够）。规格原话："用户回来了，睡什么睡。"
@@ -16116,7 +16174,9 @@ def api_moments():
     try:
         M, _G = _social()
         from core import personas as PS
-        return jsonify({"ok": True, "posts": M.list_posts(limit=int(request.args.get("limit") or 30)),
+        return jsonify({"ok": True,
+                        "posts": M.list_posts(limit=int(request.args.get("limit") or 30),
+                                              author=str(request.args.get("author") or "")),
                         "stats": M.stats(), "personas": PS.list_all()})
     except Exception as e:      # noqa: silent-ok
         return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
@@ -16133,7 +16193,7 @@ def api_moments_post():
                              author=str(data.get("author") or "小焦"))
             return jsonify({"ok": bool(post), "post": post, "why": "按你给的内容发了"})
         # 走 `auto_tick`：即使是你催他，也让他**按自己的状态**说理由（不会被套成模板）
-        post, why = M.auto_tick(force=True)
+        post, why = M.auto_tick(force=True, author=str(data.get("author") or "小焦"))
         if not post:
             return jsonify({"ok": False, "error": why, "why": why})
         return jsonify({"ok": True, "post": post, "why": why})
@@ -16164,6 +16224,52 @@ def api_moments_comment():
         return jsonify({"ok": False, "error": str(e)[:160]}), 500
 
 
+@app.route("/personas/avatar/<name>")
+def persona_avatar(name):
+    """某个 AI 的头像（没有就 404，页面退回首字色块）。"""
+    try:
+        from core import personas as PS
+        fp = PS.avatar_path(name)
+        if not fp or not os.path.isfile(fp):
+            return jsonify({"ok": False, "error": "还没有头像"}), 404
+        return send_file(fp)
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": str(e)[:120]}), 500
+
+
+@app.route("/api/personas/avatar", methods=["POST"])
+def api_persona_avatar():
+    """给某个 AI 上传头像：{"name": "小丽", "data": "data:image/png;base64,..."}"""
+    import base64 as _b64
+    from core import personas as PS
+    data = request.get_json(force=True, silent=True) or {}
+    raw = str(data.get("data") or "")
+    name = str(data.get("name") or "小焦")
+    try:
+        if not raw.startswith("data:image/"):
+            return jsonify({"ok": False, "error": "只支持图片"})
+        head, _, b64 = raw.partition(",")
+        ext = "png"
+        for cand in ("png", "jpeg", "jpg", "webp", "gif"):
+            if cand in head:
+                ext = "jpg" if cand == "jpeg" else cand
+                break
+        blob = _b64.b64decode(b64, validate=False)
+        if len(blob) > 4 * 1024 * 1024:
+            return jsonify({"ok": False, "error": "图太大（最多 4MB）"})
+        fn = PS.set_avatar(name, blob, ext)
+        if not fn:
+            return jsonify({"ok": False, "error": "保存失败"})
+        cur = PS.get(name)
+        PS.set_persona(name, cur.get("persona") or "", model=cur.get("model") or "",
+                       enabled=bool(cur.get("enabled", True)),
+                       relation=cur.get("relation") or "", avatar=fn)
+        LOG.info("人设头像：%s → %s（%d 字节）", name, fn, len(blob))
+        return jsonify({"ok": True, "avatar": fn})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:120])}), 500
+
+
 @app.route("/api/personas", methods=["GET", "POST"])
 def api_personas():
     from core import personas as PS
@@ -16173,7 +16279,9 @@ def api_personas():
     try:
         rec = PS.set_persona(str(data.get("name") or "小焦"), str(data.get("persona") or ""),
                              model=str(data.get("model") or ""),
-                             enabled=bool(data.get("enabled", True)))
+                             enabled=bool(data.get("enabled", True)),
+                             relation=(data.get("relation") if "relation" in data else None),
+                             avatar=(data.get("avatar") if "avatar" in data else None))
         return jsonify({"ok": True, "persona": rec})
     except Exception as e:      # noqa: silent-ok
         return jsonify({"ok": False, "error": str(e)[:160]}), 500

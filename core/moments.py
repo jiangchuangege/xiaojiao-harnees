@@ -388,7 +388,7 @@ def motivation(ignore_gap=False):
             "blocked": ""}
 
 
-def auto_tick(force=False):
+def auto_tick(force=False, author="小焦"):
     """载体自己决定这一轮发不发。返回 (post 或 None, 说明)。
 
     门槛：开关 → 每日上限 → 冷却 → `motivation().score` ≥ `_cfg_num("min_score", 0.5)`。
@@ -414,7 +414,8 @@ def auto_tick(force=False):
         return None, "想说的程度 %.2f < %.2f（%s）" % (
             float(mt.get("score") or 0), need, "、".join(mt.get("why") or []) or "没读到什么")
     text, who, img = compose(context=mt.get("material") or "", topic="",
-                             with_image=bool(mt.get("score", 0) > 0.8), author="小焦")
+                             with_image=bool(mt.get("score", 0) > 0.8),
+                             author=(author or "小焦"))
     if not text:
         _event("skip", why="模型没应答，宁可不发也不编")
         return None, "模型这次没应答 → 不发（不编一条假的）"
@@ -422,7 +423,7 @@ def auto_tick(force=False):
     if force:
         _why = ["你催我发一条"] + _why
     post = publish(text, image=img, source=("manual" if force else "self"), topic="",
-                   author="小焦", by=who, why="；".join(_why))
+                   author=(author or "小焦"), by=who, why="；".join(_why))
     return post, ("你催的（%s）" if force else "自己发的（%s）") % "、".join(_why)
 
 

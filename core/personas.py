@@ -25,9 +25,53 @@ _DEFAULT = {
     "name": "小焦",
     "persona": ("我是小焦，住在你电脑里的 AI 助手。说话直接、不装、不糊弄；"
                 "有不确定的就说不确定；会记住你的事，也会有自己的小心思。"),
+    "relation": "",          # 你给它的关系/身份：女朋友、室友、搭档、后宫成员…（你自己定）
+    "avatar": "",            # 头像文件名（logs/personas/avatars/<名字>.<ext>）
     "model": "",
     "enabled": True,
 }
+
+_AVDIR = os.path.join(_ROOT, "logs", "personas", "avatars")
+
+
+def avatar_dir():
+    os.makedirs(_AVDIR, exist_ok=True)
+    return _AVDIR
+
+
+def set_avatar(name, blob, ext="png"):
+    """存这个 AI 的头像（只留一张，旧的删掉）。"""
+    import re as _re
+    safe = _re.sub(r"[^0-9A-Za-z_\-\u4e00-\u9fa5]", "_", str(name or "小焦"))[:40] or "xj"
+    d = avatar_dir()
+    try:
+        for old in os.listdir(d):
+            if old.startswith(safe + "."):
+                try:
+                    os.remove(os.path.join(d, old))
+                except Exception:      # noqa: silent-ok
+                    pass
+        fn = "%s.%s" % (safe, str(ext or "png").lstrip("."))
+        with open(os.path.join(d, fn), "wb") as f:
+            f.write(blob or b"")
+        return fn
+    except Exception as e:      # noqa: silent-ok
+        LOG.debug("存头像失败：%s", e)
+        return ""
+
+
+def avatar_path(name):
+    """找这个 AI 的头像文件（没有返回空串）。"""
+    import re as _re
+    safe = _re.sub(r"[^0-9A-Za-z_\-\u4e00-\u9fa5]", "_", str(name or "小焦"))[:40] or "xj"
+    try:
+        d = avatar_dir()
+        for old in os.listdir(d):
+            if old.startswith(safe + "."):
+                return os.path.join(d, old)
+    except Exception:      # py: silent-ok
+        pass
+    return ""
 
 
 def _load():
@@ -57,7 +101,7 @@ def get(name="小焦"):
     return out
 
 
-def set_persona(name, persona, model="", enabled=True):
+def set_persona(name, persona, model="", enabled=True, relation=None, avatar=None):
     """设置人设。返回保存后的完整记录。"""
     name = str(name or "小焦").strip() or "小焦"
     with _LOCK:
@@ -66,6 +110,10 @@ def set_persona(name, persona, model="", enabled=True):
         cur.update({"name": name, "persona": str(persona or "").strip(),
                     "model": str(model or "").strip(), "enabled": bool(enabled),
                     "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S")})
+        if relation is not None:
+            cur["relation"] = str(relation or "").strip()[:40]
+        if avatar is not None:
+            cur["avatar"] = str(avatar or "").strip()
         d[name] = cur
         _save(d)
     LOG.info("人设已更新：%s（%d 字，模型=%s）", name, len(cur["persona"]), cur["model"] or "默认")

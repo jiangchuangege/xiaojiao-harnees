@@ -149,7 +149,9 @@ def _moments_inner():
 你也可以催它发（右边那两个按钮），但它照样按自己的状态说，不会被套成模板。</div>
 
 <div class="card">
+  <div class="row" id="authorRow" style="margin-bottom:10px"></div>
   <div class="row">
+    <select id="postAs" style="max-width:170px"></select>
     <button id="btnPost">让它发一条</button>
     <button class="ghost" id="btnPostImg">发一条（带图）</button>
     <span class="grow"></span>
@@ -167,13 +169,17 @@ def _moments_inner():
     <input id="pModel" placeholder="指定火种（可空）" style="max-width:190px"/>
   </div>
   <textarea id="pText" placeholder="它的性格、说话方式、在意什么…"></textarea>
+  <div style="margin-top:8px"><input id="pRelation" placeholder="关系/身份（例如：女朋友、室友、搭档…你自己定）"/></div>
   <div class="row" style="margin-top:10px"><button id="btnP">保存人设</button>
+    <button class="ghost sm" id="btnPAvatar">上传这个 AI 的头像</button>
     <span class="muted" id="pmsg"></span></div>
+  <input type="file" id="pAvatarFile" accept="image/*" style="display:none"/>
 </div>
 """
     js = """
 async function load(){
-  const d=await J('/api/moments?limit=30');
+  const _af=window._authorFilter||'全部';
+  const d=await J('/api/moments?limit=30'+((_af&&_af!=='全部')?('&author='+encodeURIComponent(_af)):''));
   if(!d.ok){document.getElementById('list').innerHTML='<div class="card err">'+esc(d.error||'读不到')+'</div>';return}
   const s=d.stats||{};document.getElementById('st').textContent=
     '共 '+(s.posts||0)+' 条 ｜ 赞 '+(s.likes||0)+' ｜ 评论 '+(s.comments||0)+
@@ -185,8 +191,14 @@ async function load(){
     const liked=(p.likes||[]).includes('你');
     const cm=(p.comments||[]).map(c=>'<div class="cmt"><b>'+esc(c.who)+'</b>：'+esc(c.text)+
       (c.reply?'<div class="reply">↳ 它回：'+esc(c.reply)+'</div>':'')+'</div>').join('');
-    return '<div class="card mpost">'+av(p.author)+'<div class="body">'+
-      '<div class="row"><span class="mname">'+esc(p.author)+'</span>'+
+    const P=p.author||'小焦';
+    const pa=PSN.filter(function(x){return x.name===P})[0]||{};
+    const avt='<span class="av" style="background:'+(pa.color||'#7c6cf5')+';overflow:hidden">'+
+      (pa.avatar?'<img src="/personas/avatar/'+encodeURIComponent(P)+'?t='+Date.now()+
+        '" style="width:100%;height:100%;object-fit:cover"/>':esc(P.slice(0,1)))+'</span>';
+    return '<div class="card mpost">'+avt+'<div class="body">'+
+      '<div class="row"><span class="mname">'+esc(P)+'</span>'+
+      (pa.relation?'<span class="tag">'+esc(pa.relation)+'</span>':'')+
       '<span class="muted">'+ht(p.ts)+'</span><span class="grow"></span>'+
       '<span class="pill">'+esc(p.source==='self'?'他自己想发的':(p.source==='auto'?'自己发的':'你催他发的'))+'</span></div>'+
       '<div class="mtext">'+esc(p.text)+(p.image?'<img src="/moments/img/'+encodeURIComponent(p.image)+'"/>':'')+'</div>'+
@@ -197,9 +209,23 @@ async function load(){
       '<div class="row" style="margin-top:9px"><input class="grow" id="c_'+p.id+'" placeholder="说点什么…"/>'+
       '<button class="sm" onclick="cmt(\\''+p.id+'\\')">评论</button></div></div></div>'
   }).join('')}
-  const ps=(d.personas||[])[0]||{};
+  // 作者筛选 + 指定发帖人（每个 AI 有自己的动态）
+  const PSN=d.personas||[];
+  const authors=['全部'].concat(PSN.map(function(x){return x.name}));
+  document.getElementById('authorRow').innerHTML=authors.map(function(a){
+    const on=((window._authorFilter||'全部')===a);
+    return '<button class="sm '+(on?'':'ghost')+'" data-author="'+esc(a)+'">'+
+      (on?'✓ ':'')+esc(a)+'</button>'}).join('');
+  document.getElementById('authorRow').querySelectorAll('button[data-author]').forEach(function(b){
+    b.onclick=function(){window._authorFilter=(b.dataset.author==='全部'?'全部':b.dataset.author);load()}});
+  const sel=document.getElementById('postAs');
+  if(sel&&!sel.dataset.done){sel.dataset.done='1';
+    sel.innerHTML=PSN.map(function(x){return '<option value="'+esc(x.name)+'">'+esc(x.name)+
+      (x.relation?('（'+esc(x.relation)+'）'):'')+'</option>'}).join('')}
+  const ps=PSN[0]||{};
   if(ps&&!window._pTouched){document.getElementById('pName').value=ps.name||'小焦';
-    document.getElementById('pModel').value=ps.model||'';document.getElementById('pText').value=ps.persona||''}
+    document.getElementById('pModel').value=ps.model||'';document.getElementById('pText').value=ps.persona||'';
+    document.getElementById('pRelation').value=ps.relation||''}
 }
 async function like(id){const d=await P('/api/moments/like',{id:id});
   if(!d.ok)return toast(document.getElementById('msg'),d.error);load()}
@@ -210,16 +236,29 @@ async function cmt(id){const el=document.getElementById('c_'+id);const t=(el.val
   toast(document.getElementById('msg'), r.replied?('它回了：'+(r.text||'')):
     ('评论发出了。它这次没回 —— '+(r.why||'')),true);load()}
 document.getElementById('btnPost').onclick=()=>post(false);
+document.getElementById('btnPAvatar').onclick=function(){
+  document.getElementById('pAvatarFile').click()};
+document.getElementById('pAvatarFile').onchange=function(){
+  const f=this.files&&this.files[0];if(!f)return;
+  const nm=(document.getElementById('pName').value||'小焦');
+  const rd=new FileReader();
+  rd.onload=async function(){
+    const d=await P('/api/personas/avatar',{name:nm,data:rd.result});
+    toast(document.getElementById('pmsg'),d.ok?'头像已换':(d.error||'失败'),!!d.ok);if(d.ok)load()};
+  rd.readAsDataURL(f);this.value='';};
 document.getElementById('btnPostImg').onclick=()=>post(true);
 async function post(img){const b=document.getElementById('btnPost');b.disabled=true;
   toast(document.getElementById('msg'),'它在想写什么…',true);
-  const d=await P('/api/moments/post',{ask:true,with_image:img});
+  const sel=document.getElementById('postAs');
+  const d=await P('/api/moments/post',{ask:true,with_image:img,
+    author:(sel&&sel.value)||'小焦'});
   b.disabled=false;toast(document.getElementById('msg'),
     d.ok?('已发：'+(d.why||'')):(d.error||'没发成'),!!d.ok);load()}
 document.getElementById('pText').oninput=()=>{window._pTouched=true};
 document.getElementById('btnP').onclick=async()=>{const d=await P('/api/personas',{
   name:document.getElementById('pName').value||'小焦',
   persona:document.getElementById('pText').value,
+  relation:document.getElementById('pRelation').value,
   model:document.getElementById('pModel').value});
   toast(document.getElementById('pmsg'),d.ok?'人设已保存':'保存失败：'+(d.error||''),!!d.ok)};
 load();setInterval(load,20000);
