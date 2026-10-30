@@ -615,7 +615,7 @@ def social_hub_html(tab="moments"):
     js = _mj + "\n" + _gj + """
 function showTab(t){
   document.querySelectorAll('.tabpane').forEach(function(el){
-    el.style.display=(el.id==='tab-'+t)?'':'none'});
+    el.style.display=(el.id==='tab-'+t)?'block':'none'});
   document.querySelectorAll('.tab').forEach(function(b){
     b.classList.toggle('on',b.dataset.tab===t)});
   try{history.replaceState(null,'','/social?tab='+t)}catch(e){}

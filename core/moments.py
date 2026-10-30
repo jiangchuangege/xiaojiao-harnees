@@ -543,6 +543,55 @@ def maybe_reply(pid, cid=None):
     return {"replied": True, "text": txt, "roll": round(roll, 3), "by": who}
 
 
+# ==================== 集中朋友圈：AI 之间互相互动 ====================
+def ai_react(pid, like_prob=0.6, comment_prob=0.35, actors=None):
+    """让**别的 AI**去赞/评这条动态（同一条流，大家都能看到）。
+
+    返回做了哪些动作（谁赞了、谁评了什么），全部落进事件账。
+    """
+    post = get_post(pid)
+    if not post:
+        return []
+    author = str(post.get("author") or "小焦")
+    try:
+        from core import personas as _PS
+        names = [r.get("name") for r in (_PS.list_all() or []) if r.get("name")]
+    except Exception:      # noqa: silent-ok
+        names = ["小焦"]
+    names = [x for x in (actors or names) if x and x != author]
+    if not names:
+        return []
+    random.shuffle(names)
+    done = []
+    for who in names[:2]:
+        # 点赞
+        if random.random() < float(like_prob):
+            likes = list(post.get("likes") or [])
+            if who not in likes:
+                like(pid, who=who)
+                done.append({"who": who, "act": "like"})
+                post = get_post(pid) or post
+        # 评论（模型写一句）
+        if random.random() < float(comment_prob):
+            p = _persona(who)
+            sys_p = ("你在刷朋友圈，看到 %s 发的一条动态，想留一句话。"
+                     "像真人评论那样：短、口语、别客套、别复读原文。只输出评论本身，30 字以内。"
+                     % author)
+            if p.get("persona"):
+                sys_p += "\n你的人物设定：" + str(p.get("persona"))[:200]
+            usr = "%s 的动态：%s" % (author, str(post.get("text"))[:200])
+            txt, _by = _ask([{"role": "system", "content": sys_p},
+                             {"role": "user", "content": usr}], temperature=0.9)
+            if txt:
+                comment(pid, txt.strip().strip("“”\"'"), who=who, auto_reply=False)
+                done.append({"who": who, "act": "comment", "text": txt[:60]})
+    if done:
+        _event("ai_react", id=pid, by_author=author, done=done)
+        LOG.info("集中朋友圈：%s 这条被 %s 互动了", author,
+                 "、".join("%s(%s)" % (d["who"], d["act"]) for d in done))
+    return done
+
+
 def stats():
     d = _load()
     posts = d.get("posts") or []

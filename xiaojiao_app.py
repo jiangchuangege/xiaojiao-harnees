@@ -2849,6 +2849,17 @@ def _moment_scheduler():
                 if _post:
                     _MOMENT_SCHED["posts"] += 1
                     LOG.info("朋友圈·他自己发了一条：%s", _why)
+                # 【集中朋友圈保温】最近 3 条里没人互动过的，让别的 AI 去赞/评一次
+                try:
+                    import core.moments as _MMr
+                    for _p in (_MMr.list_posts(limit=3) or []):
+                        _likes = [x for x in (_p.get("likes") or []) if x != "你"]
+                        _cmts = [c for c in (_p.get("comments") or []) if c.get("who") != "你"]
+                        if not _likes and not _cmts:
+                            _MMr.ai_react(_p.get("id"), like_prob=0.8, comment_prob=0.5)
+                            break
+                except Exception as _re:      # noqa: silent-ok
+                    LOG.debug("朋友圈保温失败：%s", _re)
                 else:
                     LOG.info("朋友圈·这一轮没发：%s", _why)
         except Exception as e:      # noqa: silent-ok — 调度挂了绝不影响对话
@@ -2894,6 +2905,12 @@ def _maybe_post_moment(user_input="", answer=""):
         if post:
             LOG.info("朋友圈：自己发了一条（%s，%d 字%s）", why, len(post.get("text") or ""),
                      "，带图" if post.get("image") else "")
+            try:
+                import threading as _th2
+                _th2.Thread(target=M.ai_react, args=(post.get("id"),), daemon=True,
+                            name="xj-moment-react2").start()
+            except Exception as _e2:      # noqa: silent-ok
+                LOG.debug("朋友圈自动互动触发失败：%s", _e2)
         else:
             LOG.info("朋友圈：这一轮没发（%s）", why)
     except Exception as e:      # noqa: silent-ok — 自动发挂了绝不能影响对话
@@ -16196,7 +16213,31 @@ def api_moments_post():
         post, why = M.auto_tick(force=True, author=str(data.get("author") or "小焦"))
         if not post:
             return jsonify({"ok": False, "error": why, "why": why})
+        # 【集中朋友圈】发完就让别的 AI 来点赞/评论（后台，不挡这次请求）
+        try:
+            import threading as _th
+            _th.Thread(target=M.ai_react, args=(post.get("id"),), daemon=True,
+                       name="xj-moment-react").start()
+        except Exception as _e:      # noqa: silent-ok
+            LOG.debug("朋友圈互动触发失败：%s", _e)
         return jsonify({"ok": True, "post": post, "why": why})
+    except Exception as e:      # noqa: silent-ok
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
+
+
+@app.route("/api/moments/react", methods=["POST"])
+def api_moments_react():
+    """让别的 AI 来给这条动态点赞/评论（集中朋友圈的"串门"）。"""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        M, _G = _social()
+        pid = str(data.get("id") or "")
+        if not pid:
+            return jsonify({"ok": False, "error": "要给一条动态的 id"})
+        done = M.ai_react(pid,
+                          like_prob=float(data.get("like_prob") or 0.8),
+                          comment_prob=float(data.get("comment_prob") or 0.5))
+        return jsonify({"ok": True, "done": done})
     except Exception as e:      # noqa: silent-ok
         return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}), 500
 
