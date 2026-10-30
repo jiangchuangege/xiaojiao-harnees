@@ -84,13 +84,15 @@ text-align:left;min-width:2em}
 /* 【不要算高度】用整条 height:100% 链填满容器；算式在 iframe 里一定会偏 */
 html,body{height:100%;overflow:hidden}
 .wrap{height:100%;display:flex;flex-direction:column;overflow:hidden}
+/* 页签面板承接剩余高度，超出的只在内部滚，绝不把整页顶高 */
+.tabpane{flex:1 1 auto;min-height:0;overflow:hidden}
 .im{display:grid;grid-template-columns:288px 1fr;gap:12px;align-items:stretch;
-flex:1 1 auto;min-height:0;max-width:1080px;margin:0 auto;width:100%}
+flex:1 1 auto;height:100%;min-height:0;max-width:1080px;margin:0 auto;width:100%}
 @media(max-width:860px){.im{grid-template-columns:1fr;height:auto}}
 .rail{background:var(--card);border:1px solid var(--line);border-radius:16px;
-display:flex;flex-direction:column;overflow:hidden}
+display:flex;flex-direction:column;overflow:hidden;min-height:0}
 .railhead{padding:10px;border-bottom:1px solid var(--line)}
-.glist{overflow:auto;padding:6px}
+.glist{overflow:auto;padding:6px;min-height:0;flex:1 1 auto}
 .gitem{display:flex;gap:9px;align-items:center;padding:9px;border-radius:12px;cursor:pointer}
 .gitem:hover{background:var(--card2)}
 .gitem.on{background:#232c40}
@@ -100,14 +102,14 @@ display:flex;flex-direction:column;overflow:hidden}
 line-height:17px;min-width:17px;text-align:center}
 .pane{background:var(--card);border:1px solid var(--line);border-radius:16px;
 display:flex;flex-direction:column;overflow:hidden;min-height:0;
-height:calc(100vh - 200px)}                     /* 兜底：算准了 fitChat 会覆盖它 */
+flex:1 1 auto}                                   /* 【高度由 flex 链决定】不再用 calc，也不让 JS 写高度 */
 #fr_msgs{flex:1 1 auto;min-height:0;overflow-y:auto}
-#fr_foot{position:sticky;bottom:0;background:var(--card);z-index:2}
-.chatbox{height:calc(100vh - 210px)}
+#fr_foot{flex:0 0 auto;position:sticky;bottom:0;background:var(--card);z-index:2}
+.chatbox{min-height:0}
 #msgs{flex:1 1 auto;min-height:0;overflow-y:auto}
-.phead{display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line)}
+.phead{display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line);flex:0 0 auto}
 .pbody{flex:1 1 auto;min-height:0;overflow:auto;padding:14px}
-.pfoot{border-top:1px solid var(--line);padding:10px 12px}
+.pfoot{border-top:1px solid var(--line);padding:10px 12px;flex:0 0 auto}
 .filebar{border-top:1px dashed #222a38;padding:7px 12px;display:flex;gap:8px;
 align-items:center;flex-wrap:wrap}
 .fchip{background:#1c2536;border:1px solid #26324a;border-radius:999px;padding:2px 10px;
@@ -808,32 +810,15 @@ let FRCUR='',FRFRIENDS=[],FRHIST=[];
 function frToast(m,ok){const el=document.getElementById('fr_msg');
   if(!el)return;el.textContent=m;el.className=ok?'ok':'err';
   setTimeout(function(){if(el.textContent===m)el.textContent=''},4000)}
-// 【把聊天区钉在可用高度里】不再依赖 CSS 链推高度：这里直接量。
+// 【不再用 JS 算高度】以前这里量高度、给面板和消息区写死 maxHeight：
+//   iframe 里算偏一次，输入框就被顶到屏幕外面（这已经是第三次了）。
+//   现在高度全交给 CSS 的 flex 链，JS 只负责把消息滚到底。
 function fitChat(){
   try{
-    const pane=document.getElementById('fr_pane');
     const box=document.getElementById('fr_msgs');
-    if(pane){
-      const top=pane.getBoundingClientRect().top;
-      const h=Math.max(220,window.innerHeight-top-14);
-      pane.style.height=h+'px';
-      const head=pane.querySelector('.phead');
-      const foot=document.getElementById('fr_foot');
-      const footH=(foot&&foot.style.display!=='none')?foot.offsetHeight:0;
-      const avail=h-((head&&head.offsetHeight)||0)-footH-6;
-      if(box){
-        if(avail>120){box.style.maxHeight=avail+'px';}
-        else{box.style.maxHeight='40vh';}       // 兜底：算不出来就给个明确高度
-        box.style.overflowY='auto';
-      }
-    }
-    const gp=document.getElementById('gp_pane')||document.querySelector('.pane .chatbox');
+    if(box)box.scrollTop=box.scrollHeight;
     const gb=document.getElementById('msgs');
-    if(gb&&gp){
-      const top=gb.getBoundingClientRect().top;
-      const avail2=window.innerHeight-top-90;
-      if(gb){gb.style.maxHeight=(avail2>120?avail2+'px':'40vh');gb.style.overflowY='auto';}
-    }
+    if(gb)gb.scrollTop=gb.scrollHeight;
   }catch(e){}
 }
 window.addEventListener('resize',function(){fitChat()});
@@ -1087,16 +1072,9 @@ document.querySelectorAll('.tab').forEach(function(b){
 """ % (tab or "moments")
     page = _page("社交", body, js)
     if embed:
-        # 被主界面用 iframe 嵌进来时：去掉外层留白，内容铺满容器（尺寸就不会"不对"了）
-        # 【不许长出去】列表再长也只能在框里滚，不能把整块撑高——
-        # 之前好友页撑到 1005px（容器只有 428px），整页被顶出去。
+        # 被主界面用 iframe 嵌进来时：只去掉外层留白，高度全交给上面那条 flex 链
         page = page.replace("<style>", "<style>\n"
-                            ".wrap{max-width:none;padding:8px 10px 12px;height:100%;min-height:0}\n"
-                            "#tab-friends,#tab-groups{height:100%;min-height:0;overflow:hidden}\n"
-                            ".im{flex:1 1 auto;min-height:0;height:100%;overflow:hidden}\n"
-                            ".rail{min-height:0;max-height:100%;overflow:hidden}\n"
-                            ".glist{min-height:0;flex:1 1 auto;overflow:auto}\n"
-                            ".pane{height:100%;min-height:0}\n", 1)
+                            ".wrap{max-width:none;padding:8px 10px 10px}\n", 1)
     if dbg:
         # 【临时探针】问浏览器：到底哪个元素铺满了整屏？把答案写在页面顶上。
         # 查完这个参数就没用了，留着也无害（只有 ?dbg=1 才跑）。
@@ -1123,7 +1101,20 @@ setTimeout(function(){
     }
   }
   document.getElementById('dbgbar').textContent =
-    'viewport '+W+'x'+H+'\\n'+(out.length?out.join('\\n'):'没有超过 35% 的元素');
+    'viewport '+W+'x'+H+'\\n'+(out.length?out.join('\\n'):'没有超过 35% 的元素')+'\\n'+
+    (function(){
+      var r=[];
+      ['fr_pane','fr_msgs','fr_foot','fr_say','msgs','pfoot'].forEach(function(id){
+        var e=document.getElementById(id);if(!e)return;
+        var b=e.getBoundingClientRect();
+        r.push(id+' top='+Math.round(b.top)+' bottom='+Math.round(b.bottom)+
+          ' '+Math.round(b.width)+'x'+Math.round(b.height)+
+          (b.bottom>H+1?' 【在屏幕外！】':(b.height<=0?' 【高0，看不见】':'')));
+      });
+      var de=document.scrollingElement;
+      r.push('页面滚动高度='+de.scrollHeight+' 视口高度='+H+(de.scrollHeight>H+1?' 【整页在滚，不该发生】':''));
+      return r.join('\\n');
+    })();
 },1500);
 </script>
 </body>""", 1)
