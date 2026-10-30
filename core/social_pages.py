@@ -122,8 +122,17 @@ img{max-width:100%;height:auto}
 border-radius:10px;display:block}
 /* 【头像列不许被压缩】否则名字会被挤成一列字 */
 .msg{min-width:0}
-.msg>span{flex:0 0 auto}
-.pavbox,.gav{min-width:44px;max-width:44px;min-height:44px;max-height:44px}
+.msg>span{flex:0 0 auto!important}
+/* 【用 !important 钉死头像尺寸】—— 群里那张巨图就是"容器尺寸被覆盖"造成的，
+   普通优先级挡不住，这里一律钉死：头像格最大 46px，头像图 100% 撑满格子。 */
+.msg>span{width:34px!important;max-width:34px!important;height:34px!important;
+max-height:34px!important;overflow:hidden!important}
+.msg>span img{width:34px!important;max-width:34px!important;height:34px!important;
+max-height:34px!important;object-fit:contain!important}
+.gav,.favatar{width:44px!important;max-width:44px!important;height:44px!important;
+max-height:44px!important;overflow:hidden!important}
+.gav img,.favatar img{width:100%!important;height:100%!important;max-height:100%!important;
+object-fit:contain!important;display:block!important}
 .favatar{width:46px;height:46px;border-radius:12px;overflow:hidden;background:#2a3140;
 display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff;flex:0 0 auto}
 .favatar img{width:100%;height:100%;object-fit:contain;display:block;background:#0f141d}
