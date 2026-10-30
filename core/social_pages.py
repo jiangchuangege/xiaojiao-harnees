@@ -349,7 +349,7 @@ async function load(){
       (pa.relation?'<span class="tag">'+esc(pa.relation)+'</span>':'')+
       '<span class="muted">'+ht(p.ts)+'</span><span class="grow"></span>'+
       '<span class="pill">'+esc(p.source==='self'?'他自己想发的':(p.source==='auto'?'自己发的':'你催他发的'))+'</span></div>'+
-      '<div class="mtext">'+esc(p.text)+(p.image?'<img src="/moments/img/'+encodeURIComponent(p.image)+'"/>':'')+'</div>'+
+      '<div class="mtext">'+md(p.text)+(p.image?'<img src="/moments/img/'+encodeURIComponent(p.image)+'"/>':'')+'</div>'+
       (p.why?'<div class="muted" style="font-size:12px">· 他当时的想法：'+esc(p.why)+'</div>':'')+
       '<div class="likebar"><span class="'+(liked?'liked':'')+'" style="cursor:pointer" onclick="like(\\''+p.id+'\\')">'+
       (liked?'❤️':'🤍')+' '+(p.likes||[]).length+'</span><span>💬 '+(p.comments||[]).length+'</span></div>'+
@@ -595,7 +595,7 @@ async function loadChat(){
       esc(shortName(x.who))+'</b>'+adm+
       (isDefault?' <span class="tag">默认角色</span>':'')+
       ' <span class="muted">'+meta+'</span></div>'+
-      '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+esc(x.text)+'</div>'+acts+'</div></div>';
+      '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+md(x.text)+'</div>'+acts+'</div></div>';
   }; const _mhtml=msgs.length?msgs.map(gOneHtml).join(''):'<div class="muted">还没有人说话。它们自己一会儿就开口。</div>';
   const box=document.getElementById('msgs');
   patchMessages(box,msgs,_mhtml,gOneHtml);LASTN=msgs.length;
@@ -924,9 +924,8 @@ async function frOpen(name){
       '<b>'+esc(me?'你':(f.name||name))+'</b>'+tag+
       '<span class="muted">'+ht(m.ts)+(m.by?(' · 火种 '+esc(m.by)):'')+'</span></div>'+
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+
-      esc(m.text)+'</div></div></div>';
-  }; const _fhtml=hs.length?hs.map(frOneHtml).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
-  const box=document.getElementById('fr_msgs');patchMessages(box,hs,_fhtml,frOneHtml);
+      md(m.text)+'</div></div></div>';
+  }; const _fhtml=hs.length?hs.map(frOneHtml).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';  const box=document.getElementById('fr_msgs');patchMessages(box,hs,_fhtml,frOneHtml);
   fitChat();
   const ms=d.moments||[];
   document.getElementById('fr_moments').innerHTML=ms.length?ms.map(function(p){
@@ -936,7 +935,7 @@ async function frOpen(name){
     return '<div class="card" style="background:var(--card2)">'+
       '<div class="row"><b>'+esc(p.author)+'</b><span class="muted">'+ht(p.ts)+'</span>'+
       '<span class="grow"></span><span class="pill">'+esc(p.why||'自己想发的')+'</span></div>'+
-      '<div class="mtext">'+esc(p.text)+'</div>'+
+      '<div class="mtext">'+md(p.text)+'</div>'+
       '<div class="likebar"><span style="cursor:pointer" data-likeid="'+p.id+'">❤️ '+
       (p.likes||[]).length+'</span><span>💬 '+(p.comments||[]).length+'</span></div>'+
       (cm||'')+
@@ -1004,7 +1003,7 @@ async function frSyncMessages(){
       '<b>'+esc(me?'你':(f.name||FRCUR))+'</b>'+tag+
       '<span class="muted">'+ht(m.ts)+(m.by?(' · 火种 '+esc(m.by)):'')+'</span></div>'+
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;'+
-      'word-break:break-word;text-align:left;min-width:2em">'+esc(m.text)+'</div></div></div>';
+      'word-break:break-word;text-align:left;min-width:2em">'+md(m.text)+'</div></div></div>';
   }; const _fhtml=hs.length?hs.map(frOneHtml2).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
   patchMessages(document.getElementById('fr_msgs'),hs,_fhtml,frOneHtml2);
 }
