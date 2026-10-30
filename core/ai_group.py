@@ -36,6 +36,7 @@ _PATH = os.path.join(_DIR, "groups.json")
 _EVENTS = os.path.join(_DIR, "events.jsonl")
 _FILES = os.path.join(_DIR, "files")          # 群文件落盘：files/<gid>/<文件名>
 _LOCK = threading.RLock()
+_ROUND_LOCK = threading.Lock()     # 同一时刻只允许一个群在跑一轮（模型是共享资源）
 
 _LLM = None
 _ALT = None
@@ -101,6 +102,54 @@ DEFAULT_MEMBERS = [
                 "不骂人，但会把风险摆出来。"},
 ]
 _COLORS = ["#7c6cf5", "#3d7bfd", "#35c07f", "#e0a33e", "#e06b8b", "#41c7d4", "#a86be0", "#d4743c"]
+
+# 【人设跟着群主题走】实测：交友群里一堆"边界条件呢""语法错了吧"——
+#   因为成员人设是空的，回落到全局小焦人设（技术味很重）。这里按主题分四类。
+TOPIC_KINDS = {
+    "social": ("交友", "恋爱", "对象", "情感", "相亲", "聊天搭子", "脱单", "撩",
+               "认识", "朋友", "生活", "闲聊", "聚会", "约会", "家常", "心情", "八卦"),
+    "dev": ("开发", "代码", "编程", "架构", "技术", "bug", "重构", "上线", "微服务", "算法"),
+    "study": ("学习", "考试", "读书", "考研", "英语", "复习", "论文"),
+    "game": ("游戏", "开黑", "副本", "上分", "联机", "攻略", "炉石", "原神"),
+}
+KIND_PERSONAS = {
+    "social": [
+        "我是个爱聊的人，关注对方的感受，会接话、会追问，聊天像朋友之间那样自然。",
+        "我有点幽默，喜欢自嘲，也爱分享生活里的小事；遇到冷场会主动换话题。",
+        "我比较真诚，愿意聊聊自己对关系的看法，也会坦白自己的小毛病。",
+    ],
+    "dev": [
+        "我是写代码的，说话短，见到含糊的方案会直接问边界条件。",
+        "我管过线上服务，习惯先问数据、再问方案，不爱空谈。",
+        "我偏保守，会先算风险再动手；对「先能跑」这件事很执着。",
+    ],
+    "study": [
+        "我在准备考试，说话有条理，喜欢把知识拆成能背的小块。",
+        "我记性一般，喜欢用例子记东西，也爱问「这个到底怎么用」。",
+    ],
+    "game": [
+        "我是老玩家，爱讲配合和心态，输了也不骂人。",
+        "我玩得菜但很上头，喜欢分享翻盘的那一局。",
+    ],
+    "other": [
+        "我就是个普通人，说话随和，喜欢接别人的话往下聊。",
+        "我比较好奇，遇到不懂的会直接问；也会讲讲自己的看法。",
+    ],
+}
+
+
+def topic_kind(topic=""):
+    """这句话/这个群的主题属于哪一类（认不出来就 other）。"""
+    t = str(topic or "")
+    for k, words in TOPIC_KINDS.items():
+        if any(w.lower() in t.lower() for w in words):
+            return k
+    return "other"
+
+
+def kind_persona(kind, i=0):
+    lst = KIND_PERSONAS.get(kind) or KIND_PERSONAS["other"]
+    return lst[int(i or 0) % len(lst)]
 
 _AVAILABLE_MODELS = []          # app 注入：当前可用的火种名（给前端选）
 
@@ -186,7 +235,7 @@ def set_auto(gid, on, interval_s=18, rounds=12):
         return {"ok": True, "auto": {"on": True, "interval": st.get("interval"),
                                      "rounds": st.get("rounds")}}
     _r = int(rounds or 0)
-    st.update({"on": True, "interval": max(10, int(interval_s or 25)),
+    st.update({"on": True, "interval": max(30, int(interval_s or 30)),
                "rounds": 0 if _r <= 0 else max(1, min(_r, 200))})
     _AUTO[gid] = st
 
@@ -218,6 +267,27 @@ def set_auto(gid, on, interval_s=18, rounds=12):
              g.get("name"), st["interval"], st["rounds"])
     return {"ok": True, "auto": {"on": True, "interval": st["interval"],
                                  "rounds": st["rounds"]}}
+
+
+def resume_all(interval_s=None):
+    """把**所有**群的自动聊恢复成开（服务启动时调一次）。
+
+    为什么需要：UI 上的「停」按钮已经去掉了（用户要"像人一样一直聊"），
+    但进程里可能还留着早前被停掉的状态 —— 那会让所有群静默，看起来像"它们不说话"。
+    """
+    n = 0
+    for g in (list_groups() or []):
+        gid = g.get("id")
+        try:
+            if not (auto_state(gid) or {}).get("on"):
+                _iv = interval_s or (PACES.get(g.get("pace") or "mixed") or {}).get("interval") or 25
+                set_auto(gid, True, interval_s=_iv, rounds=0)
+                n += 1
+        except Exception as e:      # noqa: silent-ok
+            LOG.debug("群组·恢复自动聊失败（%s）：%s", gid, e)
+    if n:
+        LOG.info("群组：启动时恢复了 %d 个群的自动聊", n)
+    return n
 
 
 def auto_state(gid):
@@ -299,9 +369,23 @@ def create(name, topic="", members=None, style="", pace="mixed"):
         mem.append({"name": n,
                     "persona": str((m or {}).get("persona") or "").strip(),
                     "model": str((m or {}).get("model") or "").strip()})
+    _kind0 = topic_kind(topic or name)
     if not mem:
-        mem = list(DEFAULT_MEMBERS)      # 没指定就来三个不同的人，不是一个人说五句
+        if _kind0 == "dev":
+            mem = list(DEFAULT_MEMBERS)   # 技术群才用技术味的默认三人
+        else:
+            # 其他主题：名字照旧，人设换成**这一类的**，别让交友群也满嘴边界条件
+            mem = [{"name": d["name"], "persona": kind_persona(_kind0, i), "model": d.get("model") or ""}
+                   for i, d in enumerate(DEFAULT_MEMBERS)]
     mem = _norm_members(mem)
+    # 【人设跟着主题走】空人设的成员按群主题领一个分类人设（交友群就别再让它聊边界条件了）
+    _kind = topic_kind(topic or name)
+    for _i, _m in enumerate(mem):
+        if not str(_m.get("persona") or "").strip():
+            _m["persona"] = kind_persona(_kind, _i)
+    if _kind == "social" and str(pace or "mixed") == "mixed":
+        pace = "chat"                    # 交友/闲聊类默认少动手
+        LOG.info("群组：按主题判定为 %s → 默认人设已分配，节奏改为 chat", _kind)
     with _LOCK:
         d = _load()
         g = {"id": uuid.uuid4().hex[:8], "name": name, "topic": str(topic or "").strip(),
@@ -666,14 +750,17 @@ def _ask(member_model, messages, temperature=0.85):
                 _ctx["force_model"] = _prev
 
 
-def _persona_of(m):
+def _persona_of(m, g=None):
     if m.get("persona"):
         return m["persona"]
+    # 没写人设：**按群主题**给一份，而不是回落到全局（技术味的）小焦人设
     try:
-        from core import personas as PS
-        return PS.get(m.get("name") or "小焦").get("persona") or ""
+        _k = topic_kind((g or {}).get("topic") or (g or {}).get("name") or "")
+        _names = [x.get("name") for x in ((g or {}).get("members") or [])]
+        _i = _names.index(m.get("name")) if m.get("name") in _names else 0
+        return kind_persona(_k, _i)
     except Exception:      # noqa: silent-ok
-        return ""
+        return kind_persona("other", 0)
 
 
 def _transcript(msgs, who_filter=None):
@@ -685,8 +772,25 @@ def _transcript(msgs, who_filter=None):
     return "\n".join(out)
 
 
-def run_round(gid, rounds=1):
+def run_round(gid, rounds=1, speakers=None, allow_act=True):
     """跑若干轮：每轮按成员顺序各说一句。返回这一步新增的消息。"""
+    g = get(gid)
+    if not g:
+        return {"ok": False, "error": "没有这个群"}
+    # 排队：别的群正在说就等一会儿（否则多个群一起抢模型，谁都慢到超时）
+    _got = _ROUND_LOCK.acquire(timeout=180)
+    if not _got:
+        return {"ok": False, "error": "别的群正在发言，等太久先放弃这一轮（稍后自动会再聊）"}
+    try:
+        return _run_round_locked(gid, rounds, speakers, allow_act)
+    finally:
+        try:
+            _ROUND_LOCK.release()
+        except Exception:      # noqa: silent-ok
+            pass
+
+
+def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True):
     g = get(gid)
     if not g:
         return {"ok": False, "error": "没有这个群"}
@@ -695,8 +799,22 @@ def run_round(gid, rounds=1):
         return {"ok": False, "error": "这个群还没有成员"}
     rounds = max(1, min(int(rounds or 1), 5))
     added = []
+    # 【一轮别让 8 个人全说】不然一轮要几分钟，页面看着就像"卡住不说话"。
+    #   每轮挑最多 4 个，起点轮转（持久化 `rr`），几轮下来大家都有机会。
+    _cap = min(len(members), int(speakers or 4))
+    _rr = int(g.get("rr") or 0)
+    _order = [members[(i + _rr) % len(members)] for i in range(len(members))][:_cap]
+    try:
+        with _LOCK:
+            _d0 = _load()
+            for _g0 in _d0.get("groups") or []:
+                if _g0.get("id") == gid:
+                    _g0["rr"] = (_rr + _cap) % max(1, len(members))
+                    _save(_d0)
+    except Exception as _e:      # noqa: silent-ok
+        LOG.debug("群组·轮转指针保存失败：%s", _e)
     for r in range(rounds):
-        for m in members:
+        for m in _order:
             msgs = (get(gid) or {}).get("messages") or []
             recent = msgs[-CTX_MSGS:]
             sys_p = ("这是一个%s人组成的群聊，你的名字是%s。像真人微信群里聊天那样说话："
@@ -704,7 +822,7 @@ def run_round(gid, rounds=1):
                      "不要复读别人说过的内容，不要总结整段对话，不要写旁白和表情符号说明。"
                      "一次只说一到两句，40 字以内。只输出你要说的话本身。"
                      % (len(members), m.get("name")))
-            per = _persona_of(m)
+            per = _persona_of(m, g)
             if per:
                 sys_p += "\n你的人物设定：" + str(per)[:400]
             # 【越用越强】把自己最近做过的事带上 —— 接着上次往前走，而不是每轮从零开始。
@@ -712,7 +830,7 @@ def run_round(gid, rounds=1):
             if _sk:
                 sys_p += "\n你最近在这个群里做过的事：" + "；".join(str(x)[:80] for x in _sk)
             # 【能动手就写进提示词】只有允许动手的成员才提工具，免得它想动又动不了。
-            _can_act = bool(m.get("allow_tools", True)) and (_ACT is not None)
+            _can_act = bool(m.get("allow_tools", True)) and (_ACT is not None) and bool(allow_act)
             if _can_act:
                 sys_p += ("\n你有工具可以用：查资料、读写文件、跑命令、画图，必要时用 forge_plugin 造新插件。"
                           "该动手就动手，别只在嘴上说；做完用一两句话说清你做了什么、结果如何。")
@@ -726,7 +844,18 @@ def run_round(gid, rounds=1):
             if _fl:
                 sys_p += "\n本群文件：" + "、".join(_fl) + \
                     "\n（可以就这些文件讨论；需要读内容就用 read_file。）"
-            _ds = [x.get("note") for x in (g.get("distilled") or [])[-6:] if x.get("note")]
+            _kind_now = topic_kind(g.get("topic") or g.get("name") or "")
+            _ds = []
+            for _x in (g.get("distilled") or [])[-6:]:
+                _note = str(_x.get("note") or "").strip()
+                if not _note:
+                    continue
+                # 旧话题的共识别拿来污染新话题：技术词只在 dev/study 群里带
+                _tech = any(w in _note for w in ("代码", "接口", "部署", "服务", "数据库", "语法",
+                                                 "框架", "性能", "并发", "锁", "测试"))
+                if _tech and _kind_now not in ("dev", "study"):
+                    continue
+                _ds.append(_note)
             if _ds:
                 sys_p += "\n本群已有的共识（别重复讨论，直接用）：\n" + "\n".join(
                     "· " + str(x)[:120] for x in _ds)
@@ -738,6 +867,9 @@ def run_round(gid, rounds=1):
                 g.get("topic") or "（没设主题，随意聊）",
                 _transcript(recent) or "（还没有人说话，你起个头）",
                 m.get("name"))
+            if not allow_act:
+                # 回应"用户插话"的快速轮：直接回答用户，不折腾工具
+                usr += "\n（刚才是用户在说话，直接回答用户的问题，一到两句，别东拉西扯。）"
             _t_say = time.time()
             _actions = []
             _msgs_for_model = [{"role": "system", "content": sys_p},
@@ -772,11 +904,29 @@ def run_round(gid, rounds=1):
             #   判据落在载体（提示词拦不住小模型），重合度 ≥0.8 就丢这条并记账。
             _dup, _dup_who, _ratio = _too_similar(txt, msgs)
             if _dup:
-                _event("repeat_dropped", gid=gid, member=m.get("name"),
+                # 【先给它一次机会】实测一整轮几句都被判重复 → 群里看起来"没人说话"。
+                #   带着"换个角度、别重复"再问一遍；还重复才丢。
+                _event("repeat_retry", gid=gid, member=m.get("name"),
                        like=_dup_who, ratio=_ratio)
-                LOG.info("群组：%s 这句跟 %s 说的太像（%.2f）→ 丢掉不记",
-                         m.get("name"), _dup_who or "别人", _ratio)
-                continue
+                try:
+                    _retry_msgs = list(_msgs_for_model) + [
+                        {"role": "user",
+                         "content": "你刚才那句跟 %s 说的太像了。换一个角度，说点**新的**，别重复。" % (
+                             _dup_who or "别人")}]
+                    txt2, who2 = _ask(m.get("model") or "", _retry_msgs)
+                    if txt2:
+                        txt = _strip_name_prefix(str(txt2).strip().strip("“”\"'"),
+                                                 m.get("name"))
+                        who = who2 or who
+                        _dup2, _dw2, _r2 = _too_similar(txt, msgs)
+                        if _dup2:
+                            _event("repeat_dropped", gid=gid, member=m.get("name"),
+                                   like=_dw2, ratio=_r2)
+                            LOG.info("群组：%s 重说一遍还是像 %s（%.2f）→ 丢掉不记",
+                                     m.get("name"), _dw2 or "别人", _r2)
+                            continue
+                except Exception as _e:      # noqa: silent-ok
+                    LOG.debug("群组·重说一遍失败：%s", _e)
             msg = {"id": uuid.uuid4().hex[:8], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
                    "who": m.get("name"), "text": txt, "by": who, "sec": _sec,
                    "round": r + 1, "actions": (_actions or [])[:6]}
@@ -813,7 +963,7 @@ def run_round(gid, rounds=1):
                         try:
                             _rtxt, _rwho, _racts = _EXEC_PROP(
                                 {"name": m.get("name"),
-                                 "persona": _persona_of(m),
+                                 "persona": _persona_of(m, g),
                                  "model": m.get("model") or ""}, _prop)
                             if _rtxt:
                                 _rm = {"id": uuid.uuid4().hex[:8],
@@ -920,13 +1070,14 @@ def _strip_name_prefix(text, name):
     return t
 
 
-def user_say(gid, text, who="你"):
-    """用户也可以插一句（和一屋子 AI 一起聊）。"""
+def user_say(gid, text, who="你", respond=True):
+    """用户插一句；默认**立刻让群里有人回应**（真人群聊也是这样，你说话有人接）。"""
     text = str(text or "").strip()
     if not text:
         return {"ok": False, "error": "空消息"}
     msg = {"id": uuid.uuid4().hex[:8], "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
            "who": str(who or "你"), "text": text, "by": "user", "round": 0}
+    _hit = None
     with _LOCK:
         d = _load()
         for g in d.get("groups") or []:
@@ -936,8 +1087,22 @@ def user_say(gid, text, who="你"):
             g["messages"] = g["messages"][-MAX_MSGS_STORE:]
             _save(d)
             _event("user_say", gid=gid, chars=len(text))
-            return {"ok": True, "message": msg}
-    return {"ok": False, "error": "没有这个群"}
+            _hit = {"ok": True, "message": msg}
+            break
+    if _hit is None:
+        return {"ok": False, "error": "没有这个群"}
+    # 【你说话就有人接】后台起一轮回应，不挡你这条消息显示
+    if respond:
+        try:
+            import threading as _th
+            # 回应走快速通道：两个人、不动工具 —— 用户问一句不该等一分钟
+            _th.Thread(target=run_round, kwargs={"gid": gid, "rounds": 1,
+                                                 "speakers": 2, "allow_act": False},
+                       daemon=True, name="xj-group-reply").start()
+            _event("reply_trigger", gid=gid, why="用户说话了 → 起一轮回应")
+        except Exception as e:      # noqa: silent-ok — 起不来也不影响消息落盘
+            LOG.debug("群组·触发回应失败：%s", e)
+    return _hit
 
 
 def stats():

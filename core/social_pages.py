@@ -100,6 +100,13 @@ border:1px solid var(--line);border-radius:16px;padding:14px}
 .mrow{display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px dashed #222a38}
 .mrow:last-child{border-bottom:0}
 .tag{background:#2a3550;color:#a9b8ff;border-radius:8px;padding:1px 7px;font-size:11px}
+
+/* ---- 页签 ---- */
+.tabs{display:flex;gap:6px}
+.tab{background:#1b2130;color:#cbd0dc;border:1px solid var(--line);border-radius:999px;
+padding:6px 14px;font-size:14px;cursor:pointer}
+.tab.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.tabpane{display:none}
 .notice{background:#1a2030;border-radius:10px;padding:8px 10px;color:#b9c3d6;font-size:13px}
 
 """
@@ -133,7 +140,7 @@ def _page(title, body, js=""):
 
 
 # ==================== 朋友圈 ====================
-def moments_html():
+def _moments_inner():
     body = """
 <div class="row"><h1>🌤️ 朋友圈</h1><span class="grow"></span>
   <a href="/aigroups">👥 模型群组</a> <a href="/">← 回到单聊</a></div>
@@ -217,11 +224,16 @@ document.getElementById('btnP').onclick=async()=>{const d=await P('/api/personas
   toast(document.getElementById('pmsg'),d.ok?'人设已保存':'保存失败：'+(d.error||''),!!d.ok)};
 load();setInterval(load,20000);
 """
-    return _page("朋友圈", body, js)
+    return body, js
+
+
+def moments_html():
+    b, j = _moments_inner()
+    return _page("朋友圈", b, j)
 
 
 # ==================== 模型群组（独立页面）====================
-def groups_html():
+def _groups_inner():
     body = """
 <div class="row"><h1>👥 模型群组</h1><span class="grow"></span>
   <a href="/moments">🌤️ 朋友圈</a> <a href="/">← 回到单聊</a></div>
@@ -368,8 +380,9 @@ async function loadChat(){
   document.getElementById('msgs').innerHTML=msgs.length?msgs.map(function(x){
     const me=(x.who==='你');
     const adm=(mm[x.who]||{}).admin?' <span class="tag">管理员</span>':'';
-    const meta=ht(x.ts)+(x.sec?(' · '+x.sec+'s'):'')+(x.by?(' · 火种 '+esc(x.by)):'');
-    const isDefault=!((mm[x.who]||{}).model);
+    const meta=ht(x.ts)+(x.sec?(' · '+x.sec+'s'):'')+
+      ((x.by&&x.by!=='user')?(' · 火种 '+esc(x.by)):'');
+    const isDefault=(!me)&&(!((mm[x.who]||{}).model));
     const acts=(x.actions&&x.actions.length)?
       ('<div class="muted" style="font-size:11px;margin-top:3px">⚙ 动过 '+x.actions.length+
        ' 下：'+x.actions.map(function(a){return esc(a.tool)}).join('、')+'</div>'):'';
@@ -531,7 +544,53 @@ document.getElementById('btnQuit').onclick=async function(){
   setInterval(async function(){await loadList();await loadChat()},4000);
 })();
 """
-    return _page("模型群组", body, js)
+    return body, js
+
+
+def groups_html():
+    b, j = _groups_inner()
+    return _page("模型群组", b, j)
+
+
+# ==================== 统一社交页：朋友圈 + 群组同页切换 ====================
+def social_hub_html(tab="moments"):
+    """一个页面装下社交模块：顶部页签切换，样式统一（不再一个模块一页）。"""
+    _mb, _mj = _moments_inner()
+    _gb, _gj = _groups_inner()
+    body = """
+<div class="row" style="align-items:center">
+  <h1 style="margin:0">🌤️ 社交</h1>
+  <div class="tabs" style="margin-left:14px">
+    <button class="tab" data-tab="moments">朋友圈</button>
+    <button class="tab" data-tab="groups">模型群组</button>
+  </div>
+  <span class="grow"></span>
+  <a href="/">← 回到单聊</a>
+</div>
+<div class="sub">它自己发动态、自己也建群聊；你随时能点赞、评论、插话、传文件。</div>
+
+<div id="tab-moments" class="tabpane">__MOMENTS__</div>
+<div id="tab-groups" class="tabpane">__GROUPS__</div>
+""".replace("__MOMENTS__", _mb).replace("__GROUPS__", _gb)
+
+    js = _mj + "\n" + _gj + """
+function showTab(t){
+  document.querySelectorAll('.tabpane').forEach(function(el){
+    el.style.display=(el.id==='tab-'+t)?'':'none'});
+  document.querySelectorAll('.tab').forEach(function(b){
+    b.classList.toggle('on',b.dataset.tab===t)});
+  try{history.replaceState(null,'','/social?tab='+t)}catch(e){}
+}
+document.querySelectorAll('.tab').forEach(function(b){
+  b.onclick=function(){showTab(b.dataset.tab)}});
+(function(){
+  const q=new URLSearchParams(location.search).get('tab')||'%s';
+  showTab(q);
+  const gid=new URLSearchParams(location.search).get('gid');
+  if(gid&&typeof openGroup==='function'){setTimeout(function(){openGroup(gid)},300)}
+})();
+""" % (tab or "moments")
+    return _page("社交", body, js)
 
 
 # ==================== 兼容旧链接：/aigroups/<gid> 直接跳到新页面 ====================

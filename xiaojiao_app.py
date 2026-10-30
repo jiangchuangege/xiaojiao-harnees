@@ -3018,6 +3018,9 @@ def _group_act(member, messages):
             pass
 
 
+_GROUP_RESUMED = False
+
+
 def _social():
     """朋友圈 / 群组 / 人设：把火种与换火种能力注进去（幂等）。"""
     from core import moments as _M, ai_group as _G
@@ -3026,6 +3029,15 @@ def _social():
     _G.install(llm_chat, alt_fn=_fuse_alt_llm, model_name=str(MODEL_NAME or ""),
                act_fn=_group_act,          # 群里的 AI 能动手（工具/写文件/造插件）
                distill_fn=_group_distill)  # 一轮一蒸馏：越聊越强
+    # 【启动时恢复所有群的自己聊】UI 上已经没有"停"按钮；早前被停掉的状态不该让它们全体沉默。
+    global _GROUP_RESUMED
+    if not _GROUP_RESUMED:
+        _GROUP_RESUMED = True
+        try:
+            _n = _G.resume_all()
+            LOG.info("群组：启动恢复自动聊（%d 个群）", _n)
+        except Exception as _e:      # noqa: silent-ok
+            LOG.debug("群组·启动恢复失败：%s", _e)
     try:
         _G._EXEC_PROP = _group_exec_prop    # 它们自己提的活，载体接着真去做
     except Exception as _e:      # noqa: silent-ok
@@ -16063,16 +16075,29 @@ def api_proof():
 # ================== 朋友圈 / 模型群组（2026-10-30）==================
 # 【为什么是独立页面】主界面是大字符串，两大块前端塞进去风险高；
 #   这两块自成一体，通过 JSON 接口打交道，所有文字都由模型生成。
+@app.route("/social")
+def social_hub_page():
+    """统一的社交页：朋友圈 + 群组同页页签切换（不再一个模块一页）。"""
+    from core import social_pages as _SP
+    try:
+        _social()
+    except Exception as _e:      # noqa: silent-ok
+        LOG.debug("社交页注入火种失败（忽略）：%s", _e)
+    return Response(_SP.social_hub_html(request.args.get("tab") or "moments"),
+                    mimetype="text/html")
+
+
 @app.route("/moments")
 def moments_page():
-    from core import social_pages as _SP
-    return Response(_SP.moments_html(), mimetype="text/html")
+    """旧链接：统一到 /social?tab=moments。"""
+    return redirect("/social?tab=moments")
 
 
 @app.route("/aigroups")
 def aigroups_page():
-    from core import social_pages as _SP
-    return Response(_SP.groups_html(), mimetype="text/html")
+    """旧链接：统一到 /social?tab=groups（带上 ?gid= 也一起带过去）。"""
+    gid = str(request.args.get("gid") or "").strip()
+    return redirect("/social?tab=groups" + (("&gid=" + gid) if gid else ""))
 
 
 @app.route("/moments/img/<path:name>")
@@ -16169,7 +16194,8 @@ def api_aigroups_create():
     try:
         _M, G = _social()
         r = G.create(str(data.get("name") or ""), topic=str(data.get("topic") or ""),
-                     members=data.get("members") or [], style=str(data.get("style") or ""))
+                     members=data.get("members") or [], style=str(data.get("style") or ""),
+                     pace=str(data.get("pace") or "mixed"))
         return jsonify(r)
     except Exception as e:      # noqa: silent-ok
         return jsonify({"ok": False, "error": str(e)[:160]}), 500
@@ -16177,13 +16203,8 @@ def api_aigroups_create():
 
 @app.route("/aigroups/<gid>")
 def aigroup_room_page(gid):
-    """单个群的**独立房间页**：建完群就跳到这里。"""
-    from core import social_pages as _SP
-    try:
-        _social()      # 先把火种名单灌进去：否则页面上那排邀请按钮只剩「（默认火种）」
-    except Exception as _e:      # noqa: silent-ok — 灌不进去页面照样能开
-        LOG.debug("房间页注入火种失败（忽略）：%s", _e)
-    return Response(_SP.group_room_html(gid), mimetype="text/html")
+    """单个群：也统一到社交页里打开（页签切到群组并选中这个群）。"""
+    return redirect("/social?tab=groups&gid=" + str(gid))
 
 
 @app.route("/aigroups/avatar/<gid>")
@@ -16403,7 +16424,8 @@ def api_aigroup_say(gid):
     try:
         _M, G = _social()
         return jsonify(G.user_say(gid, str(data.get("text") or ""),
-                                  who=str(data.get("who") or "你")))
+                                  who=str(data.get("who") or "你"),
+                                  respond=bool(data.get("respond", True))))
     except Exception as e:      # noqa: silent-ok
         return jsonify({"ok": False, "error": str(e)[:160]}), 500
 
