@@ -229,16 +229,22 @@ function renderKeepScroll(box, html){
 //   <img> 会被任何一条宽松规则放大成巨图（我们被这个坑了三轮），background 不会。
 // 【头像用 cover】以前用 contain：竖图被整个塞进方格，两边留黑边，
 // 看起来就是"一根窄条照片"。cover 铺满方格、居中裁掉多余部分，才是头像该有的样子。
+// 【首字只做兜底】以前把首字写在格子里、图片当背景 → 背景永远在文字后面，
+//   照片上就压着一个小字。现在改成两层：字在下层，图片那张透明层盖在上面；
+//   图片没加载/不存在时那层是透明的，字才露出来。
 function avImg(name,color,size){
   const px=size||38;const c=color||'#7c6cf5';const nm=String(name||'友');
   const st='width:'+px+'px;height:'+px+'px;min-width:'+px+'px;max-width:'+px+'px;'+
     'min-height:'+px+'px;max-height:'+px+'px;border-radius:10px;overflow:hidden;'+
-    'background-color:'+c+';background-image:url(&quot;/personas/avatar/'+
-    encodeURIComponent(nm)+'?t='+Date.now()+'&quot;);background-size:cover;'+
-    'background-position:center;background-repeat:no-repeat;'+
+    'background-color:'+c+';position:relative;'+
     'display:inline-flex;align-items:center;justify-content:center;font-size:'+
     Math.round(px*0.42)+'px;color:#fff;flex:0 0 auto;vertical-align:middle';
-  return '<span style="'+st+'">'+esc(nm.slice(0,1))+'</span>';
+  const pic='position:absolute;left:0;top:0;right:0;bottom:0;border-radius:inherit;'+
+    'background-image:url(&quot;/personas/avatar/'+encodeURIComponent(nm)+'?t='+
+    Date.now()+'&quot;);background-size:cover;background-position:center;'+
+    'background-repeat:no-repeat';
+  return '<span style="'+st+'">'+esc(nm.slice(0,1))+
+    '<span style="'+pic+'"></span></span>';
 }
 function shortName(n){n=String(n||'');return n.length>14?(n.slice(0,12)+'\u2026'):n}
 """
@@ -529,7 +535,7 @@ async function loadChat(){
     ((g.files||[]).length?(' ｜ 文件 '+(g.files||[]).length):'');
   const pav=document.getElementById('pav');
   if(g.avatar){
-    pav.innerHTML=esc((g.name||'焦').slice(0,1));
+    pav.innerHTML='';            // 有照片就不要再压首字
     pav.style.backgroundImage='url(/aigroups/avatar/'+CUR+'?t='+Date.now()+')';
     pav.style.backgroundSize='cover';
     pav.style.backgroundPosition='center';
@@ -888,7 +894,7 @@ async function frOpen(name){
   document.getElementById('fr_sub').textContent=(f.persona||'还没写性格').slice(0,40)+
     ' ｜ 动态 '+((d.moments||[]).length)+' 条';
   const fav=document.getElementById('fr_avatar');
-  fav.innerHTML=esc((f.name||'友').slice(0,1));
+  fav.innerHTML=f.avatar?'':esc((f.name||'友').slice(0,1));   // 有照片就不再压首字
   fav.style.backgroundImage=f.avatar?('url(/personas/avatar/'+encodeURIComponent(name)+
     '?t='+Date.now()+')'):'';
   fav.style.backgroundSize='cover';
