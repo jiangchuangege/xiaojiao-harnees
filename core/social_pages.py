@@ -708,11 +708,6 @@ def _friends_inner():
 
     <div class="fview" id="fr_v_chat">
       <div class="pbody" id="fr_msgs"><div class="muted">左边选一个好友。</div></div>
-      <div class="pfoot">
-        <div class="row"><input class="grow" id="fr_say" placeholder="跟他说点什么…（他不回你也会自己找你）"/>
-          <button id="fr_send">发送</button></div>
-        <div class="muted" id="fr_msg" style="margin-top:6px"></div>
-      </div>
     </div>
 
     <div class="fview" id="fr_v_moments" style="display:none">
@@ -735,6 +730,13 @@ def _friends_inner():
         <input type="file" id="fr_avatar_file" accept="image/*" style="display:none"/>
       </div>
     </div>
+
+    <!-- 输入框固定在面板底部（不放在任何 fview 里） -->
+    <div class="pfoot" id="fr_foot">
+      <div class="row"><input class="grow" id="fr_say" placeholder="跟他说点什么…（他不回你也会自己找你）"/>
+        <button id="fr_send">发送</button></div>
+      <div class="muted" id="fr_msg" style="margin-top:6px"></div>
+    </div>
   </div>
 </div>
 """
@@ -746,9 +748,10 @@ function frToast(m,ok){const el=document.getElementById('fr_msg');
 function frShow(v){
   ['chat','moments','set'].forEach(function(x){
     const el=document.getElementById('fr_v_'+x);if(!el)return;
-    // 【聊天视图必须是 flex】否则 .pbody 的 flex:1 失效 → 消息区撑高 → 底部输入框被顶出面板
     el.style.display=(x===v)?(x==='chat'?'flex':'block'):'none';
   });
+  const foot=document.getElementById('fr_foot');
+  if(foot)foot.style.display=(v==='chat')?'':'none';   // 只在聊天视图显示输入框
 }
 document.querySelectorAll('button[data-fview]').forEach(function(b){
   b.onclick=function(){frShow(b.dataset.fview)}});
