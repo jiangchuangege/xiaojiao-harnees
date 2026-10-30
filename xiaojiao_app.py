@@ -1517,6 +1517,8 @@ def _prune_generic_noun(q):
 
 # 当前这次对话的用户原话（供工具层判断"模型是不是只截了一个碎片"）
 _CTX = {"user_input": "", "route_kind": "", "route_query": ""}
+# 融合换火种的冷却时间戳：全军覆没后 5 分钟内不再试（否则每个请求白扔 40 秒）
+_ALT_COOL = {"until": 0.0}
 
 
 # ================== Bug 2：同一轮"同一 URL 的同一工具"只许调一次 ==================
@@ -2735,16 +2737,32 @@ def _fuse_alt_llm(messages, temperature=0.3):
     限时 25 秒、最多试 3 颗，避免全挂时把一轮拖成几分钟。
     """
     _t0 = time.time()
+    # 【冷却】上一次全军覆没之后，短时间内不再试——否则每个请求白扔 40 秒。
+    try:
+        if _ALT_COOL.get("until", 0) > time.time():
+            LOG.info("融合·备用火种冷却中（%ds 后再试），这轮不换", int(_ALT_COOL["until"] - time.time()))
+            return "", ""
+    except Exception:      # noqa: silent-ok
+        pass
     try:
         import requests as _rq
         _base = (LLM_BASE or "").rstrip("/")
         _j = _rq.get(_base + "/models", timeout=3).json()
-        _ids = [str(m.get("id") or "") for m in (_j.get("data") or []) if m.get("id")]
+        _rows = _j.get("data") or []
+        _ids = [str(m.get("id") or "") for m in _rows if m.get("id")]
+        # 【只换已经热着的火种】加载一颗新模型要 20~40 秒，而且 llama-swap 会把
+        # 主火种挤出显存 —— 下一轮请求又得重载它。实测这正是"越用越慢"的来源：
+        # 一次 40 秒超时、主火种被换走、下次再等 20 秒加载。
+        _hot = [str(m.get("id") or "") for m in _rows
+                if str(((m.get("status") or {}).get("value")) or "") == "loaded"]
     except Exception as e:      # noqa: silent-ok — 列不出来就当作没有备用火种
         LOG.debug("融合·列火种失败：%s", e)
         return "", ""
     _cur = str(MODEL_NAME or "")
-    _cand = [m for m in _ids if m != _cur][:3]
+    _cand = [m for m in _hot if m != _cur][:3]
+    if not _cand:
+        LOG.info("融合·没有热着的备用火种（不为它去加载模型，那会把主火种挤走）→ 这轮由载体组织语言")
+        return "", ""
     _prev = _CTX.get("force_model")
     try:
         for _m in _cand:
@@ -2766,6 +2784,10 @@ def _fuse_alt_llm(messages, temperature=0.3):
         else:
             _CTX["force_model"] = _prev
     LOG.info("融合·备用火种都没应答（试了 %d 颗 / %.1fs）", len(_cand), time.time() - _t0)
+    try:
+        _ALT_COOL["until"] = time.time() + 300.0      # 5 分钟内不再换火种
+    except Exception:      # noqa: silent-ok
+        pass
     return "", ""
 
 
