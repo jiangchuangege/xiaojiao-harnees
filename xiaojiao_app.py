@@ -20838,7 +20838,7 @@ HTML = r"""<!DOCTYPE html>
 function openSocial(tab){
   var ov=document.getElementById('socialOv');
   var f=document.getElementById('socialFrame');
-  f.src='/social?embed=1&tab='+(tab||'moments');
+  f.src='/social?embed=1&tab='+(tab||'moments')+'&v='+Date.now();
   ov.style.display='block';
   document.body.style.overflow='hidden';
 }

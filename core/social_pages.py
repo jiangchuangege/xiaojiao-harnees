@@ -116,8 +116,14 @@ align-items:center;flex-wrap:wrap}
 .gav{width:44px;height:44px;border-radius:12px;background:#2a3140;display:flex;
 align-items:center;justify-content:center;font-size:18px;color:#fff;overflow:hidden;flex:0 0 auto}
 .gav img{width:100%;height:100%;object-fit:contain;display:block;background:#0f141d}
-/* 气泡里的图片也不许超宽 */
-.msg .b img{max-width:100%;height:auto;border-radius:10px;display:block}
+/* 【图片兜底】任何图片都不许撑破容器；聊天区里的图片还要限高 */
+img{max-width:100%;height:auto}
+.pbody img,.msg img,.mtext img{max-width:100%;max-height:260px;height:auto;object-fit:contain;
+border-radius:10px;display:block}
+/* 【头像列不许被压缩】否则名字会被挤成一列字 */
+.msg{min-width:0}
+.msg>span{flex:0 0 auto}
+.pavbox,.gav{min-width:44px;max-width:44px;min-height:44px;max-height:44px}
 .favatar{width:46px;height:46px;border-radius:12px;overflow:hidden;background:#2a3140;
 display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff;flex:0 0 auto}
 .favatar img{width:100%;height:100%;object-fit:contain;display:block;background:#0f141d}
@@ -507,7 +513,8 @@ async function loadChat(){
   document.getElementById('pSub').textContent=(g.topic||'无主题')+' ｜ '+(g.members||[]).length+' 人'+
     ((g.files||[]).length?(' ｜ 文件 '+(g.files||[]).length):'');
   const pav=document.getElementById('pav');
-  pav.innerHTML=g.avatar?'<img src="/aigroups/avatar/'+CUR+'?t='+Date.now()+'"/>':esc((g.name||'焦').slice(0,1));
+  pav.innerHTML=g.avatar?('<img src="/aigroups/avatar/'+CUR+'?t='+Date.now()+
+    '" style="width:44px;height:44px;object-fit:contain;display:block"/>'):esc((g.name||'焦').slice(0,1));
   const M=g.members||[];const cmap={};const mm={};
   M.forEach(function(x){cmap[x.name]=x.color;mm[x.name]=x});
   const msgs=g.messages||[];
