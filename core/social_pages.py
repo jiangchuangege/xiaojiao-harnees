@@ -55,10 +55,13 @@ display:flex;flex-direction:column;min-height:60vh}
 .chatbody{padding:14px;overflow:auto;flex:1;max-height:56vh}
 .chatfoot{padding:12px 14px;border-top:1px solid var(--line)}
 .msg{display:flex;gap:9px;margin:10px 0;align-items:flex-start}
-.msg .b{background:var(--card2);border-radius:12px;padding:8px 12px;max-width:76%;
-white-space:pre-wrap;word-break:break-word}
+.msg>div{flex:1 1 auto;min-width:0}
+.msg .b{display:inline-block;background:var(--card2);border-radius:12px;padding:8px 12px;
+width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;
+text-align:left;min-width:2em}
 .msg.me{flex-direction:row-reverse}
-.msg.me .b{background:#2a3560}
+.msg.me>div{text-align:right}
+.msg.me .b{background:#2a3560;text-align:left}
 .msg .meta{font-size:12px;color:var(--dim);margin-bottom:2px}
 /* ---- 朋友圈 ---- */
 .mpost{display:flex;gap:11px}
@@ -95,9 +98,6 @@ align-items:center;flex-wrap:wrap}
 .fchip{background:#1c2536;border:1px solid #26324a;border-radius:999px;padding:2px 10px;
 
 /* ---- 消息：气泡要有最小宽度，别被挤成一列字 ---- */
-.msg>div{flex:1;min-width:0}
-.msg .b{min-width:3em;word-break:break-word;white-space:pre-wrap}
-.msg.me>div{display:flex;flex-direction:column;align-items:flex-end}
 .favatar{width:46px;height:46px;border-radius:12px;overflow:hidden;background:#2a3140;
 display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff;flex:0 0 auto}
 .favatar img{width:100%;height:100%;object-fit:cover;display:block}
