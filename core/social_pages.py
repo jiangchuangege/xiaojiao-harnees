@@ -109,6 +109,7 @@ height:calc(100vh - 200px)}                     /* 兜底：算准了 fitChat �
 .filebar{border-top:1px dashed #222a38;padding:7px 12px;display:flex;gap:8px;
 align-items:center;flex-wrap:wrap}
 .fchip{background:#1c2536;border:1px solid #26324a;border-radius:999px;padding:2px 10px;
+font-size:12px;color:#c9d4ec;text-decoration:none}
 
 /* ---- 消息：气泡要有最小宽度，别被挤成一列字 ---- */
 /* 【头像容器必须有尺寸】.gav 原来只在 .rhead 下才有宽高，
@@ -123,21 +124,12 @@ border-radius:10px;display:block}
 /* 【头像列不许被压缩】否则名字会被挤成一列字 */
 .msg{min-width:0}
 .msg>span{flex:0 0 auto!important}
-/* 【用 !important 钉死头像尺寸】—— 群里那张巨图就是"容器尺寸被覆盖"造成的，
-   普通优先级挡不住，这里一律钉死：头像格最大 46px，头像图 100% 撑满格子。 */
-.msg>span{width:34px!important;max-width:34px!important;height:34px!important;
-max-height:34px!important;overflow:hidden!important}
-.msg>span img{width:34px!important;max-width:34px!important;height:34px!important;
-max-height:34px!important;object-fit:contain!important}
-.gav,.favatar{width:44px!important;max-width:44px!important;height:44px!important;
-max-height:44px!important;overflow:hidden!important}
-.gav img,.favatar img{width:100%!important;height:100%!important;max-height:100%!important;
-object-fit:contain!important;display:block!important}
+/* 【尺寸只留一处真源】.gav / .favatar 的基础宽高在上面的规则里，
+   这里不再用 !important 覆盖：覆盖会把好友聊天的 46px 头像压成 34px。 */
 .favatar{width:46px;height:46px;border-radius:12px;overflow:hidden;background:#2a3140;
 display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff;flex:0 0 auto}
 .favatar img{width:100%;height:100%;object-fit:contain;display:block;background:#0f141d}
 .fview{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:hidden}
-font-size:12px;color:#c9d4ec;text-decoration:none}
 /* 【抽屉必须是浮层】原来它排在 .im 之后，而页面为了锁高度设了 overflow:hidden，
    抽屉被排到视口外、页面又不能滚 → 「退出群聊」永远点不到。改成 fixed 居中浮层。 */
 .drawer{display:none;position:fixed;left:50%;top:60px;transform:translateX(-50%);
