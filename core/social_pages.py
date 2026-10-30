@@ -149,20 +149,38 @@ function stickBottom(box){
 //   在底部就跟到最新；在往回翻就原地不动。这一条是"滚动条老跳回顶部"的正解。
 // 【不要闪】先比签名：消息没变就一个字都不重绘（轮询每几秒一次，重绘就会闪）。
 //   变了才重绘，并按"是否贴底"决定钉到底还是原地不动。
-function msgSig(items){
-  return (items||[]).map(function(x,i){
-    return (x&&(x.id||''))+'|'+((x&&x.ts)||'')+'|'+((x&&(x.text||''))||'').length;
-  }).join(';');
+// 单条消息的签名：发送方 + 长度 + 前 16 字。**故意不含 id / 时间** ——
+// 这样"本地先显示的这条"和"服务器回来的同一条"签名一致，增量追加不会重复。
+function oneSig(m){
+  m=m||{};
+  const who=String(m.from||m.who||'');
+  const t=String(m.text||'');
+  return who+'|'+t.length+'|'+t.slice(0,16);
 }
-function patchMessages(box, items, html){
+function msgSig(items){
+  return (items||[]).map(oneSig).join('\u0001');
+}
+function patchMessages(box, items, html, htmlOne, sigsIn){
   if(!box)return;
-  const sig=msgSig(items);
-  if(box.dataset.sig===sig)return;                 // 没变化 → 不重绘（这才是"不闪"的关键）
+  const sigs=sigsIn||(items||[]).map(oneSig);
+  const prevSigs=(box.dataset.sigs||'');
+  const prev=prevSigs?prevSigs.split('\u0001'):[];
   const nearBottom=(box.scrollHeight-box.scrollTop-box.clientHeight)<80;
-  const prev=box.scrollTop;
-  box.innerHTML=html;
-  box.dataset.sig=sig;
-  if(nearBottom){stickBottom(box);}else{box.scrollTop=prev;}
+  const keep=box.scrollTop;
+  let changed=false;
+  if(prev.length===sigs.length&&prev.every(function(v,i){return v===sigs[i]})){
+    return;                                   // 完全没变 → 不重绘
+  }
+  const isExtend=prev.length>0&&sigs.length>prev.length&&
+    prev.every(function(v,i){return v===sigs[i]});
+  if(isExtend&&htmlOne){                      // 只是多了几条 → 只追加，不动老的
+    const add=items.slice(prev.length).map(htmlOne).join('');
+    if(add){box.insertAdjacentHTML('beforeend',add);changed=true;}
+  }else{                                      // 历史被改写 → 才整块重建
+    box.innerHTML=html;changed=true;
+  }
+  box.dataset.sigs=sigs.join('\u0001');
+  if(changed){if(nearBottom){stickBottom(box);}else{box.scrollTop=keep;}}
 }
 function renderKeepScroll(box, html){
   if(!box){return;}
@@ -469,7 +487,7 @@ async function loadChat(){
   const M=g.members||[];const cmap={};const mm={};
   M.forEach(function(x){cmap[x.name]=x.color;mm[x.name]=x});
   const msgs=g.messages||[];
-  const _mhtml=msgs.length?msgs.map(function(x){
+  const gOneHtml=function(x){
     const me=(x.who==='你');
     const adm=(mm[x.who]||{}).admin?' <span class="tag">管理员</span>':'';
     const meta=ht(x.ts)+(x.sec?(' · '+x.sec+'s'):'')+
@@ -484,9 +502,9 @@ async function loadChat(){
       (isDefault?' <span class="tag">默认角色</span>':'')+
       ' <span class="muted">'+meta+'</span></div>'+
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+esc(x.text)+'</div>'+acts+'</div></div>';
-  }).join(''):'<div class="muted">还没有人说话。它们自己一会儿就开口。</div>';
+  }; const _mhtml=msgs.length?msgs.map(gOneHtml).join(''):'<div class="muted">还没有人说话。它们自己一会儿就开口。</div>';
   const box=document.getElementById('msgs');
-  patchMessages(box,msgs,_mhtml);LASTN=msgs.length;
+  patchMessages(box,msgs,_mhtml,gOneHtml);LASTN=msgs.length;
   // 红点：进来就算已读
   if((GROUPS.filter(function(x){return x.id===CUR})[0]||{}).unread)loadList();
   // 群文件条
@@ -764,7 +782,7 @@ async function frOpen(name){
     '" style="width:100%;height:100%;object-fit:cover"/>':esc((f.name||'友').slice(0,1));
   const hs=d.history||[];
   FRHIST=hs;
-  const _fhtml=hs.length?hs.map(function(m){
+  const frOneHtml=function(m){
     const me=(m.from==='user');
     const tag=(!me&&m.why&&m.why!=='回你')?' <span class="tag">他主动找你</span>':'';
     const head=me?avImg('你','#3d5afe',34):avImg(f.name||name,f.color,34);
@@ -773,8 +791,8 @@ async function frOpen(name){
       '<span class="muted">'+ht(m.ts)+(m.by?(' · 火种 '+esc(m.by)):'')+'</span></div>'+
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+
       esc(m.text)+'</div></div></div>';
-  }).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
-  const box=document.getElementById('fr_msgs');patchMessages(box,hs,_fhtml);
+  }; const _fhtml=hs.length?hs.map(frOneHtml).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
+  const box=document.getElementById('fr_msgs');patchMessages(box,hs,_fhtml,frOneHtml);
   const ms=d.moments||[];
   document.getElementById('fr_moments').innerHTML=ms.length?ms.map(function(p){
     const cm=(p.comments||[]).map(function(c){
@@ -828,7 +846,7 @@ async function frSyncMessages(){
   if(!d.ok)return;
   const hs=d.history||[];FRHIST=hs;
   const f=d.friend||{};
-  const _fhtml=hs.length?hs.map(function(m){
+  const frOneHtml2=function(m){
     const me=(m.from==='user');
     const tag=(!me&&m.why&&m.why!=='回你')?' <span class="tag">他主动找你</span>':'';
     const head=me?avImg('你','#3d5afe',34):avImg(f.name||FRCUR,f.color,34);
@@ -837,8 +855,8 @@ async function frSyncMessages(){
       '<span class="muted">'+ht(m.ts)+(m.by?(' · 火种 '+esc(m.by)):'')+'</span></div>'+
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;'+
       'word-break:break-word;text-align:left;min-width:2em">'+esc(m.text)+'</div></div></div>';
-  }).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
-  patchMessages(document.getElementById('fr_msgs'),hs,_fhtml);
+  }; const _fhtml=hs.length?hs.map(frOneHtml2).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
+  patchMessages(document.getElementById('fr_msgs'),hs,_fhtml,frOneHtml2);
 }
 document.getElementById('fr_send').onclick=frSay;
 document.getElementById('fr_say').addEventListener('keydown',function(e){
