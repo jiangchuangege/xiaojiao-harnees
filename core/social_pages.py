@@ -425,6 +425,7 @@ def _groups_inner():
       <button class="ghost sm" data-drawer="mem">成员</button>
       <button class="ghost sm" data-drawer="files">文件</button>
       <button class="ghost sm" data-drawer="set">设置</button>
+      <button class="sm danger" id="btnQuitTop" title="退出并删除这个群">退出群</button>
     </div>
 
     <div class="pbody" id="msgs"><div class="muted">左边点一个群进来。</div></div>
@@ -552,7 +553,8 @@ async function loadChat(){
     const acts=(x.actions&&x.actions.length)?
       ('<div class="muted" style="font-size:11px;margin-top:3px">⚙ 动过 '+x.actions.length+
        ' 下：'+x.actions.map(function(a){return esc(a.tool)}).join('、')+'</div>'):'';
-    return '<div class="msg '+(me?'me':'')+'>'+avImg(x.who,cmap[x.who]||'#5a6478',34)+
+    // 【群聊不再画头像块】群是"一屋子人"，名字+颜色已经够区分；这条路径上不再有任何图片
+    return '<div class="msg '+(me?'me':'')+'>'+
       '<div><div class="meta"><b style="color:'+(cmap[x.who]||'#9aa3b5')+'">'+
       esc(shortName(x.who))+'</b>'+adm+
       (isDefault?' <span class="tag">默认角色</span>':'')+
@@ -699,6 +701,12 @@ document.getElementById('avatarFile').onchange=function(){
     const d=await P('/api/aigroups/'+CUR+'/avatar',{data:rd.result});
     toast(document.getElementById('setMsg'),d.ok?'群头像已换':(d.error||'失败'),!!d.ok);if(d.ok)loadChat();};
   rd.readAsDataURL(f);this.value='';};
+document.getElementById('btnQuitTop').onclick=async function(){
+  if(!CUR)return;
+  const nm=document.getElementById('pName').textContent||'这个群';
+  if(!confirm('退出并删除「'+nm+'」？聊天记录会一起没了。'))return;
+  const d=await D('/api/aigroups/'+CUR);
+  if(d.ok){CUR='';location.reload()}else{toast(document.getElementById('cmsg'),d.error||'失败')}};
 document.getElementById('btnQuit').onclick=async function(){
   if(!CUR)return;
   const nm=document.getElementById('pName').textContent||'这个群';
