@@ -1537,17 +1537,6 @@ xiaojiao-harness/
 
 ---
 
-## License
-
-基于 [MIT License](LICENSE) 开源，可自由使用、修改与分发。
-
-<div align="center">
-
-**小焦 · 用一小块本地模型，装下一个人格与一个世界。**
-
-</div>
-
-
 ## 实测规模（自动维护）
 
 <!-- AUTO-NUMBERS:BEGIN -->
@@ -1565,3 +1554,15 @@ xiaojiao-harness/
 > 这张表由 `python tools/sync_doc_numbers.py --write` 现算现写，不是手抄的。
 
 <!-- AUTO-NUMBERS:END -->
+
+---
+
+## License
+
+基于 [MIT License](LICENSE) 开源，可自由使用、修改与分发。
+
+<div align="center">
+
+**小焦 · 用一小块本地模型，装下一个人格与一个世界。**
+
+</div>
