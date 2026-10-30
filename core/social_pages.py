@@ -145,6 +145,15 @@ function stickBottom(box){
   const go=function(){try{box.scrollTop=box.scrollHeight}catch(e){}};
   go();requestAnimationFrame(go);setTimeout(go,120);setTimeout(go,400);
 }
+// 【重绘不打断阅读】只改内容，滚动位置按"之前是否在底部"决定：
+//   在底部就跟到最新；在往回翻就原地不动。这一条是"滚动条老跳回顶部"的正解。
+function renderKeepScroll(box, html){
+  if(!box){return;}
+  const nearBottom=(box.scrollHeight-box.scrollTop-box.clientHeight)<80;
+  const prev=box.scrollTop;
+  box.innerHTML=html;
+  if(nearBottom){stickBottom(box);}else{box.scrollTop=prev;}
+}
 // 【同一个人的头像到处一样】有上传的头像就显示图片，没有就退回首字色块。
 //   好友列表 / 一对一聊天 / 群聊 / 朋友圈 都用这一个函数，不会再一会字母一会照片。
 function avImg(name,color,size){
@@ -443,7 +452,7 @@ async function loadChat(){
   const M=g.members||[];const cmap={};const mm={};
   M.forEach(function(x){cmap[x.name]=x.color;mm[x.name]=x});
   const msgs=g.messages||[];
-  document.getElementById('msgs').innerHTML=msgs.length?msgs.map(function(x){
+  const _mhtml=msgs.length?msgs.map(function(x){
     const me=(x.who==='你');
     const adm=(mm[x.who]||{}).admin?' <span class="tag">管理员</span>':'';
     const meta=ht(x.ts)+(x.sec?(' · '+x.sec+'s'):'')+
@@ -460,7 +469,7 @@ async function loadChat(){
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+esc(x.text)+'</div>'+acts+'</div></div>';
   }).join(''):'<div class="muted">还没有人说话。它们自己一会儿就开口。</div>';
   const box=document.getElementById('msgs');
-  if(msgs.length!==LASTN){stickBottom(box);LASTN=msgs.length}
+  renderKeepScroll(box,_mhtml);LASTN=msgs.length;
   // 红点：进来就算已读
   if((GROUPS.filter(function(x){return x.id===CUR})[0]||{}).unread)loadList();
   // 群文件条
@@ -734,7 +743,7 @@ async function frOpen(name){
     '" style="width:100%;height:100%;object-fit:cover"/>':esc((f.name||'友').slice(0,1));
   const hs=d.history||[];
   FRHIST=hs;
-  document.getElementById('fr_msgs').innerHTML=hs.length?hs.map(function(m){
+  const _fhtml=hs.length?hs.map(function(m){
     const me=(m.from==='user');
     const tag=(!me&&m.why&&m.why!=='回你')?' <span class="tag">他主动找你</span>':'';
     const head=me?avImg('你','#3d5afe',34):avImg(f.name||name,f.color,34);
@@ -744,7 +753,7 @@ async function frOpen(name){
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+
       esc(m.text)+'</div></div></div>';
   }).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
-  const box=document.getElementById('fr_msgs');stickBottom(box);
+  const box=document.getElementById('fr_msgs');renderKeepScroll(box,_fhtml);
   const ms=d.moments||[];
   document.getElementById('fr_moments').innerHTML=ms.length?ms.map(function(p){
     const cm=(p.comments||[]).map(function(c){

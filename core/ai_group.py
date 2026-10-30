@@ -44,6 +44,14 @@ _MODEL = ""
 
 MAX_MEMBERS = 8
 ACT_PROB = 0.45        # 默认几率（群没设节奏时用）
+
+# 【分工发言】同一颗火种被问同一个问题，只会给相似答案 → 由载体给每个人分配不同角度。
+ANGLES = [
+    "提一个具体的问题（问清楚时间、数字、责任人或下一步）",
+    "补一个具体细节（时间/地点/数字/你踩过的一个坑）",
+    "唱个反调或指出一个风险（别客气，但要具体）",
+    "用一两句话给个结论或决定（别复述前面的讨论）",
+]
 ACT_MIN_GAP = 1        # 同一个成员最少隔几条消息才再动手（避免一直闷头干活不说话）
 
 # 【按群的节奏】用户原话：「可以改成按群的节奏（比如"这个群是开发群，就多动手少聊天"）」
@@ -814,7 +822,7 @@ def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
     except Exception as _e:      # noqa: silent-ok
         LOG.debug("群组·轮转指针保存失败：%s", _e)
     for r in range(rounds):
-        for m in _order:
+        for _idx, m in enumerate(_order):
             msgs = (get(gid) or {}).get("messages") or []
             recent = msgs[-CTX_MSGS:]
             sys_p = ("这是一个%s人组成的群聊，你的名字是%s。像真人微信群里聊天那样说话："
@@ -839,6 +847,9 @@ def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
                           "该动手就动手，别只在嘴上说；做完用一两句话说清你做了什么、结果如何。")
             if g.get("style"):
                 sys_p += "\n群规矩：" + str(g.get("style"))[:300]
+            # 这一轮这个人的角度（轮转，避免同一个人一直是"提问者"）
+            _angle = ANGLES[(_idx + _rr + r) % len(ANGLES)]
+            sys_p += "\n【这一轮你的角色】" + _angle + "。不要重复别人说过的内容。"
             _pc = PACES.get(pace_of(g)) or PACES["mixed"]
             sys_p += "\n本群节奏：" + str(_pc.get("hint") or "")[:160]
             # 【互相蒸馏】把本群已经聊出来的共识带上 —— 越聊越聪明靠这一条
