@@ -147,6 +147,23 @@ function stickBottom(box){
 }
 // 【重绘不打断阅读】只改内容，滚动位置按"之前是否在底部"决定：
 //   在底部就跟到最新；在往回翻就原地不动。这一条是"滚动条老跳回顶部"的正解。
+// 【不要闪】先比签名：消息没变就一个字都不重绘（轮询每几秒一次，重绘就会闪）。
+//   变了才重绘，并按"是否贴底"决定钉到底还是原地不动。
+function msgSig(items){
+  return (items||[]).map(function(x,i){
+    return (x&&(x.id||''))+'|'+((x&&x.ts)||'')+'|'+((x&&(x.text||''))||'').length;
+  }).join(';');
+}
+function patchMessages(box, items, html){
+  if(!box)return;
+  const sig=msgSig(items);
+  if(box.dataset.sig===sig)return;                 // 没变化 → 不重绘（这才是"不闪"的关键）
+  const nearBottom=(box.scrollHeight-box.scrollTop-box.clientHeight)<80;
+  const prev=box.scrollTop;
+  box.innerHTML=html;
+  box.dataset.sig=sig;
+  if(nearBottom){stickBottom(box);}else{box.scrollTop=prev;}
+}
 function renderKeepScroll(box, html){
   if(!box){return;}
   const nearBottom=(box.scrollHeight-box.scrollTop-box.clientHeight)<80;
@@ -469,7 +486,7 @@ async function loadChat(){
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+esc(x.text)+'</div>'+acts+'</div></div>';
   }).join(''):'<div class="muted">还没有人说话。它们自己一会儿就开口。</div>';
   const box=document.getElementById('msgs');
-  renderKeepScroll(box,_mhtml);LASTN=msgs.length;
+  patchMessages(box,msgs,_mhtml);LASTN=msgs.length;
   // 红点：进来就算已读
   if((GROUPS.filter(function(x){return x.id===CUR})[0]||{}).unread)loadList();
   // 群文件条
@@ -713,6 +730,10 @@ function frAv(name,avatar,color,size){
 async function frLoadList(){
   const d=await J('/api/friends');FRFRIENDS=d.friends||[];
   const box=document.getElementById('fr_list');
+  const _sig=JSON.stringify(FRFRIENDS.map(function(f){
+    return [f.name,f.unread,f.last,f.last_from,f.avatar,f.relation]}));
+  if(box.dataset.sig===_sig)return;      // 列表没变化 → 不重绘
+  box.dataset.sig=_sig;
   box.innerHTML=FRFRIENDS.length?FRFRIENDS.map(function(f){
     const un=f.unread||0;
     return '<div class="gitem '+(f.name===FRCUR?'on':'')+'" data-fname="'+esc(f.name)+'">'+
@@ -753,7 +774,7 @@ async function frOpen(name){
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+
       esc(m.text)+'</div></div></div>';
   }).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
-  const box=document.getElementById('fr_msgs');renderKeepScroll(box,_fhtml);
+  const box=document.getElementById('fr_msgs');patchMessages(box,hs,_fhtml);
   const ms=d.moments||[];
   document.getElementById('fr_moments').innerHTML=ms.length?ms.map(function(p){
     const cm=(p.comments||[]).map(function(c){
@@ -798,7 +819,26 @@ async function frSay(){
   const d=await P('/api/friends/'+encodeURIComponent(FRCUR)+'/say',{text:t});
   if(!d.ok){frToast(d.error||'发送失败');return}
   frToast(d.reply?'他回了':('他这次没回：'+((d.why)||'')),true);
-  await frOpen(FRCUR);
+  await frSyncMessages();       // 只同步消息（不重建整个面板，避免"闪一下"）
+}
+// 轻量同步：只拉当前好友的消息，patch 进消息区
+async function frSyncMessages(){
+  if(!FRCUR)return;
+  const d=await J('/api/friends/'+encodeURIComponent(FRCUR));
+  if(!d.ok)return;
+  const hs=d.history||[];FRHIST=hs;
+  const f=d.friend||{};
+  const _fhtml=hs.length?hs.map(function(m){
+    const me=(m.from==='user');
+    const tag=(!me&&m.why&&m.why!=='回你')?' <span class="tag">他主动找你</span>':'';
+    const head=me?avImg('你','#3d5afe',34):avImg(f.name||FRCUR,f.color,34);
+    return '<div class="msg '+(me?'me':'')+'">'+head+'<div><div class="meta">'+
+      '<b>'+esc(me?'你':(f.name||FRCUR))+'</b>'+tag+
+      '<span class="muted">'+ht(m.ts)+(m.by?(' · 火种 '+esc(m.by)):'')+'</span></div>'+
+      '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;'+
+      'word-break:break-word;text-align:left;min-width:2em">'+esc(m.text)+'</div></div></div>';
+  }).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
+  patchMessages(document.getElementById('fr_msgs'),hs,_fhtml);
 }
 document.getElementById('fr_send').onclick=frSay;
 document.getElementById('fr_say').addEventListener('keydown',function(e){
@@ -835,12 +875,8 @@ document.getElementById('fr_avatar_file').onchange=function(){
 frLoadList();
 setInterval(function(){
   frLoadList();
-  if(FRCUR){  // 当前好友：静默刷新消息，新来的自己冒出来
-    J('/api/friends/'+encodeURIComponent(FRCUR)).then(function(d){
-      if(!d||!d.ok)return;
-      const hs=d.history||[];
-      if(hs.length!==FRHIST.length){frOpen(FRCUR)}
-    });
+  if(FRCUR){  // 当前好友：静默同步消息（没变化就完全不重绘）
+    frSyncMessages();
   }
 },5000);
 """
