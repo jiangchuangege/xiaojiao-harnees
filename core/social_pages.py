@@ -116,7 +116,7 @@ font-size:12px;color:#c9d4ec;text-decoration:none}
    群聊面板头用的是 .phead > .gav#pav → 上传群头像后图片按自然尺寸铺开，撑爆聊天区。 */
 .gav{width:44px;height:44px;border-radius:12px;background:#2a3140;display:flex;
 align-items:center;justify-content:center;font-size:18px;color:#fff;overflow:hidden;flex:0 0 auto}
-.gav img{width:100%;height:100%;object-fit:contain;display:block;background:#0f141d}
+.gav img{width:100%;height:100%;object-fit:cover;display:block;background:#0f141d}
 /* 【图片兜底】任何图片都不许撑破容器；聊天区里的图片还要限高 */
 img{max-width:100%;height:auto}
 .pbody img,.msg img,.mtext img{max-width:100%;max-height:260px;height:auto;object-fit:contain;
@@ -128,7 +128,7 @@ border-radius:10px;display:block}
    这里不再用 !important 覆盖：覆盖会把好友聊天的 46px 头像压成 34px。 */
 .favatar{width:46px;height:46px;border-radius:12px;overflow:hidden;background:#2a3140;
 display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff;flex:0 0 auto}
-.favatar img{width:100%;height:100%;object-fit:contain;display:block;background:#0f141d}
+.favatar img{width:100%;height:100%;object-fit:cover;display:block;background:#0f141d}
 .fview{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:hidden}
 /* 【抽屉必须是浮层】原来它排在 .im 之后，而页面为了锁高度设了 overflow:hidden，
    抽屉被排到视口外、页面又不能滚 → 「退出群聊」永远点不到。改成 fixed 居中浮层。 */
@@ -227,12 +227,14 @@ function renderKeepScroll(box, html){
 //   好友列表 / 一对一聊天 / 群聊 / 朋友圈 都用这一个函数，不会再一会字母一会照片。
 // 【头像不用 <img>】固定尺寸格子 + background-image：
 //   <img> 会被任何一条宽松规则放大成巨图（我们被这个坑了三轮），background 不会。
+// 【头像用 cover】以前用 contain：竖图被整个塞进方格，两边留黑边，
+// 看起来就是"一根窄条照片"。cover 铺满方格、居中裁掉多余部分，才是头像该有的样子。
 function avImg(name,color,size){
   const px=size||38;const c=color||'#7c6cf5';const nm=String(name||'友');
   const st='width:'+px+'px;height:'+px+'px;min-width:'+px+'px;max-width:'+px+'px;'+
     'min-height:'+px+'px;max-height:'+px+'px;border-radius:10px;overflow:hidden;'+
     'background-color:'+c+';background-image:url(&quot;/personas/avatar/'+
-    encodeURIComponent(nm)+'?t='+Date.now()+'&quot;);background-size:contain;'+
+    encodeURIComponent(nm)+'?t='+Date.now()+'&quot;);background-size:cover;'+
     'background-position:center;background-repeat:no-repeat;'+
     'display:inline-flex;align-items:center;justify-content:center;font-size:'+
     Math.round(px*0.42)+'px;color:#fff;flex:0 0 auto;vertical-align:middle';
@@ -508,6 +510,10 @@ async function loadList(){
 }
 async function openGroup(gid){
   CUR=gid;
+  // 【记住你停在哪】刷新/重开浮层后还回到这个群，不要退回默认空态
+  try{localStorage.setItem('xj_group',gid);
+    const u=new URLSearchParams(location.search);u.set('tab','groups');u.set('gid',gid);
+    history.replaceState(null,'','/social?'+u.toString())}catch(e){}
   try{await P('/api/aigroups/'+gid+'/read',{})}catch(e){}
   await loadList();await loadChat();
 }
@@ -525,7 +531,7 @@ async function loadChat(){
   if(g.avatar){
     pav.innerHTML=esc((g.name||'焦').slice(0,1));
     pav.style.backgroundImage='url(/aigroups/avatar/'+CUR+'?t='+Date.now()+')';
-    pav.style.backgroundSize='contain';
+    pav.style.backgroundSize='cover';
     pav.style.backgroundPosition='center';
     pav.style.backgroundRepeat='no-repeat';
     pav.style.backgroundColor='#0f141d';
@@ -545,8 +551,9 @@ async function loadChat(){
     const acts=(x.actions&&x.actions.length)?
       ('<div class="muted" style="font-size:11px;margin-top:3px">⚙ 动过 '+x.actions.length+
        ' 下：'+x.actions.map(function(a){return esc(a.tool)}).join('、')+'</div>'):'';
-    // 【群聊不再画头像块】群是"一屋子人"，名字+颜色已经够区分；这条路径上不再有任何图片
-    return '<div class="msg '+(me?'me':'')+'>'+
+    // 【头像回来了】尺寸问题已经用「固定格子 + background cover」解决（跟好友页同一套），
+    // 不再靠删头像绕开：格子写死 38×38，图片铺满裁剪，任何规则都放大不了它。
+    return '<div class="msg '+(me?'me':'')+'>'+avImg(x.who,cmap[x.who]||'#5a6478',38)+
       '<div><div class="meta"><b style="color:'+(cmap[x.who]||'#9aa3b5')+'">'+
       esc(shortName(x.who))+'</b>'+adm+
       (isDefault?' <span class="tag">默认角色</span>':'')+
@@ -862,7 +869,12 @@ document.getElementById('fr_list').addEventListener('click',function(ev){
   const it=ev.target.closest('[data-fname]');if(!it)return;frOpen(it.dataset.fname);
 });
 async function frOpen(name){
-  FRCUR=name;frShow('chat');await frLoadList();
+  FRCUR=name;frShow('chat');
+  // 【记住你停在哪】刷新后仍然停在这个好友，不要退回「左边选一个好友」
+  try{localStorage.setItem('xj_friend',name);
+    const u=new URLSearchParams(location.search);u.set('tab','friends');u.set('f',name);
+    history.replaceState(null,'','/social?'+u.toString())}catch(e){}
+  await frLoadList();
 
 
 
@@ -879,7 +891,7 @@ async function frOpen(name){
   fav.innerHTML=esc((f.name||'友').slice(0,1));
   fav.style.backgroundImage=f.avatar?('url(/personas/avatar/'+encodeURIComponent(name)+
     '?t='+Date.now()+')'):'';
-  fav.style.backgroundSize='contain';
+  fav.style.backgroundSize='cover';
   fav.style.backgroundPosition='center';
   fav.style.backgroundRepeat='no-repeat';
   const hs=d.history||[];
@@ -1046,16 +1058,23 @@ function showTab(t){
     el.style.display=(el.id==='tab-'+t)?'block':'none'});
   document.querySelectorAll('.tab').forEach(function(b){
     b.classList.toggle('on',b.dataset.tab===t)});
-  try{history.replaceState(null,'','/social?tab='+t)}catch(e){}
+  // 保留 f / gid，不要一换页签就把「选中了谁」抹掉
+  try{const u=new URLSearchParams(location.search);u.set('tab',t);
+    history.replaceState(null,'','/social?'+u.toString());
+    localStorage.setItem('xj_tab',t)}catch(e){}
 }
 document.querySelectorAll('.tab').forEach(function(b){
   b.onclick=function(){showTab(b.dataset.tab)}});
 (function(){
-  const q=new URLSearchParams(location.search).get('tab')||'%s';
-  if(q==='moments'){try{showTab('friends')}catch(e){}}
-  showTab(q);
-  const gid=new URLSearchParams(location.search).get('gid');
+  const sp=new URLSearchParams(location.search);
+  const q=sp.get('tab')||localStorage.getItem('xj_tab')||'%s';
+  const want=(q==='moments')?'friends':q;
+  showTab(want);
+  // 【回来时选中谁】URL 上有就用 URL，否则用上次记住的
+  const gid=sp.get('gid')||localStorage.getItem('xj_group');
   if(gid&&typeof openGroup==='function'){setTimeout(function(){openGroup(gid)},300)}
+  const fname=sp.get('f')||localStorage.getItem('xj_friend');
+  if(fname&&typeof frOpen==='function'){setTimeout(function(){frOpen(fname)},350)}
 })();
 """ % (tab or "moments")
     page = _page("社交", body, js)

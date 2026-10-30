@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # 小焦系统本身不依赖任何具体模型。
 # 它是完整的载体（器官齐全），模型是火种（可替换）。
 # 接入任何模型 → 系统活；换任何模型 → 系统不变。
@@ -20853,7 +20853,11 @@ HTML = r"""<!DOCTYPE html>
 function openSocial(tab){
   var ov=document.getElementById('socialOv');
   var f=document.getElementById('socialFrame');
-  f.src='/social?embed=1&tab='+(tab||'moments')+'&v='+Date.now();
+  var t=tab;
+  try{ if(t)localStorage.setItem('xj_social_tab',t);
+       t=t||localStorage.getItem('xj_social_tab')||'moments';
+       localStorage.setItem('xj_social','1'); }catch(e){}
+  f.src='/social?embed=1&tab='+(t||'moments')+'&v='+Date.now();
   ov.style.display='block';
   document.body.style.overflow='hidden';
 }
@@ -20864,8 +20868,12 @@ function closeSocial(){
   var f=document.getElementById('socialFrame');
   if(f)f.src='about:blank';
   document.body.style.overflow='';
+  try{localStorage.removeItem('xj_social')}catch(e){}
 }
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeSocial();});
+// 【刷新不丢位置】你刷新前停在社交页，刷新后就还停在社交页
+try{ if(localStorage.getItem('xj_social')==='1'){
+  setTimeout(function(){openSocial()},700) } }catch(e){}
 </script>
 
 <div id="modalBg" class="modal-bg" style="display:none">
