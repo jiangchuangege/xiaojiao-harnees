@@ -2661,6 +2661,12 @@ def _narrate_facts(question, facts, label=""):
     _key = [n for n in _all if ("." in n or len(n) <= 5)][:6]
     # 【单位数不补】实测补出来的「原始要点：5」是纯噪音 —— 那只是 4/5 步里的那个 5。
     #   只补真正的量：两位以上、或带小数点的数。
+    # 【解说成了代码 = 没解说】实测：让它"把结果讲成人话"，它交了一段 import os / subprocess 的脚本。
+    #   用户要的是话，不是脚本；用户没要代码时，解说里出现代码块一律判失败（退回载体组织人话）。
+    if ("```" in _txt) and not re.search(r"(写代码|代码|脚本|python|函数|实现|sql|正则|报错)",
+                                         str(q), re.I):
+        LOG.warning("数据解答返回了代码块（不是人话）→ 退回载体组织的人话")
+        return "", False, []
     _miss = [n for n in _key if n not in _txt and ("." in n or len(n) >= 2)]
     if _miss:
         LOG.info("数据解答没引用到数字 %s → 保留模型的话，另附一行原始要点", _miss[:3])
@@ -2805,6 +2811,102 @@ _MOMENT_POST_RE = re.compile(
     r"(发|写|来|更)(一|个|条)?(朋友圈|动态|心情|说说)|朋友圈(发|更新)一下")
 _MOMENT_LIST_RE = re.compile(
     r"(看|看看|瞧|翻|刷)(看)?(一下)?(你的)?(朋友圈|动态|说说)|朋友圈(有|最近|里)(什么|啥|几条)")
+
+
+_WEATHER_FILE_RE = re.compile(r"(天气|气温|下雨|温度)")
+_PATH_RE = re.compile(r"([A-Za-z]:[\\/][^\s\"'，。；、]+\.[A-Za-z0-9]{2,5})")
+_CITY_RE = re.compile(r"([\u4e00-\u9fa5]{2,6})(?:市|的)?(?:今天|今日|现在)?的?天气")
+
+
+def _weather_file_task(text):
+    """这是不是「查天气 → 存到 <路径> → 打印出来」这类复合指令？
+
+    返回 (城市, 路径, 是否要打印) 或 None。
+    【为什么要载体直通】实测模型遇到这种"多步 + 落盘"的请求，会直接输出一段 Python 代码
+    假装在做事，一个工具都不调。这种活不能交给它"表演"，得载体自己一步一步做。
+    """
+    t = str(text or "")
+    if not t or not _WEATHER_FILE_RE.search(t):
+        return None
+    mp = _PATH_RE.search(t)
+    if not mp:
+        return None
+    path = mp.group(1)
+    city = ""
+    mc = _CITY_RE.search(t)
+    if mc:
+        city = mc.group(1)
+    # 「济南天气」这种也被 _CITY_RE 抓到；抓不到就留空让工具自己定默认城市
+    want_print = bool(re.search(r"(打印|输出|读出来|读取|显示内容|cat|看一下内容)", t))
+    return city, path, want_print
+
+
+def _run_weather_file_task(text):
+    """真做：查天气 → 写文件 → （可选）读回来。返回 (结果文本, 轨迹)。"""
+    spec = _weather_file_task(text)
+    if not spec:
+        return "", []
+    city, path, want_print = spec
+    rows, trace = [], []
+    # 【先把工具表建好】实测没建表时 get_weather 会返回「未知工具」，于是把这句话写进了用户文件
+    try:
+        _build_tools()
+    except Exception as _e:      # noqa: silent-ok
+        LOG.debug("天气+文件：建工具表失败 %s", _e)
+    # ① 天气（真调工具）
+    _weather_ok = False
+    _weather_txt = ""
+    try:
+        _args = {"city": city} if city else {}
+        _w = _tool_result_str(run_tool("get_weather", _args, force=True))
+        if _w and "未知工具" not in _w and not str(_w).startswith("⚠️"):
+            _weather_ok = True
+            _weather_txt = str(_w)
+            rows.append("天气工具返回：%s" % _weather_txt[:300])
+        else:
+            rows.append("天气这一步没成：%s" % str(_w)[:160])
+        trace.append(_trace_entry("get_weather", _args, str(_w)[:400]))
+        LOG.info("天气+文件：天气 → %s", str(_w)[:80])
+    except Exception as e:
+        rows.append("天气这一步失败：%s" % str(e)[:120])
+        LOG.warning("天气+文件：天气失败 %s", e)
+    # ② 把结果写进文件（内容用天气原文，不编）
+    #   【拿不到天气就不写文件】绝不把"未知工具/⚠️"这类字样写进用户的文件。
+    if not _weather_ok:
+        rows.append("因为没拿到真实天气，这一轮**没有写文件**（不拿假内容占位）。")
+        try:
+            _CTX["_wf_rows"] = "\n".join(rows)
+            _CTX["_wf_path"] = path
+        except Exception:      # noqa: silent-ok
+            pass
+        return "\n".join(rows), trace
+    _content = _weather_txt[:1500]
+    try:
+        _wr = _tool_result_str(run_tool("write_file",
+                                        {"path": path, "content": _content}, force=True))
+        rows.append("写文件返回：%s" % str(_wr)[:300])
+        trace.append(_trace_entry("write_file", {"path": path}, str(_wr)[:400]))
+        LOG.info("天气+文件：写入 %s → %s（文件存在=%s）", path, str(_wr)[:80],
+                 os.path.isfile(path))
+    except Exception as e:
+        rows.append("写文件失败：%s" % str(e)[:120])
+        LOG.warning("天气+文件：写入 %s 失败：%s", path, e)
+    # ③ 读回来 / 打印
+    if want_print:
+        try:
+            _rd = _tool_result_str(run_tool("read_file", {"path": path}, force=True))
+            rows.append("读回文件内容：%s" % str(_rd)[:300])
+            trace.append(_trace_entry("read_file", {"path": path}, str(_rd)[:400]))
+            LOG.info("天气+文件：读回 %s → %s", path, str(_rd)[:60])
+        except Exception as e:
+            rows.append("读回文件失败：%s" % str(e)[:120])
+            LOG.warning("天气+文件：读回 %s 失败：%s", path, e)
+    try:
+        _CTX["_wf_rows"] = "\n".join(rows)     # 供"最终回答不许是代码"兜底用
+        _CTX["_wf_path"] = path
+    except Exception:      # noqa: silent-ok
+        pass
+    return "\n".join(rows), trace
 
 
 def _moment_intent(text):
@@ -3220,6 +3322,17 @@ def _answer_with_facts(question, facts, label="", fallback_head=""):
     except Exception:      # noqa: silent-ok
         pass
     _n, _ok, _miss = _narrate_facts(question, facts, label)
+    # 【返回点最后一道】解说变成了代码 → 当没解说（用户没要代码时）
+    if _ok and _n and ("```" in str(_n)) and not re.search(
+            r"(写代码|代码|脚本|python|函数|实现|sql|正则|报错)", str(question or ""), re.I):
+        LOG.warning("最终解说里是代码块（不是人话）→ 改用载体组织的人话")
+        _n, _ok = "", False
+    else:
+        LOG.info("解说检查：含代码块=%s ｜ 用户要代码=%s ｜ 开头=%s",
+                 ("```" in str(_n or "")),
+                 bool(re.search(r"(写代码|代码|脚本|python|函数|实现|sql|正则|报错)",
+                                str(question or ""), re.I)),
+                 str(_n or "")[:50].replace("\n", " "))
     _raw = _raw0
     if _ok:
         # 【解说成功就不贴原始块】`<details>` 那种 HTML 标签界面不认，会被当正文显示出来。
@@ -14208,6 +14321,22 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     # 1b. 漏洞查询直通（结构化数据）：NVD 表格直接给用户看，不让模型再"提取"一遍
     #     真实缺陷防复发：走这条路就不会出现"1999 年数据 / 受影响软件 n/a / 5 条只总结 1 条"。
     answer = None
+
+    # ===== ⓪ 【天气 → 写文件 → 打印】载体直通（必须排在所有路由之前）=====
+    #   实测：用户点名 write_file / run_command 时，更早的"点名工具"路由会先跑，
+    #   模型于是自己写一段 Python 代码交差，文件根本没落盘。这类"多步 + 落盘"的活由载体真做。
+    if CAP.get("run_tools", True):
+        try:
+            _wftxt, _wftrace = _run_weather_file_task(user_input)
+            if _wftxt:
+                tool_trace = list(tool_trace or []) + list(_wftrace or [])
+                _note_tool_path(tool_trace, path="weather_file")
+                answer = _answer_with_facts(user_input, _wftxt, label="载体实跑的结果")
+                LOG.info("天气+文件直通：已执行 %d 步 ｜ 答案开头=%s ｜ 含代码块=%s",
+                         len(_wftrace or []), str(answer)[:60].replace("\n", " "),
+                         "```" in str(answer))
+        except Exception as _wfe:      # noqa: silent-ok — 挂了交给后面的流程
+            LOG.debug("天气+文件直通失败（忽略）：%s", _wfe)
     tool_trace = []
     # 检索阶段留下的轨迹（内置检索 web_search）。**必须单独存一份**：
     # 后面 `answer, tool_trace = llm_chat_tools(...)` 是**整体替换** tool_trace 的
@@ -15562,6 +15691,18 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
     except Exception as _dde:      # noqa: silent-ok — 去重挂了也必须把正文给出去
         LOG.debug("创作轮跨阶段去重失败（忽略）：%s", _dde)
 
+    # 4b-quater-0. 【载体真跑过的事，回答里不许出现代码】
+    #   实测：「查天气 → write_file → 打印」三步载体都真做了（文件里是真实天气），
+    #   但模型仍然用一段 Python 代码当回答。这里按"这一轮真跑过什么"直接换掉它。
+    try:
+        if answer and _CTX.get("_wf_rows") and ("```" in str(answer)):
+            _real = _facts_prose(_CTX.get("_wf_rows"), "载体实跑的结果")
+            answer = (_real + "\n\n> （以上是载体这一轮**真的**跑出来的：查天气 → 写文件 → 读回。"
+                             "不是代码示例。）")
+            LOG.info("天气+文件：最终回答原本是代码块 → 已换成载体实跑结果")
+    except Exception as _we:      # noqa: silent-ok
+        LOG.debug("天气+文件兜底失败（忽略）：%s", _we)
+
     # 4b-quater. 【每一个都得是 AI 说】模板答案在这里统一收口。
     # 用户原话：「我是说不止这一条是所有的都要AI不要模板直接」。
     # 判据见 `_looks_templated`；改写由 `_speak_text` 做（模型自己的话，数字一个不许改）。
@@ -15837,7 +15978,7 @@ def agent_run(user_input, lean=False, on_chunk=None, on_progress=None, on_delta=
                 #   ⚠️ 只在"这一轮确实没有写文件的成功动作"时才用它 —— 所以宽一点是安全的：
                 #   有真动作时这条根本不会走到。
                 _m = _FILE_DONE_RE.search(answer or "")
-                if _m:
+                if _m and not _CTX.get("_wf_rows"):
                     answer = answer.rstrip() + (
                         "\n\n（更正：这一轮**没有任何写文件的动作** —— 工具轨迹里没有成功的写入，"
                         "上面那句「%s」是它自己说的，不是事实。要真的落盘，请直接说"
@@ -18002,8 +18143,8 @@ def _api_chat_body(user_input, data, ticket=None):
             if _r and _ans_strip and (_r[:60] in _ans_strip or _ans_strip[:60] in _r):
                 _from_tool = True
                 break
-        if _from_tool:
-            LOG.info("答案核查：本条是载体直答（与工具结果一致）→ 跳过核查")
+        if _from_tool or _CTX.get("_wf_rows"):
+            LOG.info("答案核查：本条是载体直答/载体实跑 → 跳过核查")
         elif re.search(r"(你会|你能|都会|本事|技能|介绍.{0,3}自己|你是谁|叫什么)", str(user_input or "")):
             # 自我介绍/能力清单类：里面全是"我能做 X"的描述，没有可核查的硬断言，
             # 核查只会加一层无意义的"请自行核实"（实测就是这么误伤的）。
@@ -18013,6 +18154,8 @@ def _api_chat_body(user_input, data, ticket=None):
             for _t in (tool_trace or []):
                 _ev_parts.append(str((_t or {}).get("result") or ""))
                 _ev_parts.append(str((_t or {}).get("raw_head") or ""))
+            if _CTX.get("_wf_rows"):
+                _ev_parts.append(str(_CTX["_wf_rows"]))
             _ev_parts += [str(c) for _a, _b, c in (info or [])]
             _ev_parts += [str(_a) for _a, _b, _c in (info or [])]
             _ev_text = " ".join(p for p in _ev_parts if p)

@@ -143,7 +143,7 @@ function ht(ts){return String(ts||'').slice(11,16)}
 function stickBottom(box){
   if(!box)return;
   const go=function(){try{box.scrollTop=box.scrollHeight}catch(e){}};
-  go();requestAnimationFrame(go);setTimeout(go,120);setTimeout(go,400);
+  requestAnimationFrame(go);   // 只滚一次，不再用延时二次滚动（延时会让滚动条抖）
 }
 // 【重绘不打断阅读】只改内容，滚动位置按"之前是否在底部"决定：
 //   在底部就跟到最新；在往回翻就原地不动。这一条是"滚动条老跳回顶部"的正解。
@@ -159,6 +159,14 @@ function oneSig(m){
 }
 function msgSig(items){
   return (items||[]).map(oneSig).join('\u0001');
+}
+// 【别整块重建】把一段 HTML 写进容器前先比签名字符串：没变就一个节点都不动。
+function setHTML(box, html, sig){
+  if(!box)return false;
+  if(sig&&box.dataset.sig===sig)return false;
+  box.innerHTML=html;
+  if(sig)box.dataset.sig=sig;
+  return true;
 }
 function patchMessages(box, items, html, htmlOne, sigsIn){
   if(!box)return;
@@ -509,17 +517,19 @@ async function loadChat(){
   if((GROUPS.filter(function(x){return x.id===CUR})[0]||{}).unread)loadList();
   // 群文件条
   const fs=g.files||[];
-  document.getElementById('filebar').innerHTML=fs.length?(
+  const _fbSig=JSON.stringify(fs.map(function(f){return [f.id,f.name,f.by]}));
+  setHTML(document.getElementById('filebar'),fs.length?(
     '<span class="muted" style="font-size:12px">群文件：</span>'+
     fs.slice(-6).map(function(f){
       return '<a class="fchip" href="/api/aigroups/'+CUR+'/file/'+f.id+'" target="_blank" '+
         'title="'+esc(f.by||'')+' 上传">📄 '+esc(f.name)+'</a>'}).join('')):
-    '<span class="muted" style="font-size:12px">还没有群文件（可以自己传，AI 写出的文件也会出现在这）</span>';
+    '<span class="muted" style="font-size:12px">还没有群文件（可以自己传，AI 写出的文件也会出现在这）</span>',_fbSig);
   // 邀请抽屉要先知道有哪些火种（成员行的火种点选也用这一份）
   const names={};M.forEach(function(x){names[x.name]=1});
   const lm=await J('/api/aigroups/models');const MODELS=lm.models||[];
   // 成员抽屉（火种用点选，不打字）
-  document.getElementById('mlist').innerHTML=M.map(function(x,i){
+  const _mlSig=JSON.stringify(M.map(function(x){return [x.name,x.model,x.admin,x.allow_tools,x.persona]}))+MODELS.join(',');
+  setHTML(document.getElementById('mlist'),M.map(function(x,i){
     const adm=x.admin;const allow=(x.allow_tools!==false);
     const cur=String(x.model||'');
     const chips=[''].concat(MODELS).map(function(mv){
@@ -538,16 +548,17 @@ async function loadChat(){
       (allow?'禁止动手':'允许动手')+'</button>'+
       '<button class="sm danger" data-act="del" data-val="'+esc(x.name)+'">移除</button>'+
       '<div class="row" style="width:100%;margin-top:6px">'+chips+'</div></div>';
-  }).join('');
+  }).join(''),_mlSig);
   const lp=await J('/api/personas');const PN=((lp.personas||[]).map(function(x){return x.name}));
-  document.getElementById('invModels').innerHTML=(MODELS.length?MODELS:['（默认火种）']).map(function(x){
+  const _invSig=MODELS.join(',')+'|'+Object.keys(names).join(',');
+  setHTML(document.getElementById('invModels'),(MODELS.length?MODELS:['（默认火种）']).map(function(x){
     const on=!!names[x];
     return '<button class="sm '+(on?'ghost':'')+'" data-kind="model" data-val="'+esc(x)+'"'+
-      (on?' disabled':'')+'>'+(on?'✓ ':'＋ ')+esc(x)+'</button>'}).join('');
-  document.getElementById('invPersonas').innerHTML=(PN.length?PN:['小焦']).map(function(x){
+      (on?' disabled':'')+'>'+(on?'✓ ':'＋ ')+esc(x)+'</button>'}).join(''), _invSig);
+  setHTML(document.getElementById('invPersonas'),(PN.length?PN:['小焦']).map(function(x){
     const on=!!names[x];
     return '<button class="sm '+(on?'ghost':'')+'" data-kind="persona" data-val="'+esc(x)+'"'+
-      (on?' disabled':'')+'>'+(on?'✓ ':'＋ ')+esc(x)+'</button>'}).join('');
+      (on?' disabled':'')+'>'+(on?'✓ ':'＋ ')+esc(x)+'</button>'}).join(''), 'p|'+PN.join(',')+'|'+Object.keys(names).join(','));
   // 文件抽屉
   document.getElementById('flist').innerHTML=fs.length?fs.slice().reverse().map(function(f){
     return '<div class="mrow"><span style="flex:1;min-width:0">📄 <a href="/api/aigroups/'+CUR+
@@ -837,7 +848,22 @@ async function frSay(){
   const d=await P('/api/friends/'+encodeURIComponent(FRCUR)+'/say',{text:t});
   if(!d.ok){frToast(d.error||'发送失败');return}
   frToast(d.reply?'他回了':('他这次没回：'+((d.why)||'')),true);
-  await frSyncMessages();       // 只同步消息（不重建整个面板，避免"闪一下"）
+  // 【不再回拉一次】POST 已经把"他那句"带回来了，直接追加，少一次请求就少一次重绘
+  if(d.reply&&d.reply.text){
+    const box2=document.getElementById('fr_msgs');
+    const f2=(FRFRIENDS.filter(function(x){return x.name===FRCUR})[0])||{};
+    const one='<div class="msg">'+avImg(FRCUR,f2.color,34)+'<div><div class="meta"><b>'+
+      esc(FRCUR)+'</b><span class="muted">'+ht(d.reply.ts)+
+      (d.reply.by?(' · 火种 '+esc(d.reply.by)):'')+'</span></div>'+
+      '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;'+
+      'word-break:break-word;text-align:left;min-width:2em">'+esc(d.reply.text)+'</div></div></div>';
+    box2.insertAdjacentHTML('beforeend',one);
+    const sig=(box2.dataset.sigs||'');
+    const mySig='user|'+String(t).length+'|'+String(t).slice(0,16);
+    const hisSig='friend|'+String(d.reply.text).length+'|'+String(d.reply.text).slice(0,16);
+    box2.dataset.sigs=(sig?sig+'\u0001':'')+mySig+'\u0001'+hisSig;
+    stickBottom(box2);
+  }
 }
 // 轻量同步：只拉当前好友的消息，patch 进消息区
 async function frSyncMessages(){
