@@ -192,6 +192,20 @@ function md(s){
   t=t.replace(/〔([^〕\\n]{1,40})〕/g,'<span class="mmark">〔$1〕</span>');
   return t;
 }
+// 【列表简介要干净】摘要行只有一行高，不能带 ```code``` 和 **星号** —— 那是气泡里的格式。
+// 注意：这是 Python 普通字符串里的 JS，正则反斜杠要写两份，否则会被 Python 先吃掉。
+function plain(s){
+  var t=String(s==null?'':s);
+  t=t.replace(/```([\\s\\S]*?)```/g,'$1');
+  t=t.replace(/`([^`\\n]+)`/g,'$1');
+  t=t.replace(/\\*\\*([^*\\n]+)\\*\\*/g,'$1');
+  t=t.replace(/__([^_\\n]+)__/g,'$1');
+  t=t.replace(/〔([^〕\\n]{1,40})〕/g,'$1');
+  t=t.replace(/(^|\\n)#{1,4}\\s*/g,'$1');
+  t=t.replace(/(^|\\n)[-*]\\s+/g,'$1');
+  t=t.replace(/[ \\t]*\\n[ \\t]*/g,' ');
+  return t.trim();
+}
 function toast(el,msg,ok){if(!el)return;el.textContent=msg;el.className=ok?'ok':'err';
  setTimeout(()=>{if(el.textContent===msg)el.textContent=''},5000)}
 function av(name,color){const c=(color||'#7c6cf5');
@@ -542,7 +556,7 @@ async function loadList(){
       '<div style="flex:1;min-width:0">'+
         '<div class="row"><b style="font-size:14px">'+esc(g.name)+'</b>'+
         (un?'<span class="badge">'+(un>99?'99+':un)+'</span>':'')+'</div>'+
-        '<div class="muted ell">'+esc((g.last_who?g.last_who+'：':'')+(g.last||g.topic||'—'))+'</div>'+
+        '<div class="muted ell">'+esc((g.last_who?g.last_who+'：':''))+plain(g.last||g.topic||'—')+'</div>'+
       '</div></div>';
   }).join(''):'<div class="muted" style="padding:10px">还没有群，上面建一个。</div>';
 }
@@ -885,7 +899,7 @@ async function frLoadList(){
       '<div style="flex:1;min-width:0"><div class="row" style="flex-wrap:nowrap">'+
       '<b style="font-size:14px;white-space:nowrap">'+esc(f.name)+'</b>'+
       (un?'<span class="badge">'+(un>99?'99+':un)+'</span>':'')+'</div>'+
-      '<div class="muted ell">'+esc((f.last_from==='friend'?'他：':'你：')+(f.last||f.relation||'—'))+
+      '<div class="muted ell">'+esc(f.last_from==='friend'?'他：':'你：')+plain(f.last||f.relation||'—')+
       '</div></div></div>';
   }).join(''):'<div class="muted" style="padding:10px">还没有好友。点上面「＋ 新好友」定义一个人。</div>';
 }
