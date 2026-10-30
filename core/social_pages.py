@@ -80,8 +80,8 @@ text-align:left;min-width:2em}
 .liked{color:#ff6b8b}
 /* ---- 群组：居中双栏（左列表 / 右聊天）---- */
 /* 【不要算高度】用整条 height:100% 链填满容器；算式在 iframe 里一定会偏 */
-html,body{height:100%}
-.wrap{height:100%;display:flex;flex-direction:column}
+html,body{height:100%;overflow:hidden}
+.wrap{height:100%;display:flex;flex-direction:column;overflow:hidden}
 .im{display:grid;grid-template-columns:288px 1fr;gap:12px;align-items:stretch;
 flex:1 1 auto;min-height:0;max-width:1080px;margin:0 auto;width:100%}
 @media(max-width:860px){.im{grid-template-columns:1fr;height:auto}}
@@ -97,7 +97,12 @@ display:flex;flex-direction:column;overflow:hidden}
 .badge{background:#e8475f;color:#fff;border-radius:999px;font-size:11px;padding:0 6px;
 line-height:17px;min-width:17px;text-align:center}
 .pane{background:var(--card);border:1px solid var(--line);border-radius:16px;
-display:flex;flex-direction:column;overflow:hidden;min-height:0}
+display:flex;flex-direction:column;overflow:hidden;min-height:0;
+height:calc(100vh - 200px)}                     /* 兜底：算准了 fitChat 会覆盖它 */
+#fr_msgs{flex:1 1 auto;min-height:0;overflow-y:auto}
+#fr_foot{position:sticky;bottom:0;background:var(--card);z-index:2}
+.chatbox{height:calc(100vh - 210px)}
+#msgs{flex:1 1 auto;min-height:0;overflow-y:auto}
 .phead{display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line)}
 .pbody{flex:1 1 auto;min-height:0;overflow:auto;padding:14px}
 .pfoot{border-top:1px solid var(--line);padding:10px 12px}
@@ -762,14 +767,18 @@ function fitChat(){
       const foot=document.getElementById('fr_foot');
       const footH=(foot&&foot.style.display!=='none')?foot.offsetHeight:0;
       const avail=h-((head&&head.offsetHeight)||0)-footH-6;
-      if(box&&avail>80){box.style.maxHeight=avail+'px';box.style.overflowY='auto';}
+      if(box){
+        if(avail>120){box.style.maxHeight=avail+'px';}
+        else{box.style.maxHeight='40vh';}       // 兜底：算不出来就给个明确高度
+        box.style.overflowY='auto';
+      }
     }
     const gp=document.getElementById('gp_pane')||document.querySelector('.pane .chatbox');
     const gb=document.getElementById('msgs');
     if(gb&&gp){
       const top=gb.getBoundingClientRect().top;
       const avail2=window.innerHeight-top-90;
-      if(avail2>80){gb.style.maxHeight=avail2+'px';gb.style.overflowY='auto';}
+      if(gb){gb.style.maxHeight=(avail2>120?avail2+'px':'40vh');gb.style.overflowY='auto';}
     }
   }catch(e){}
 }
