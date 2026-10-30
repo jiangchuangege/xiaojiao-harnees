@@ -517,6 +517,7 @@ async function loadChat(){
   }; const _mhtml=msgs.length?msgs.map(gOneHtml).join(''):'<div class="muted">还没有人说话。它们自己一会儿就开口。</div>';
   const box=document.getElementById('msgs');
   patchMessages(box,msgs,_mhtml,gOneHtml);LASTN=msgs.length;
+  try{fitChat()}catch(e){}
   // 红点：进来就算已读
   if((GROUPS.filter(function(x){return x.id===CUR})[0]||{}).unread)loadList();
   // 群文件条
@@ -695,7 +696,7 @@ def _friends_inner():
     </div>
     <div class="glist" id="fr_list"></div>
   </div>
-  <div class="pane">
+  <div class="pane" id="fr_pane">
     <div class="phead" style="flex-wrap:nowrap">
       <div class="favatar" id="fr_avatar" style="width:46px;height:46px;flex:0 0 auto">友</div>
       <div style="flex:1;min-width:0">
@@ -748,6 +749,31 @@ let FRCUR='',FRFRIENDS=[],FRHIST=[];
 function frToast(m,ok){const el=document.getElementById('fr_msg');
   if(!el)return;el.textContent=m;el.className=ok?'ok':'err';
   setTimeout(function(){if(el.textContent===m)el.textContent=''},4000)}
+// 【把聊天区钉在可用高度里】不再依赖 CSS 链推高度：这里直接量。
+function fitChat(){
+  try{
+    const pane=document.getElementById('fr_pane');
+    const box=document.getElementById('fr_msgs');
+    if(pane){
+      const top=pane.getBoundingClientRect().top;
+      const h=Math.max(220,window.innerHeight-top-14);
+      pane.style.height=h+'px';
+      const head=pane.querySelector('.phead');
+      const foot=document.getElementById('fr_foot');
+      const footH=(foot&&foot.style.display!=='none')?foot.offsetHeight:0;
+      const avail=h-((head&&head.offsetHeight)||0)-footH-6;
+      if(box&&avail>80){box.style.maxHeight=avail+'px';box.style.overflowY='auto';}
+    }
+    const gp=document.getElementById('gp_pane')||document.querySelector('.pane .chatbox');
+    const gb=document.getElementById('msgs');
+    if(gb&&gp){
+      const top=gb.getBoundingClientRect().top;
+      const avail2=window.innerHeight-top-90;
+      if(avail2>80){gb.style.maxHeight=avail2+'px';gb.style.overflowY='auto';}
+    }
+  }catch(e){}
+}
+window.addEventListener('resize',function(){fitChat()});
 function frShow(v){
   ['chat','moments','set'].forEach(function(x){
     const el=document.getElementById('fr_v_'+x);if(!el)return;
@@ -814,6 +840,7 @@ async function frOpen(name){
       esc(m.text)+'</div></div></div>';
   }; const _fhtml=hs.length?hs.map(frOneHtml).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
   const box=document.getElementById('fr_msgs');patchMessages(box,hs,_fhtml,frOneHtml);
+  fitChat();
   const ms=d.moments||[];
   document.getElementById('fr_moments').innerHTML=ms.length?ms.map(function(p){
     const cm=(p.comments||[]).map(function(c){
@@ -926,7 +953,8 @@ document.getElementById('fr_avatar_file').onchange=function(){
     frToast(d.ok?'头像已换':(d.error||'失败'),!!d.ok);
     if(d.ok){await frLoadList();frOpen(nm)}};
   rd.readAsDataURL(f);this.value='';};
-frLoadList();
+frLoadList();fitChat();setTimeout(fitChat,300);setTimeout(fitChat,1200);
+setInterval(fitChat,2000);
 setInterval(function(){
   frLoadList();
   if(FRCUR){  // 当前好友：静默同步消息（没变化就完全不重绘）
