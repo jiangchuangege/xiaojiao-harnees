@@ -111,6 +111,13 @@ align-items:center;flex-wrap:wrap}
 .fchip{background:#1c2536;border:1px solid #26324a;border-radius:999px;padding:2px 10px;
 
 /* ---- 消息：气泡要有最小宽度，别被挤成一列字 ---- */
+/* 【头像容器必须有尺寸】.gav 原来只在 .rhead 下才有宽高，
+   群聊面板头用的是 .phead > .gav#pav → 上传群头像后图片按自然尺寸铺开，撑爆聊天区。 */
+.gav{width:44px;height:44px;border-radius:12px;background:#2a3140;display:flex;
+align-items:center;justify-content:center;font-size:18px;color:#fff;overflow:hidden;flex:0 0 auto}
+.gav img{width:100%;height:100%;object-fit:contain;display:block;background:#0f141d}
+/* 气泡里的图片也不许超宽 */
+.msg .b img{max-width:100%;height:auto;border-radius:10px;display:block}
 .favatar{width:46px;height:46px;border-radius:12px;overflow:hidden;background:#2a3140;
 display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff;flex:0 0 auto}
 .favatar img{width:100%;height:100%;object-fit:contain;display:block;background:#0f141d}
@@ -387,7 +394,7 @@ def _groups_inner():
 
   <div class="pane">
     <div class="phead">
-      <div class="gav" id="pav">焦</div>
+      <div class="gav" id="pav" style="width:44px;height:44px;flex:0 0 auto">焦</div>
       <div style="flex:1;min-width:0">
         <div class="row"><b id="pName">选一个群</b><span class="pill" id="pPace"></span></div>
         <div class="muted" id="pSub" style="font-size:12px">左边点一个群进来</div>
