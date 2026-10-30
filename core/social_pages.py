@@ -93,6 +93,11 @@ display:flex;flex-direction:column;overflow:hidden}
 .filebar{border-top:1px dashed #222a38;padding:7px 12px;display:flex;gap:8px;
 align-items:center;flex-wrap:wrap}
 .fchip{background:#1c2536;border:1px solid #26324a;border-radius:999px;padding:2px 10px;
+
+/* ---- 消息：气泡要有最小宽度，别被挤成一列字 ---- */
+.msg>div{flex:1;min-width:0}
+.msg .b{min-width:3em;word-break:break-word;white-space:pre-wrap}
+.msg.me>div{display:flex;flex-direction:column;align-items:flex-end}
 .favatar{width:46px;height:46px;border-radius:12px;overflow:hidden;background:#2a3140;
 display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff;flex:0 0 auto}
 .favatar img{width:100%;height:100%;object-fit:cover;display:block}
@@ -129,6 +134,17 @@ function toast(el,msg,ok){if(!el)return;el.textContent=msg;el.className=ok?'ok':
 function av(name,color){const c=(color||'#7c6cf5');
  return '<span class="av" style="background:'+c+'">'+esc(String(name||'?').slice(0,1))+'</span>'}
 function ht(ts){return String(ts||'').slice(11,16)}
+// 【同一个人的头像到处一样】有上传的头像就显示图片，没有就退回首字色块。
+//   好友列表 / 一对一聊天 / 群聊 / 朋友圈 都用这一个函数，不会再一会字母一会照片。
+function avImg(name,color,size){
+  const px=size||38;const c=color||'#7c6cf5';const nm=String(name||'友');
+  const st='width:'+px+'px;height:'+px+'px;border-radius:50%;overflow:hidden;background:'+c+
+    ';display:inline-flex;align-items:center;justify-content:center;font-size:'+Math.round(px*0.42)+
+    'px;color:#fff;flex:0 0 auto;vertical-align:middle';
+  return '<span style="'+st+'"><img src="/personas/avatar/'+encodeURIComponent(nm)+'?t='+Date.now()+
+    '" style="width:100%;height:100%;object-fit:cover;display:block" '+
+    'onerror="this.remove()"/>'+esc(nm.slice(0,1))+'</span>';
+}
 function shortName(n){n=String(n||'');return n.length>14?(n.slice(0,12)+'\u2026'):n}
 """
 
@@ -195,9 +211,7 @@ async function load(){
       (c.reply?'<div class="reply">↳ 它回：'+esc(c.reply)+'</div>':'')+'</div>').join('');
     const P=p.author||'小焦';
     const pa=PSN.filter(function(x){return x.name===P})[0]||{};
-    const avt='<span class="av" style="background:'+(pa.color||'#7c6cf5')+';overflow:hidden">'+
-      (pa.avatar?'<img src="/personas/avatar/'+encodeURIComponent(P)+'?t='+Date.now()+
-        '" style="width:100%;height:100%;object-fit:cover"/>':esc(P.slice(0,1)))+'</span>';
+    const avt=avImg(P,pa.color,38);
     return '<div class="card mpost">'+avt+'<div class="body">'+
       '<div class="row"><span class="mname">'+esc(P)+'</span>'+
       (pa.relation?'<span class="tag">'+esc(pa.relation)+'</span>':'')+
@@ -427,7 +441,7 @@ async function loadChat(){
     const acts=(x.actions&&x.actions.length)?
       ('<div class="muted" style="font-size:11px;margin-top:3px">⚙ 动过 '+x.actions.length+
        ' 下：'+x.actions.map(function(a){return esc(a.tool)}).join('、')+'</div>'):'';
-    return '<div class="msg '+(me?'me':'')+'">'+av(x.who,cmap[x.who]||'#5a6478')+
+    return '<div class="msg '+(me?'me':'')+'>'+avImg(x.who,cmap[x.who]||'#5a6478',34)+
       '<div><div class="meta"><b style="color:'+(cmap[x.who]||'#9aa3b5')+'">'+
       esc(shortName(x.who))+'</b>'+adm+
       (isDefault?' <span class="tag">默认角色</span>':'')+
@@ -613,7 +627,7 @@ def _friends_inner():
   </div>
   <div class="pane">
     <div class="phead" style="flex-wrap:nowrap">
-      <div class="favatar" id="fr_avatar">友</div>
+      <div class="favatar" id="fr_avatar" style="width:46px;height:46px;flex:0 0 auto">友</div>
       <div style="flex:1;min-width:0">
         <div class="row" style="flex-wrap:nowrap"><b id="fr_name" style="white-space:nowrap">还没有好友</b>
           <span class="tag" id="fr_rel" style="display:none"></span></div>
@@ -658,7 +672,7 @@ def _friends_inner():
 </div>
 """
     js = """
-let FRCUR='',FRFRIENDS=[];
+let FRCUR='',FRFRIENDS=[],FRHIST=[];
 function frToast(m,ok){const el=document.getElementById('fr_msg');
   if(!el)return;el.textContent=m;el.className=ok?'ok':'err';
   setTimeout(function(){if(el.textContent===m)el.textContent=''},4000)}
@@ -682,7 +696,7 @@ async function frLoadList(){
   box.innerHTML=FRFRIENDS.length?FRFRIENDS.map(function(f){
     const un=f.unread||0;
     return '<div class="gitem '+(f.name===FRCUR?'on':'')+'" data-fname="'+esc(f.name)+'">'+
-      frAv(f.name,f.avatar,f.color,36)+
+      avImg(f.name,f.color,36)+
       '<div style="flex:1;min-width:0"><div class="row" style="flex-wrap:nowrap">'+
       '<b style="font-size:14px;white-space:nowrap">'+esc(f.name)+'</b>'+
       (un?'<span class="badge">'+(un>99?'99+':un)+'</span>':'')+'</div>'+
@@ -708,10 +722,12 @@ async function frOpen(name){
     '<img src="/personas/avatar/'+encodeURIComponent(name)+'?t='+Date.now()+
     '" style="width:100%;height:100%;object-fit:cover"/>':esc((f.name||'友').slice(0,1));
   const hs=d.history||[];
+  FRHIST=hs;
   document.getElementById('fr_msgs').innerHTML=hs.length?hs.map(function(m){
     const me=(m.from==='user');
     const tag=(!me&&m.why&&m.why!=='回你')?' <span class="tag">他主动找你</span>':'';
-    return '<div class="msg '+(me?'me':'')+'"><div><div class="meta">'+
+    const head=me?avImg('你','#3d5afe',34):avImg(f.name||name,f.color,34);
+    return '<div class="msg '+(me?'me':'')+'">'+head+'<div><div class="meta">'+
       '<b>'+esc(me?'你':(f.name||name))+'</b>'+tag+
       '<span class="muted">'+ht(m.ts)+(m.by?(' · 火种 '+esc(m.by)):'')+'</span></div>'+
       '<div class="b">'+esc(m.text)+'</div></div></div>';
@@ -748,11 +764,19 @@ async function frOpen(name){
 }
 async function frSay(){
   const el=document.getElementById('fr_say');const t=(el.value||'').trim();if(!t||!FRCUR)return;
-  el.value='';frToast('他在想怎么回…',true);
+  el.value='';
+  // 【先显示你这条】不等模型回，先把气泡画出来（不然要刷新才看见）
+  const box=document.getElementById('fr_msgs');
+  const f=(FRFRIENDS.filter(function(x){return x.name===FRCUR})[0])||{};
+  box.insertAdjacentHTML('beforeend','<div class="msg me">'+avImg('你','#3d5afe',34)+
+    '<div><div class="meta"><b>你</b><span class="muted">'+ht(new Date().toISOString())+
+    '</span></div><div class="b">'+esc(t)+'</div></div></div>');
+  box.scrollTop=box.scrollHeight;
+  frToast('他在想怎么回…',true);
   const d=await P('/api/friends/'+encodeURIComponent(FRCUR)+'/say',{text:t});
   if(!d.ok){frToast(d.error||'发送失败');return}
   frToast(d.reply?'他回了':('他这次没回：'+((d.why)||'')),true);
-  frOpen(FRCUR);
+  await frOpen(FRCUR);
 }
 document.getElementById('fr_send').onclick=frSay;
 document.getElementById('fr_say').addEventListener('keydown',function(e){
@@ -786,7 +810,17 @@ document.getElementById('fr_avatar_file').onchange=function(){
     frToast(d.ok?'头像已换':(d.error||'失败'),!!d.ok);
     if(d.ok){await frLoadList();frOpen(nm)}};
   rd.readAsDataURL(f);this.value='';};
-frLoadList();setInterval(frLoadList,8000);
+frLoadList();
+setInterval(function(){
+  frLoadList();
+  if(FRCUR){  // 当前好友：静默刷新消息，新来的自己冒出来
+    J('/api/friends/'+encodeURIComponent(FRCUR)).then(function(d){
+      if(!d||!d.ok)return;
+      const hs=d.history||[];
+      if(hs.length!==FRHIST.length){frOpen(FRCUR)}
+    });
+  }
+},5000);
 """
     return body, js
 
