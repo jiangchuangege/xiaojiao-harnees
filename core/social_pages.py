@@ -157,6 +157,7 @@ box-shadow:0 24px 60px rgba(0,0,0,.55)}
 .mrow{display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px dashed #222a38}
 .mrow:last-child{border-bottom:0}
 .tag{background:#2a3550;color:#a9b8ff;border-radius:8px;padding:1px 7px;font-size:11px}
+.tag.warn{background:#3a2230;color:#ff9db0;border:1px solid #5a2c3c}
 
 /* ---- 页签 ---- */
 .tabs{display:flex;gap:6px}
@@ -584,15 +585,18 @@ async function loadChat(){
     const adm=(mm[x.who]||{}).admin?' <span class="tag">管理员</span>':'';
     const meta=ht(x.ts)+(x.sec?(' · '+x.sec+'s'):'')+
       ((x.by&&x.by!=='user')?(' · 火种 '+esc(x.by)):'');
-    const isDefault=(!me)&&(!((mm[x.who]||{}).model));
-    const acts=(x.actions&&x.actions.length)?
+    const isDefault=(!me)&&(!((mm[x.who]||{}).model));    const acts=(x.actions&&x.actions.length)?
       ('<div class="muted" style="font-size:11px;margin-top:3px">⚙ 动过 '+x.actions.length+
        ' 下：'+x.actions.map(function(a){return esc(a.tool)}).join('、')+'</div>'):'';
     // 【头像回来了】尺寸问题已经用「固定格子 + background cover」解决（跟好友页同一套），
     // 不再靠删头像绕开：格子写死 38×38，图片铺满裁剪，任何规则都放大不了它。
+    // 【把"说的是做过的"标出来】账本核验过的结果：没调工具却声称做过 / 报的结果与工具不符。
+    //   用户的原话："如果是角色扮演我希望是真的在做，而不是演给用户" —— 那就标清楚。
+    const vtag = (x.verify==='no_action')?' <span class="tag warn">⚠ 这句没真做</span>':
+      (x.verify==='false_success'?' <span class="tag warn">⚠ 结果与工具不符</span>':'');
     return '<div class="msg '+(me?'me':'')+'">'+avImg(x.who,cmap[x.who]||'#5a6478',38)+
       '<div><div class="meta"><b style="color:'+(cmap[x.who]||'#9aa3b5')+'">'+
-      esc(shortName(x.who))+'</b>'+adm+
+      esc(shortName(x.who))+'</b>'+adm+vtag+
       (isDefault?' <span class="tag">默认角色</span>':'')+
       ' <span class="muted">'+meta+'</span></div>'+
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+md(x.text)+'</div>'+acts+'</div></div>';

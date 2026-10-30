@@ -311,6 +311,56 @@ CTX_MSGS = 14               # 拼给模型的最近消息条数
 _ACT = None          # 带工具的调用：act(member_dict, messages) -> (text, by, actions)
 _DISTILL = None      # 蒸馏：distill(messages) -> "经验1；经验2"（app 注入）
 _EXEC_PROP = None    # 执行提议：exec(member_dict, 提议文本) -> (正文, 谁, actions)（app 注入）
+# 【空口说做过】判据：说了"已经执行/我跑过/我查过/结果有配置"这类完成态。
+_CLAIM_EXEC = re.compile(
+    r"已经(跑|执行|扫|查|装|写|改|部署|试)|我(刚才|刚刚|刚)?(在|用)?[^，。！？\n]{0,12}"
+    r"(跑了一下|跑过|执行了|扫了一遍|扫过|查过了|试过了|装了)|结果有配置|已安装|已完成|"
+    r"已成功|已执行|直接扫|实测(过|了)")
+
+# 【把失败说成成功】判据：话里有成功词，而工具返回里是失败痕迹。
+_SUCCESS_WORD = re.compile(r"已成功|已生成|已完成|已写入|已安装|已跑完|跑通了|搞定了|成功了")
+_FAIL_MARK = re.compile(
+    r"Traceback|Error|error:|ERROR|不是内部或外部命令|无法|失败|failed|Failed|No such file|"
+    r"not found|NotFound|unrecognized|Unknown option|Invalid|invalid argument|"
+    r"拒绝访问|Access is denied|exit code [1-9]|Exit code: [1-9]|退出码 [1-9]")
+# 产物类工具：路径在不在，是最硬的证据
+_PATH_TOOLS = ("write_file", "edit_file", "create_file", "append_file")
+
+
+def _verify_actions(actions, workdir=""):
+    """核验这次「动手」到底成没成。返回 (是否成功, 证据一句话)。
+
+    只用可核的事实：写文件的看文件在不在，跑命令的看返回里有没有失败痕迹。
+    不猜、不粉饰 —— 这就是用户反复要的那条规矩。
+
+    相对路径按**项目根目录**解析（logs/aigroups 的上两级），不依赖进程 cwd：
+    否则从别的目录跑核验就会把"真写了"误判成"没写"（实测踩过）。
+    """
+    _base = workdir or os.path.dirname(os.path.dirname(_DIR))
+    _acts = [a for a in (actions or []) if isinstance(a, dict)]
+    if not _acts:
+        return False, "这一轮没有任何真实工具调用"
+    _notes = []
+    _ok = True
+    for a in _acts:
+        _name = str(a.get("tool") or "")
+        _args = a.get("args") or {}
+        _res = str(a.get("result") or "")
+        if _name in _PATH_TOOLS:
+            _p = str(_args.get("path") or _args.get("file") or _args.get("filename") or "")
+            if _p:
+                _full = _p if os.path.isabs(_p) else os.path.join(_base, _p)
+                if os.path.exists(_full):
+                    _notes.append("%s 的产物在：%s" % (_name, _p))
+                else:
+                    _ok = False
+                    _notes.append("%s 说写了 %s，但这个文件不在" % (_name, _p))
+        if _name in ("run_command", "run_python", "bash", "shell"):
+            _m = _FAIL_MARK.search(_res)
+            if _m:
+                _ok = False
+                _notes.append("命令返回里有失败痕迹（%s）" % _m.group(0)[:40])
+    return _ok, "；".join(_notes) or "工具调用了，但返回里没有可核的产物"
 
 
 def install(llm_fn=None, alt_fn=None, model_name="", act_fn=None, distill_fn=None):
@@ -877,6 +927,11 @@ def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
                 sys_p += ("\n如果你认为该做一件具体的事（写文件/跑命令/查资料/造插件），"
                           "就在回答末尾单独写一行：〔提议：工具名 + 一句话说明〕，"
                           "载体会把提议记下来并执行。不要删除或移动任何文件。")
+            # 【不许空口说做过】实测：4B 成员爱说「我刚才在机器上跑了一下 grep…结果有配置」，
+            #   而它这一轮根本没调过工具 —— 那是演给用户看的。这里把规矩写死。
+            sys_p += ("\n【硬规矩】你没真的执行过的事，绝不能说「我已经跑了/我查过了/我扫过了/"
+                      "结果有配置/已安装」这类话。你只有一张嘴：想让它发生，就写"
+                      "〔提议：具体命令或动作〕，载体替你真做，做完再把真实结果贴出来。")
             usr = "群主题：%s\n\n最近的聊天记录：\n%s\n\n现在轮到你（%s）说话：" % (
                 g.get("topic") or "（没设主题，随意聊）",
                 _transcript(recent) or "（还没有人说话，你起个头）",
@@ -921,6 +976,48 @@ def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
             txt = _strip_name_prefix(txt, m.get("name"))
             if not txt:
                 continue
+            # 【空口说做过 → 要么真做，要么别发】提示词拦不住 4B，判据必须落在载体：
+            #   它说「我跑过了/我查过了」但这条没有 actions，就先替它**真的去做**；
+            #   做不成（或本轮不给它动手）就把这句假话换掉，如实说明没做。
+            if not (_actions or []) and _CLAIM_EXEC.search(txt):
+                _real = []
+                if _can_act and _ACT is not None:
+                    try:
+                        _rtxt, _rwho, _real = _ACT(m, [
+                            {"role": "system", "content":
+                             "你在群里说了自己做过某事。现在载体要求你**真的去做**，"
+                             "做完一句话说真实结果；做不到就直说做不到，不许编。"},
+                            {"role": "user", "content": "你刚才说的：%s" % txt[:400]}])
+                    except Exception as e:      # noqa: silent-ok
+                        LOG.debug("群组·补做失败：%s", e)
+                        _real = []
+                if _real:
+                    _actions = _real
+                    who = _rwho or who
+                    if _rtxt:
+                        txt = ("%s\n\n〔载体已替你实做〕%s" % (txt, str(_rtxt).strip()[:300]))
+                    _event("claim_made_real", gid=gid, member=m.get("name"),
+                           tools=[a.get("tool") for a in (_real or [])][:6])
+                    LOG.info("群组：%s 说做过 → 载体真去做了（%d 个工具）",
+                             m.get("name"), len(_real))
+                else:
+                    _event("claim_no_action", gid=gid, member=m.get("name"), text=txt[:120])
+                    LOG.info("群组：%s 声称做过但没执行，改成如实说明", m.get("name"))
+                    txt = ("（它刚才想说自己已经做过了，其实这一轮没真做——"
+                           "我不会替它把这话发出去。要真做，它会写〔提议：…〕，我来执行。）\n\n"
+                           + txt)
+                _sec = round(time.time() - _t_say, 2)
+            # 【把失败说成成功 → 核验后改写】实测抓到过：ffmpeg 命令写到 Windows 上不存在的
+            #   /tmp/、滤镜名还是无效的，工具返回的是报错，它却写「✅ 已成功生成…」。
+            #   所以只要话里有成功词、又带着 actions，就必须过一遍产物核验。
+            if (_actions or []) and _SUCCESS_WORD.search(txt):
+                _okact, _evid = _verify_actions(_actions)
+                if not _okact:
+                    _event("claim_false_success", gid=gid, member=m.get("name"),
+                           evidence=_evid[:160])
+                    LOG.info("群组：%s 把失败说成成功，已按事实改写（%s）", m.get("name"), _evid[:80])
+                    txt = ("〔核验：这一下其实没成〕%s\n\n（它原本写的成功结论不算数，下面是它原话）\n%s"
+                           % (_evid[:200], txt))
             # 【拦住复读】实测：后一个人把前一个人那句一字不差抄一遍，看着像两个 AI 互相复读。
             #   判据落在载体（提示词拦不住小模型），重合度 ≥0.8 就丢这条并记账。
             _dup, _dup_who, _ratio = _too_similar(txt, msgs)
