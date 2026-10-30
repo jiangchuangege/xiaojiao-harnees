@@ -79,8 +79,11 @@ text-align:left;min-width:2em}
 .likebar{display:flex;gap:14px;color:var(--dim);font-size:13px;margin-top:9px}
 .liked{color:#ff6b8b}
 /* ---- 群组：居中双栏（左列表 / 右聊天）---- */
+/* 【不要算高度】用整条 height:100% 链填满容器；算式在 iframe 里一定会偏 */
+html,body{height:100%}
+.wrap{height:100%;display:flex;flex-direction:column}
 .im{display:grid;grid-template-columns:288px 1fr;gap:12px;align-items:stretch;
-height:calc(100vh - 190px);min-height:460px;max-width:1080px;margin:0 auto}
+flex:1 1 auto;min-height:0;max-width:1080px;margin:0 auto;width:100%}
 @media(max-width:860px){.im{grid-template-columns:1fr;height:auto}}
 .rail{background:var(--card);border:1px solid var(--line);border-radius:16px;
 display:flex;flex-direction:column;overflow:hidden}
@@ -94,9 +97,9 @@ display:flex;flex-direction:column;overflow:hidden}
 .badge{background:#e8475f;color:#fff;border-radius:999px;font-size:11px;padding:0 6px;
 line-height:17px;min-width:17px;text-align:center}
 .pane{background:var(--card);border:1px solid var(--line);border-radius:16px;
-display:flex;flex-direction:column;overflow:hidden}
+display:flex;flex-direction:column;overflow:hidden;min-height:0}
 .phead{display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line)}
-.pbody{flex:1;overflow:auto;padding:14px}
+.pbody{flex:1 1 auto;min-height:0;overflow:auto;padding:14px}
 .pfoot{border-top:1px solid var(--line);padding:10px 12px}
 .filebar{border-top:1px dashed #222a38;padding:7px 12px;display:flex;gap:8px;
 align-items:center;flex-wrap:wrap}
@@ -106,7 +109,7 @@ align-items:center;flex-wrap:wrap}
 .favatar{width:46px;height:46px;border-radius:12px;overflow:hidden;background:#2a3140;
 display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff;flex:0 0 auto}
 .favatar img{width:100%;height:100%;object-fit:contain;display:block;background:#0f141d}
-.fview{display:flex;flex-direction:column;flex:1;min-height:0}
+.fview{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:hidden}
 font-size:12px;color:#c9d4ec;text-decoration:none}
 .drawer{display:none;margin:12px auto 0;max-width:1080px;background:var(--card);
 border:1px solid var(--line);border-radius:16px;padding:14px}
@@ -201,13 +204,13 @@ function renderKeepScroll(box, html){
 //   好友列表 / 一对一聊天 / 群聊 / 朋友圈 都用这一个函数，不会再一会字母一会照片。
 function avImg(name,color,size){
   const px=size||38;const c=color||'#7c6cf5';const nm=String(name||'友');
-  const st='width:'+px+'px;height:'+px+'px;border-radius:50%;overflow:hidden;background:'+c+
+  // 方形圆角 + contain：**整张照片都显示**，不裁不切；只有没图时才显示首字
+  const st='width:'+px+'px;height:'+px+'px;border-radius:10px;overflow:hidden;background:'+c+
     ';display:inline-flex;align-items:center;justify-content:center;font-size:'+Math.round(px*0.42)+
     'px;color:#fff;flex:0 0 auto;vertical-align:middle';
-  // object-fit:contain —— 传上去的头像**整张都显示**，不裁不切
   return '<span style="'+st+'"><img src="/personas/avatar/'+encodeURIComponent(nm)+'?t='+Date.now()+
     '" style="width:100%;height:100%;object-fit:contain;display:block;background:#0f141d" '+
-    'onerror="this.remove()"/>'+esc(nm.slice(0,1))+'</span>';
+    'onerror="this.parentNode.textContent=&quot;'+esc(nm.slice(0,1))+'&quot;"/></span>';
 }
 function shortName(n){n=String(n||'');return n.length>14?(n.slice(0,12)+'\u2026'):n}
 """
@@ -976,7 +979,7 @@ document.querySelectorAll('.tab').forEach(function(b){
     if embed:
         # 被主界面用 iframe 嵌进来时：去掉外层留白，内容铺满容器（尺寸就不会"不对"了）
         page = page.replace("<style>", "<style>\n.wrap{max-width:none;padding:8px 10px 12px}\n"
-                            ".im{height:calc(100vh - 150px)}\n", 1)
+                            ".im{flex:1 1 auto;min-height:0}\n", 1)
     return page
 
 
