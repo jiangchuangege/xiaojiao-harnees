@@ -818,8 +818,11 @@ def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
             msgs = (get(gid) or {}).get("messages") or []
             recent = msgs[-CTX_MSGS:]
             sys_p = ("这是一个%s人组成的群聊，你的名字是%s。像真人微信群里聊天那样说话："
-                     "短句、口语、可以接别人的话、可以只回半句、可以问别人；"
-                     "不要复读别人说过的内容，不要总结整段对话，不要写旁白和表情符号说明。"
+                     "短句、口语、可以接别人的话、可以只回半句、可以问别人。"
+                     "\n【这条最重要】**不要重复前文已经说过的意思**："
+                     "要么补一个具体的新细节（时间/地点/数字/一个坑），要么问一个新问题；"
+                     "实在没新东西，就只回半句或换个角度吐槽，别再把刚才那句换个说法说一遍。"
+                     "不要总结整段对话，不要写旁白和表情符号说明。"
                      "一次只说一到两句，40 字以内。只输出你要说的话本身。"
                      % (len(members), m.get("name")))
             per = _persona_of(m, g)
@@ -1044,7 +1047,7 @@ def _bigrams(t):
     return {t[i:i + 2] for i in range(len(t) - 1)} if len(t) > 2 else set()
 
 
-def _too_similar(text, recent, floor=0.8, floor_contain=0.55):
+def _too_similar(text, recent, floor=0.8, floor_contain=0.5):
     """这句话是不是把别人刚说过的又抄了一遍（整句或半句）？
 
     实测：整句照抄拦得住（重合度 ≥0.8），但「前半句照抄 + 后半句自己加」漏了 ——
@@ -1054,7 +1057,7 @@ def _too_similar(text, recent, floor=0.8, floor_contain=0.55):
     tb = _bigrams(text)
     if not tb:
         return False, "", 0.0
-    for m in (recent or [])[-2:]:
+    for m in (recent or [])[-4:]:
         ob = _bigrams(m.get("text") or "")
         if not ob:
             continue

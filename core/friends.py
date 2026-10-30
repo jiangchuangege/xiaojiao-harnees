@@ -240,7 +240,8 @@ def say(name, text):
     _append(name, "user", text)
     _event("user_say", friend=name, chars=len(text))
     head, ctx = _ctx_msgs(name)
-    sys_p = (head + " 你们在微信一样的一对一聊天。像真人那样回他：短、口语、有情绪，"
+    sys_p = (head + " 你们在微信一样的一对一聊天。**对方的名字你并不知道，就叫他「你」；"
+             "绝对不要叫他「小焦」（那是助手自己的名字）**。像真人那样回他：短、口语、有情绪，"
              "可以反问一句。不要复述他说的话，不要客套。只输出你要说的话，40 字以内。")
     txt, by = _ask([{"role": "system", "content": sys_p},
                     {"role": "user", "content": "最近的对话：\n%s\n\n他刚说：%s" % (
@@ -291,7 +292,8 @@ def proactive(name, force=False):
             own_moments = "；".join(str(p.get("text"))[:60] for p in ps)
     except Exception:      # noqa: silent-ok
         own_moments = ""
-    sys_p = (head + " 现在没人跟你说话。你自己忽然想起一件事（或想问他一句），"
+    sys_p = (head + " **对方的名字你不知道，就叫他「你」，不要叫「小焦」。**"
+             "现在没人跟你说话。你自己忽然想起一件事（或想问他一句），"
              "**主动**给他发条消息：一两句，像真人随手发的那种，不要客套开场，"
              "不要说「在吗」这种废话。只输出这条消息。")
     usr = "你们最近的对话：\n%s" % (ctx[-500:] or "（还没聊过）")

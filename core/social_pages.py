@@ -54,6 +54,11 @@ display:flex;flex-direction:column;min-height:60vh}
 .chathead{padding:12px 14px;border-bottom:1px solid var(--line)}
 .chatbody{padding:14px;overflow:auto;flex:1;max-height:56vh}
 .chatfoot{padding:12px 14px;border-top:1px solid var(--line)}
+
+/* ---- 聊天窗口：外层不滚，只有消息区滚（防止新消息时整页跳到顶部）---- */
+.im{overflow:hidden}
+.pane{overflow:hidden}
+.pbody{overscroll-behavior:contain}
 .msg{display:flex;gap:9px;margin:10px 0;align-items:flex-start}
 .msg>div{flex:1 1 auto;min-width:0}
 .msg .b{display:inline-block;background:var(--card2);border-radius:12px;padding:8px 12px;
@@ -134,6 +139,12 @@ function toast(el,msg,ok){if(!el)return;el.textContent=msg;el.className=ok?'ok':
 function av(name,color){const c=(color||'#7c6cf5');
  return '<span class="av" style="background:'+c+'">'+esc(String(name||'?').slice(0,1))+'</span>'}
 function ht(ts){return String(ts||'').slice(11,16)}
+// 【新消息不要跳回顶部】重绘后把消息框钉到底部；外层文档不动。
+function stickBottom(box){
+  if(!box)return;
+  const go=function(){try{box.scrollTop=box.scrollHeight}catch(e){}};
+  go();requestAnimationFrame(go);setTimeout(go,120);setTimeout(go,400);
+}
 // 【同一个人的头像到处一样】有上传的头像就显示图片，没有就退回首字色块。
 //   好友列表 / 一对一聊天 / 群聊 / 朋友圈 都用这一个函数，不会再一会字母一会照片。
 function avImg(name,color,size){
@@ -449,7 +460,7 @@ async function loadChat(){
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+esc(x.text)+'</div>'+acts+'</div></div>';
   }).join(''):'<div class="muted">还没有人说话。它们自己一会儿就开口。</div>';
   const box=document.getElementById('msgs');
-  if(msgs.length!==LASTN){box.scrollTop=box.scrollHeight;LASTN=msgs.length}
+  if(msgs.length!==LASTN){stickBottom(box);LASTN=msgs.length}
   // 红点：进来就算已读
   if((GROUPS.filter(function(x){return x.id===CUR})[0]||{}).unread)loadList();
   // 群文件条
@@ -733,7 +744,7 @@ async function frOpen(name){
       '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+
       esc(m.text)+'</div></div></div>';
   }).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
-  const box=document.getElementById('fr_msgs');box.scrollTop=box.scrollHeight;
+  const box=document.getElementById('fr_msgs');stickBottom(box);
   const ms=d.moments||[];
   document.getElementById('fr_moments').innerHTML=ms.length?ms.map(function(p){
     const cm=(p.comments||[]).map(function(c){
@@ -773,7 +784,7 @@ async function frSay(){
     '<div><div class="meta"><b>你</b><span class="muted">'+ht(new Date().toISOString())+
     '</span></div><div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+esc(t)+
     '</div></div></div>');
-  box.scrollTop=box.scrollHeight;
+  stickBottom(box);
   frToast('他在想怎么回…',true);
   const d=await P('/api/friends/'+encodeURIComponent(FRCUR)+'/say',{text:t});
   if(!d.ok){frToast(d.error||'发送失败');return}
