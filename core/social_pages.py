@@ -105,7 +105,7 @@ align-items:center;flex-wrap:wrap}
 /* ---- 消息：气泡要有最小宽度，别被挤成一列字 ---- */
 .favatar{width:46px;height:46px;border-radius:12px;overflow:hidden;background:#2a3140;
 display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff;flex:0 0 auto}
-.favatar img{width:100%;height:100%;object-fit:cover;display:block}
+.favatar img{width:100%;height:100%;object-fit:contain;display:block;background:#0f141d}
 .fview{display:flex;flex-direction:column;flex:1;min-height:0}
 font-size:12px;color:#c9d4ec;text-decoration:none}
 .drawer{display:none;margin:12px auto 0;max-width:1080px;background:var(--card);
@@ -204,8 +204,9 @@ function avImg(name,color,size){
   const st='width:'+px+'px;height:'+px+'px;border-radius:50%;overflow:hidden;background:'+c+
     ';display:inline-flex;align-items:center;justify-content:center;font-size:'+Math.round(px*0.42)+
     'px;color:#fff;flex:0 0 auto;vertical-align:middle';
+  // object-fit:contain —— 传上去的头像**整张都显示**，不裁不切
   return '<span style="'+st+'"><img src="/personas/avatar/'+encodeURIComponent(nm)+'?t='+Date.now()+
-    '" style="width:100%;height:100%;object-fit:cover;display:block" '+
+    '" style="width:100%;height:100%;object-fit:contain;display:block;background:#0f141d" '+
     'onerror="this.remove()"/>'+esc(nm.slice(0,1))+'</span>';
 }
 function shortName(n){n=String(n||'');return n.length>14?(n.slice(0,12)+'\u2026'):n}
@@ -744,7 +745,10 @@ function frToast(m,ok){const el=document.getElementById('fr_msg');
   setTimeout(function(){if(el.textContent===m)el.textContent=''},4000)}
 function frShow(v){
   ['chat','moments','set'].forEach(function(x){
-    const el=document.getElementById('fr_v_'+x);if(el)el.style.display=(x===v)?'block':'none'});
+    const el=document.getElementById('fr_v_'+x);if(!el)return;
+    // 【聊天视图必须是 flex】否则 .pbody 的 flex:1 失效 → 消息区撑高 → 底部输入框被顶出面板
+    el.style.display=(x===v)?(x==='chat'?'flex':'block'):'none';
+  });
 }
 document.querySelectorAll('button[data-fview]').forEach(function(b){
   b.onclick=function(){frShow(b.dataset.fview)}});
@@ -796,7 +800,7 @@ async function frOpen(name){
   const frOneHtml=function(m){
     const me=(m.from==='user');
     const tag=(!me&&m.why&&m.why!=='回你')?' <span class="tag">他主动找你</span>':'';
-    const head=me?avImg('你','#3d5afe',34):avImg(f.name||name,f.color,34);
+    const head=me?avImg('你','#3d5afe',38):avImg(f.name||name,f.color,38);
     return '<div class="msg '+(me?'me':'')+'">'+head+'<div><div class="meta">'+
       '<b>'+esc(me?'你':(f.name||name))+'</b>'+tag+
       '<span class="muted">'+ht(m.ts)+(m.by?(' · 火种 '+esc(m.by)):'')+'</span></div>'+
