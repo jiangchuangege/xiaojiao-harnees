@@ -93,6 +93,10 @@ display:flex;flex-direction:column;overflow:hidden}
 .filebar{border-top:1px dashed #222a38;padding:7px 12px;display:flex;gap:8px;
 align-items:center;flex-wrap:wrap}
 .fchip{background:#1c2536;border:1px solid #26324a;border-radius:999px;padding:2px 10px;
+.favatar{width:46px;height:46px;border-radius:12px;overflow:hidden;background:#2a3140;
+display:flex;align-items:center;justify-content:center;font-size:19px;color:#fff;flex:0 0 auto}
+.favatar img{width:100%;height:100%;object-fit:cover;display:block}
+.fview{display:flex;flex-direction:column;flex:1;min-height:0}
 font-size:12px;color:#c9d4ec;text-decoration:none}
 .drawer{display:none;margin:12px auto 0;max-width:1080px;background:var(--card);
 border:1px solid var(--line);border-radius:16px;padding:14px}
@@ -591,120 +595,130 @@ def groups_html():
 
 # ==================== 好友（一对一）====================
 def _friends_inner():
-    """好友：左列表 + 右聊天 + 他的朋友圈 + 定义角色。"""
+    """好友：左列表 + 右聊天 + 他的朋友圈 + 定义角色。
+
+    ⚠️ 这里所有 id 都带 `fr_` 前缀：好友页和群组页**同处一个页面**，
+       之前两边都叫 `flist`，群组那段脚本把「还没有文件…」写进了好友列表（截图事故）。
+    """
     body = """
 <div class="im">
   <div class="rail">
     <div class="railhead">
-      <div class="row"><b style="font-size:14px">好友</b><span class="grow"></span>
-        <button class="sm" id="btnNewFriend">＋ 新好友</button></div>
+      <div class="row" style="flex-wrap:nowrap"><b style="font-size:14px;white-space:nowrap">好友</b>
+        <span class="grow"></span>
+        <button class="sm" id="fr_new">＋ 新好友</button></div>
       <div class="muted" style="font-size:12px;margin-top:4px">他们会自己找你说话</div>
     </div>
-    <div class="glist" id="flist"></div>
+    <div class="glist" id="fr_list"></div>
   </div>
   <div class="pane">
-    <div class="phead">
-      <div class="gav" id="fav">友</div>
+    <div class="phead" style="flex-wrap:nowrap">
+      <div class="favatar" id="fr_avatar">友</div>
       <div style="flex:1;min-width:0">
-        <div class="row"><b id="fName">还没有好友</b>
-          <span class="tag" id="fRel" style="display:none"></span></div>
-        <div class="muted" id="fSub" style="font-size:12px">点左上「＋ 新好友」定义一个人</div>
+        <div class="row" style="flex-wrap:nowrap"><b id="fr_name" style="white-space:nowrap">还没有好友</b>
+          <span class="tag" id="fr_rel" style="display:none"></span></div>
+        <div class="muted" id="fr_sub" style="font-size:12px;white-space:nowrap;overflow:hidden;
+             text-overflow:ellipsis">点左上「＋ 新好友」定义一个人</div>
       </div>
-      <button class="ghost sm" data-fview="chat">聊天</button>
-      <button class="ghost sm" data-fview="moments">他的朋友圈</button>
-      <button class="ghost sm" data-fview="set">定义角色</button>
+      <button class="ghost sm" data-fview="chat" style="white-space:nowrap">聊天</button>
+      <button class="ghost sm" data-fview="moments" style="white-space:nowrap">他的朋友圈</button>
+      <button class="ghost sm" data-fview="set" style="white-space:nowrap">定义角色</button>
     </div>
 
-    <!-- 聊天 -->
-    <div class="fview" id="fv-chat">
-      <div class="pbody" id="fmsgs"><div class="muted">左边选一个好友。</div></div>
+    <div class="fview" id="fr_v_chat">
+      <div class="pbody" id="fr_msgs"><div class="muted">左边选一个好友。</div></div>
       <div class="pfoot">
-        <div class="row"><input class="grow" id="fsay" placeholder="跟他说点什么…（他不回你也会自己找你）"/>
-          <button id="btnFSay">发送</button></div>
-        <div class="muted" id="fmsg" style="margin-top:6px"></div>
+        <div class="row"><input class="grow" id="fr_say" placeholder="跟他说点什么…（他不回你也会自己找你）"/>
+          <button id="fr_send">发送</button></div>
+        <div class="muted" id="fr_msg" style="margin-top:6px"></div>
       </div>
     </div>
 
-    <!-- 朋友圈（只查看） -->
-    <div class="fview" id="fv-moments" style="display:none">
-      <div class="pbody" id="fmoments"><div class="muted">他的朋友圈是**他自己发的**，你只能看、能点赞、能评论。</div></div>
+    <div class="fview" id="fr_v_moments" style="display:none">
+      <div class="pbody" id="fr_moments"><div class="muted">他的朋友圈是**他自己发的**：你只能看、点赞、评论。</div></div>
     </div>
 
-    <!-- 定义角色 -->
-    <div class="fview" id="fv-set" style="display:none">
+    <div class="fview" id="fr_v_set" style="display:none">
       <div class="pbody">
         <div class="muted" style="font-size:13px">定义一次，他就是一个"人"：有自己的性格、关系、头像，
           有自己的朋友圈，会主动找你说话。</div>
-        <div style="margin-top:10px"><input id="dName" placeholder="名字（例如：小丽）"/></div>
-        <div style="margin-top:8px"><input id="dRel" placeholder="关系/身份（女朋友、室友、搭档…你定）"/></div>
-        <div style="margin-top:8px"><input id="dModel" placeholder="火种（可空=默认）"/></div>
-        <textarea id="dPersona" placeholder="他的性格：说话方式、在意什么、习惯…" style="margin-top:8px"></textarea>
+        <div style="margin-top:10px"><input id="fr_dname" placeholder="名字（例如：小美）"/></div>
+        <div style="margin-top:8px"><input id="fr_drel" placeholder="关系/身份（女朋友、室友、搭档…你定）"/></div>
+        <div style="margin-top:8px"><input id="fr_dmodel" placeholder="火种（可空=默认）"/></div>
+        <textarea id="fr_dpersona" placeholder="他的性格：说话方式、在意什么、习惯…" style="margin-top:8px"></textarea>
         <div class="row" style="margin-top:10px">
-          <button class="sm" id="btnSaveFriend">保存这个好友</button>
-          <button class="ghost sm" id="btnFAvatar">上传他的头像</button>
-          <span class="muted" id="dMsg"></span>
+          <button class="sm" id="fr_save">保存这个好友</button>
+          <button class="ghost sm" id="fr_avatar_btn">上传他的头像</button>
+          <span class="muted" id="fr_dmsg"></span>
         </div>
-        <input type="file" id="dAvatarFile" accept="image/*" style="display:none"/>
+        <input type="file" id="fr_avatar_file" accept="image/*" style="display:none"/>
       </div>
     </div>
   </div>
 </div>
 """
     js = """
-let FCUR='',F_PROS=[];
-function fToast(el,m,ok){if(!el)return;el.textContent=m;el.className=ok?'ok':'err';
+let FRCUR='',FRFRIENDS=[];
+function frToast(m,ok){const el=document.getElementById('fr_msg');
+  if(!el)return;el.textContent=m;el.className=ok?'ok':'err';
   setTimeout(function(){if(el.textContent===m)el.textContent=''},4000)}
-function showFView(v){
+function frShow(v){
   ['chat','moments','set'].forEach(function(x){
-    document.getElementById('fv-'+x).style.display=(x===v)?'block':'none'});
+    const el=document.getElementById('fr_v_'+x);if(el)el.style.display=(x===v)?'block':'none'});
 }
 document.querySelectorAll('button[data-fview]').forEach(function(b){
-  b.onclick=function(){showFView(b.dataset.fview)}});
-async function loadFriends(){
-  const d=await J('/api/friends');F_PROS=d.friends||[];
-  const box=document.getElementById('flist');
-  box.innerHTML=F_PROS.length?F_PROS.map(function(f){
+  b.onclick=function(){frShow(b.dataset.fview)}});
+function frAv(name,avatar,color,size){
+  const st='width:'+(size||38)+'px;height:'+(size||38)+'px;border-radius:11px;overflow:hidden;'+
+    'background:'+(color||'#2a3140')+';display:inline-flex;align-items:center;'+
+    'justify-content:center;font-size:15px;color:#fff;flex:0 0 auto';
+  return '<span style="'+st+'">'+(avatar?
+    '<img src="/personas/avatar/'+encodeURIComponent(name)+'?t='+Date.now()+
+    '" style="width:100%;height:100%;object-fit:cover"/>':esc((name||'友').slice(0,1)))+'</span>';
+}
+async function frLoadList(){
+  const d=await J('/api/friends');FRFRIENDS=d.friends||[];
+  const box=document.getElementById('fr_list');
+  box.innerHTML=FRFRIENDS.length?FRFRIENDS.map(function(f){
     const un=f.unread||0;
-    return '<div class="gitem '+(f.name===FCUR?'on':'')+'" data-fname="'+esc(f.name)+'">'+
-      '<span class="av" style="background:'+(f.color||'#7c6cf5')+';overflow:hidden">'+
-      (f.avatar?'<img src="/personas/avatar/'+encodeURIComponent(f.name)+'?t='+Date.now()+
-        '" style="width:100%;height:100%;object-fit:cover"/>':esc((f.name||'友').slice(0,1)))+'</span>'+
-      '<div style="flex:1;min-width:0"><div class="row"><b style="font-size:14px">'+esc(f.name)+'</b>'+
+    return '<div class="gitem '+(f.name===FRCUR?'on':'')+'" data-fname="'+esc(f.name)+'">'+
+      frAv(f.name,f.avatar,f.color,36)+
+      '<div style="flex:1;min-width:0"><div class="row" style="flex-wrap:nowrap">'+
+      '<b style="font-size:14px;white-space:nowrap">'+esc(f.name)+'</b>'+
       (un?'<span class="badge">'+(un>99?'99+':un)+'</span>':'')+'</div>'+
       '<div class="muted ell">'+esc((f.last_from==='friend'?'他：':'你：')+(f.last||f.relation||'—'))+
       '</div></div></div>';
   }).join(''):'<div class="muted" style="padding:10px">还没有好友。点上面「＋ 新好友」定义一个人。</div>';
 }
-document.getElementById('flist').addEventListener('click',function(ev){
-  const it=ev.target.closest('[data-fname]');if(!it)return;openFriend(it.dataset.fname);
+document.getElementById('fr_list').addEventListener('click',function(ev){
+  const it=ev.target.closest('[data-fname]');if(!it)return;frOpen(it.dataset.fname);
 });
-async function openFriend(name){
-  FCUR=name;showFView('chat');await loadFriends();
+async function frOpen(name){
+  FRCUR=name;frShow('chat');await frLoadList();
   try{await P('/api/friends/'+encodeURIComponent(name)+'/read',{})}catch(e){}
   const d=await J('/api/friends/'+encodeURIComponent(name));
   if(!d.ok)return;
   const f=d.friend||{};
-  document.getElementById('fName').textContent=f.name||name;
-  const rel=document.getElementById('fRel');
+  document.getElementById('fr_name').textContent=f.name||name;
+  const rel=document.getElementById('fr_rel');
   if(f.relation){rel.textContent=f.relation;rel.style.display=''}else{rel.style.display='none'}
-  document.getElementById('fSub').textContent=(f.persona||'').slice(0,40)+
-    (((d.moments||[]).length)?(' ｜ 动态 '+(d.moments||[]).length+' 条'):'');
-  const fav=document.getElementById('fav');
-  fav.innerHTML=f.avatar?'<img src="/personas/avatar/'+encodeURIComponent(name)+'?t='+Date.now()+
+  document.getElementById('fr_sub').textContent=(f.persona||'还没写性格').slice(0,40)+
+    ' ｜ 动态 '+((d.moments||[]).length)+' 条';
+  document.getElementById('fr_avatar').innerHTML=f.avatar?
+    '<img src="/personas/avatar/'+encodeURIComponent(name)+'?t='+Date.now()+
     '" style="width:100%;height:100%;object-fit:cover"/>':esc((f.name||'友').slice(0,1));
   const hs=d.history||[];
-  document.getElementById('fmsgs').innerHTML=hs.length?hs.map(function(m){
+  document.getElementById('fr_msgs').innerHTML=hs.length?hs.map(function(m){
     const me=(m.from==='user');
-    const tag=(!me&&m.why&&m.why!=='回你')?'<span class="tag">他主动找你</span>':'';
+    const tag=(!me&&m.why&&m.why!=='回你')?' <span class="tag">他主动找你</span>':'';
     return '<div class="msg '+(me?'me':'')+'"><div><div class="meta">'+
-      '<b>'+esc(me?'你':(f.name||name))+'</b> '+tag+
+      '<b>'+esc(me?'你':(f.name||name))+'</b>'+tag+
       '<span class="muted">'+ht(m.ts)+(m.by?(' · 火种 '+esc(m.by)):'')+'</span></div>'+
       '<div class="b">'+esc(m.text)+'</div></div></div>';
   }).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
-  const box=document.getElementById('fmsgs');box.scrollTop=box.scrollHeight;
-  // 他的朋友圈（只读）
+  const box=document.getElementById('fr_msgs');box.scrollTop=box.scrollHeight;
   const ms=d.moments||[];
-  document.getElementById('fmoments').innerHTML=ms.length?ms.map(function(p){
+  document.getElementById('fr_moments').innerHTML=ms.length?ms.map(function(p){
     const cm=(p.comments||[]).map(function(c){
       return '<div class="cmt"><b>'+esc(c.who)+'</b>：'+esc(c.text)+
         (c.reply?'<div class="reply">↳ '+esc(c.reply)+'</div>':'')+'</div>'}).join('');
@@ -715,72 +729,68 @@ async function openFriend(name){
       '<div class="likebar"><span style="cursor:pointer" data-likeid="'+p.id+'">❤️ '+
       (p.likes||[]).length+'</span><span>💬 '+(p.comments||[]).length+'</span></div>'+
       (cm||'')+
-      '<div class="row" style="margin-top:8px"><input class="grow" id="fc_'+p.id+'" placeholder="评一句…"/>'+
+      '<div class="row" style="margin-top:8px"><input class="grow" id="fr_c_'+p.id+'" placeholder="评一句…"/>'+
       '<button class="sm" data-cmtid="'+p.id+'">评论</button></div></div>';
   }).join(''):'<div class="muted">他还没发过动态。**他自己会发**，不用你催。</div>';
-  document.getElementById('fmoments').querySelectorAll('[data-likeid]').forEach(function(el){
-    el.onclick=async function(){await P('/api/moments/like',{id:el.dataset.likeid,who:'你'});openFriend(FCUR)}});
-  document.getElementById('fmoments').querySelectorAll('[data-cmtid]').forEach(function(b){
+  document.getElementById('fr_moments').querySelectorAll('[data-likeid]').forEach(function(el){
+    el.onclick=async function(){await P('/api/moments/like',{id:el.dataset.likeid,who:'你'});frOpen(FRCUR)}});
+  document.getElementById('fr_moments').querySelectorAll('[data-cmtid]').forEach(function(b){
     b.onclick=async function(){
-      const el=document.getElementById('fc_'+b.dataset.cmtid);const t=(el.value||'').trim();if(!t)return;
+      const el=document.getElementById('fr_c_'+b.dataset.cmtid);const t=(el.value||'').trim();if(!t)return;
       const r=await P('/api/moments/comment',{id:b.dataset.cmtid,text:t,who:'你'});
       const rp=(r.reply||{});
-      fToast(document.getElementById('fmsg'), rp.replied?('他回了：'+(rp.text||'')):('评论发出了。他这次没回 —— '+(rp.why||'')),true);
-      openFriend(FCUR)}});
-  // 定义角色
-  document.getElementById('dName').value=f.name||name;
-  document.getElementById('dRel').value=f.relation||'';
-  document.getElementById('dModel').value=f.model||'';
-  document.getElementById('dPersona').value=f.persona||'';
+      frToast(rp.replied?('他回了：'+(rp.text||'')):('评论发出了。他这次没回 —— '+(rp.why||'')),true);
+      frOpen(FRCUR)}});
+  document.getElementById('fr_dname').value=f.name||name;
+  document.getElementById('fr_drel').value=f.relation||'';
+  document.getElementById('fr_dmodel').value=f.model||'';
+  document.getElementById('fr_dpersona').value=f.persona||'';
 }
-document.getElementById('fsay').addEventListener('keydown',function(e){
-  if(e.key==='Enter'){e.preventDefault();fSay()}});
-document.getElementById('btnFSay').onclick=fSay;
-async function fSay(){
-  const el=document.getElementById('fsay');const t=(el.value||'').trim();if(!t||!FCUR)return;
-  el.value='';fToast(document.getElementById('fmsg'),'他在想怎么回…',true);
-  const d=await P('/api/friends/'+encodeURIComponent(FCUR)+'/say',{text:t});
-  if(!d.ok){fToast(document.getElementById('fmsg'),d.error||'发送失败');return}
-  if(!d.reply)fToast(document.getElementById('fmsg'),'他这次没回：'+((d.why)||''),true);
-  else fToast(document.getElementById('fmsg'),'他回了',true);
-  openFriend(FCUR);
+async function frSay(){
+  const el=document.getElementById('fr_say');const t=(el.value||'').trim();if(!t||!FRCUR)return;
+  el.value='';frToast('他在想怎么回…',true);
+  const d=await P('/api/friends/'+encodeURIComponent(FRCUR)+'/say',{text:t});
+  if(!d.ok){frToast(d.error||'发送失败');return}
+  frToast(d.reply?'他回了':('他这次没回：'+((d.why)||'')),true);
+  frOpen(FRCUR);
 }
-document.getElementById('btnNewFriend').onclick=function(){
-  showFView('set');
-  document.getElementById('dName').value='';
-  document.getElementById('dRel').value='';
-  document.getElementById('dModel').value='';
-  document.getElementById('dPersona').value='';
-  fToast(document.getElementById('dMsg'),'填好下面几项，点「保存这个好友」',true);
+document.getElementById('fr_send').onclick=frSay;
+document.getElementById('fr_say').addEventListener('keydown',function(e){
+  if(e.key==='Enter'){e.preventDefault();frSay()}});
+document.getElementById('fr_new').onclick=function(){
+  frShow('set');
+  document.getElementById('fr_dname').value='';
+  document.getElementById('fr_drel').value='';
+  document.getElementById('fr_dmodel').value='';
+  document.getElementById('fr_dpersona').value='';
 };
-document.getElementById('btnSaveFriend').onclick=async function(){
-  const nm=(document.getElementById('dName').value||'').trim();
-  if(!nm){fToast(document.getElementById('dMsg'),'先给他起个名字');return}
+document.getElementById('fr_save').onclick=async function(){
+  const nm=(document.getElementById('fr_dname').value||'').trim();
+  if(!nm){frToast('先给他起个名字');return}
   const d=await P('/api/personas',{name:nm,
-    persona:document.getElementById('dPersona').value,
-    relation:document.getElementById('dRel').value,
-    model:document.getElementById('dModel').value});
-  fToast(document.getElementById('dMsg'),d.ok?'已保存，他现在是你的好友了':(d.error||'失败'),!!d.ok);
-  if(d.ok){FCUR=nm;await loadFriends();openFriend(nm);showFView('chat')}
+    persona:document.getElementById('fr_dpersona').value,
+    relation:document.getElementById('fr_drel').value,
+    model:document.getElementById('fr_dmodel').value});
+  frToast(d.ok?'已保存，他现在是你的好友了':(d.error||'失败'),!!d.ok);
+  if(d.ok){FRCUR=nm;await frLoadList();frOpen(nm);frShow('chat')}
 };
-document.getElementById('btnFAvatar').onclick=function(){document.getElementById('dAvatarFile').click()};
-document.getElementById('dAvatarFile').onchange=function(){
+document.getElementById('fr_avatar_btn').onclick=function(){
+  document.getElementById('fr_avatar_file').click()};
+document.getElementById('fr_avatar_file').onchange=function(){
   const f=this.files&&this.files[0];if(!f)return;
-  const nm=(document.getElementById('dName').value||FCUR||'').trim();
-  if(!nm){fToast(document.getElementById('dMsg'),'先在名字里填好他的名字');return}
+  const nm=(document.getElementById('fr_dname').value||FRCUR||'').trim();
+  if(!nm){frToast('先在名字里填好他的名字');return}
   const rd=new FileReader();
   rd.onload=async function(){
     const d=await P('/api/personas/avatar',{name:nm,data:rd.result});
-    fToast(document.getElementById('dMsg'),d.ok?'头像已换':(d.error||'失败'),!!d.ok);
-    if(d.ok){await loadFriends();openFriend(nm)}};
+    frToast(d.ok?'头像已换':(d.error||'失败'),!!d.ok);
+    if(d.ok){await frLoadList();frOpen(nm)}};
   rd.readAsDataURL(f);this.value='';};
-loadFriends();setInterval(function(){loadFriends();if(FCUR&&FCUR&&
-  document.getElementById('fv-chat').style.display!=='none'){}},6000);
+frLoadList();setInterval(frLoadList,8000);
 """
     return body, js
 
 
-# ==================== 统一社交页：朋友圈 + 群组同页切换 ====================
 def social_hub_html(tab="moments", embed=False):
     """一个页面装下社交模块：顶部页签切换，样式统一（不再一个模块一页）。"""
     _fb, _fj = _friends_inner()
