@@ -70,6 +70,16 @@ text-align:left;min-width:2em}
 .msg.me>div{text-align:right}
 .msg.me .b{background:#2a3560;text-align:left}
 .msg .meta{font-size:12px;color:var(--dim);margin-bottom:2px}
+/* ---- 消息里的轻 markdown（md() 产出的标签）---- */
+.msg .b b,.mtext b{font-weight:600;color:#fff}
+.msg .b code,.mtext code{background:#0f141d;border:1px solid #26324a;border-radius:6px;
+ padding:1px 5px;font:12.5px/1.5 Consolas,"Courier New",monospace;color:#9fd7ff}
+.msg .b pre.mcode,.mtext pre.mcode{background:#0f141d;border:1px solid #26324a;border-radius:10px;
+ padding:9px 11px;margin:7px 0;overflow:auto;white-space:pre;font:12.5px/1.55 Consolas,"Courier New",monospace;
+ color:#cfe6ff;max-width:100%}
+.msg .b .mh,.mtext .mh{font-weight:600;color:#fff;margin:6px 0 2px}
+.msg .b .mli,.mtext .mli{padding-left:2px}
+.msg .b .mmark,.mtext .mmark{color:#a9b8ff}
 /* ---- 朋友圈 ---- */
 .mpost{display:flex;gap:11px}
 .mpost .body{flex:1;min-width:0}
@@ -167,6 +177,20 @@ function P(url,body){return J(url,{method:'POST',headers:{'Content-Type':'applic
 function D(url){return J(url,{method:'DELETE'})}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,
  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+// 【消息要有点格式】轻 markdown：**粗体**、`代码`、- 列表、# 小标题、〔标记〕。
+// 顺序很重要：先 esc() 再替换 —— 消息里的尖括号永远是文字，不可能变成标签。
+// 注意：这是 Python 普通字符串里的 JS，正则里的反斜杠要写两份，否则会被 Python 先吃掉。
+function md(s){
+  var t=esc(s);
+  t=t.replace(/```([\\s\\S]*?)```/g,'<pre class="mcode">$1</pre>');
+  t=t.replace(/`([^`\\n]+)`/g,'<code>$1</code>');
+  t=t.replace(/\\*\\*([^*\\n]+)\\*\\*/g,'<b>$1</b>');
+  t=t.replace(/__([^_\\n]+)__/g,'<b>$1</b>');
+  t=t.replace(/(^|\\n)#{1,4}\\s*([^\\n]+)/g,'$1<div class="mh">$2</div>');
+  t=t.replace(/(^|\\n)[-*]\\s+([^\\n]+)/g,'$1<div class="mli">• $2</div>');
+  t=t.replace(/〔([^〕\\n]{1,40})〕/g,'<span class="mmark">〔$1〕</span>');
+  return t;
+}
 function toast(el,msg,ok){if(!el)return;el.textContent=msg;el.className=ok?'ok':'err';
  setTimeout(()=>{if(el.textContent===msg)el.textContent=''},5000)}
 function av(name,color){const c=(color||'#7c6cf5');
@@ -463,7 +487,7 @@ def _groups_inner():
   <div class="row"><b>群成员</b><span class="muted">（可设管理员 / 允许动手 / 换火种 / 移除）</span>
     <span class="grow"></span><button class="ghost sm" data-close="mem">收起</button></div>
   <div class="muted" style="margin-top:6px;font-size:12px">
-    这里的「小焦 / 阿码 / 老曲」是**角色**，不是模型：建群时自带的三个人设。
+    这里的「小焦 / 阿码 / 老曲」是<b>角色</b>，不是模型：建群时自带的三个人设。
     没绑火种的用当前默认火种（现在就是 xiaojiao1.0-4B）—— 所以它们同一个脑子、靠不同人设说话。
     想让某个角色更聪明/更会说，就点下面那排火种，给它单独绑一颗。</div>
   <div id="mlist" style="margin-top:8px"></div>
@@ -779,7 +803,7 @@ def _friends_inner():
     </div>
 
     <div class="fview" id="fr_v_moments" style="display:none">
-      <div class="pbody" id="fr_moments"><div class="muted">他的朋友圈是**他自己发的**：你只能看、点赞、评论。</div></div>
+      <div class="pbody" id="fr_moments"><div class="muted">他的朋友圈是<b>他自己发的</b>：你只能看、点赞、评论。</div></div>
     </div>
 
     <div class="fview" id="fr_v_set" style="display:none">
@@ -1042,7 +1066,7 @@ def social_hub_html(tab="moments", embed=False, dbg=False):
   <span class="grow"></span>
   <a href="/">← 回到单聊</a>
 </div>
-<div class="sub">定义一个人，他就是你的好友：有自己的朋友圈、会跟你聊天，也会**自己找你**说话。</div>
+<div class="sub">定义一个人，他就是你的好友：有自己的朋友圈、会跟你聊天，也会<b>自己找你</b>说话。</div>
 
 <div id="tab-friends" class="tabpane">__FRIENDS__</div>
 <div id="tab-groups" class="tabpane">__GROUPS__</div>
