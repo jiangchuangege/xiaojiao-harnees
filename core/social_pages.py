@@ -446,7 +446,7 @@ async function loadChat(){
       esc(shortName(x.who))+'</b>'+adm+
       (isDefault?' <span class="tag">默认角色</span>':'')+
       ' <span class="muted">'+meta+'</span></div>'+
-      '<div class="b">'+esc(x.text)+'</div>'+acts+'</div></div>';
+      '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+esc(x.text)+'</div>'+acts+'</div></div>';
   }).join(''):'<div class="muted">还没有人说话。它们自己一会儿就开口。</div>';
   const box=document.getElementById('msgs');
   if(msgs.length!==LASTN){box.scrollTop=box.scrollHeight;LASTN=msgs.length}
@@ -730,7 +730,8 @@ async function frOpen(name){
     return '<div class="msg '+(me?'me':'')+'">'+head+'<div><div class="meta">'+
       '<b>'+esc(me?'你':(f.name||name))+'</b>'+tag+
       '<span class="muted">'+ht(m.ts)+(m.by?(' · 火种 '+esc(m.by)):'')+'</span></div>'+
-      '<div class="b">'+esc(m.text)+'</div></div></div>';
+      '<div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+
+      esc(m.text)+'</div></div></div>';
   }).join(''):'<div class="muted">还没聊过。他可能会自己先开口，你也可以先说。</div>';
   const box=document.getElementById('fr_msgs');box.scrollTop=box.scrollHeight;
   const ms=d.moments||[];
@@ -770,7 +771,8 @@ async function frSay(){
   const f=(FRFRIENDS.filter(function(x){return x.name===FRCUR})[0])||{};
   box.insertAdjacentHTML('beforeend','<div class="msg me">'+avImg('你','#3d5afe',34)+
     '<div><div class="meta"><b>你</b><span class="muted">'+ht(new Date().toISOString())+
-    '</span></div><div class="b">'+esc(t)+'</div></div></div>');
+    '</span></div><div class="b" style="width:max-content;max-width:min(100%,42em);white-space:pre-wrap;word-break:break-word;text-align:left;min-width:2em">'+esc(t)+
+    '</div></div></div>');
   box.scrollTop=box.scrollHeight;
   frToast('他在想怎么回…',true);
   const d=await P('/api/friends/'+encodeURIComponent(FRCUR)+'/say',{text:t});

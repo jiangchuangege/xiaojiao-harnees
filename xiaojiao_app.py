@@ -16209,8 +16209,12 @@ def social_hub_page():
     except Exception as _e:      # noqa: silent-ok
         LOG.debug("社交页注入火种失败（忽略）：%s", _e)
     _embed = str(request.args.get("embed") or "") in ("1", "true", "yes")
-    return Response(_SP.social_hub_html(request.args.get("tab") or "friends", embed=_embed),
-                    mimetype="text/html")
+    _resp = Response(_SP.social_hub_html(request.args.get("tab") or "friends", embed=_embed),
+                     mimetype="text/html")
+    # 【别让浏览器拿旧页面】改完 UI 刷新就该生效；缓存旧 CSS 正是"明明修了还竖着"的原因
+    _resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    _resp.headers["Pragma"] = "no-cache"
+    return _resp
 
 
 @app.route("/moments")
@@ -17762,7 +17766,12 @@ def api_message():
 
 @app.route("/")
 def index():
-    return render_template_string(HTML, model_name=MODEL_NAME)
+    _r = Response(render_template_string(HTML, model_name=MODEL_NAME),
+                   mimetype="text/html")
+    # 主界面同理：不缓存，改完刷新就见效
+    _r.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    _r.headers["Pragma"] = "no-cache"
+    return _r
 
 
 @app.route("/api/history")
