@@ -16395,7 +16395,9 @@ def social_hub_page():
     except Exception as _e:      # noqa: silent-ok
         LOG.debug("社交页注入火种失败（忽略）：%s", _e)
     _embed = str(request.args.get("embed") or "") in ("1", "true", "yes")
-    _resp = Response(_SP.social_hub_html(request.args.get("tab") or "friends", embed=_embed),
+    _dbg = str(request.args.get("dbg") or "") == "1"
+    _resp = Response(_SP.social_hub_html(request.args.get("tab") or "friends", embed=_embed,
+                                        dbg=_dbg),
                      mimetype="text/html")
     # 【别让浏览器拿旧页面】改完 UI 刷新就该生效；缓存旧 CSS 正是"明明修了还竖着"的原因
     _resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"

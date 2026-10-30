@@ -45,9 +45,11 @@ justify-content:center;font-size:13px;font-weight:700;color:#fff;flex:0 0 auto}
 padding:4px 10px 4px 4px;font-size:13px}
 .grid{display:grid;grid-template-columns:270px 1fr;gap:12px;align-items:start}
 @media(max-width:820px){.grid{grid-template-columns:1fr}}
-.glist div{padding:9px 10px;border-radius:10px;cursor:pointer;color:#cbd0dc}
-.glist div:hover{background:var(--card2)}
-.glist div.on{background:#232c40;color:#fff}
+/* 【只作用于直接子项】以前是 `.glist div`，把每一层嵌套 div 都塞了 9px 上下内边距，
+   好友列表每行被撑到 125px 高（本来 58px 就够）。改成直接子元素。 */
+.glist > div{padding:9px 10px;border-radius:10px;cursor:pointer;color:#cbd0dc}
+.glist > div:hover{background:var(--card2)}
+.glist > div.on{background:#232c40;color:#fff}
 /* ---- 群聊窗口 ---- */
 .chatbox{background:var(--card);border:1px solid var(--line);border-radius:14px;
 display:flex;flex-direction:column;min-height:60vh}
@@ -559,7 +561,7 @@ async function loadChat(){
        ' 下：'+x.actions.map(function(a){return esc(a.tool)}).join('、')+'</div>'):'';
     // 【头像回来了】尺寸问题已经用「固定格子 + background cover」解决（跟好友页同一套），
     // 不再靠删头像绕开：格子写死 38×38，图片铺满裁剪，任何规则都放大不了它。
-    return '<div class="msg '+(me?'me':'')+'>'+avImg(x.who,cmap[x.who]||'#5a6478',38)+
+    return '<div class="msg '+(me?'me':'')+'">'+avImg(x.who,cmap[x.who]||'#5a6478',38)+
       '<div><div class="meta"><b style="color:'+(cmap[x.who]||'#9aa3b5')+'">'+
       esc(shortName(x.who))+'</b>'+adm+
       (isDefault?' <span class="tag">默认角色</span>':'')+
@@ -1038,7 +1040,7 @@ setInterval(function(){
     return body, js
 
 
-def social_hub_html(tab="moments", embed=False):
+def social_hub_html(tab="moments", embed=False, dbg=False):
     """一个页面装下社交模块：顶部页签切换，样式统一（不再一个模块一页）。"""
     _fb, _fj = _friends_inner()
     _gb, _gj = _groups_inner()
@@ -1086,8 +1088,45 @@ document.querySelectorAll('.tab').forEach(function(b){
     page = _page("社交", body, js)
     if embed:
         # 被主界面用 iframe 嵌进来时：去掉外层留白，内容铺满容器（尺寸就不会"不对"了）
-        page = page.replace("<style>", "<style>\n.wrap{max-width:none;padding:8px 10px 12px}\n"
-                            ".im{flex:1 1 auto;min-height:0}\n", 1)
+        # 【不许长出去】列表再长也只能在框里滚，不能把整块撑高——
+        # 之前好友页撑到 1005px（容器只有 428px），整页被顶出去。
+        page = page.replace("<style>", "<style>\n"
+                            ".wrap{max-width:none;padding:8px 10px 12px;height:100%;min-height:0}\n"
+                            "#tab-friends,#tab-groups{height:100%;min-height:0;overflow:hidden}\n"
+                            ".im{flex:1 1 auto;min-height:0;height:100%;overflow:hidden}\n"
+                            ".rail{min-height:0;max-height:100%;overflow:hidden}\n"
+                            ".glist{min-height:0;flex:1 1 auto;overflow:auto}\n"
+                            ".pane{height:100%;min-height:0}\n", 1)
+    if dbg:
+        # 【临时探针】问浏览器：到底哪个元素铺满了整屏？把答案写在页面顶上。
+        # 查完这个参数就没用了，留着也无害（只有 ?dbg=1 才跑）。
+        page = page.replace("</body>", """
+<div id="dbgbar" style="position:fixed;left:0;right:0;top:0;z-index:99999;background:#000;
+color:#0f0;font:12px/1.5 monospace;padding:6px;white-space:pre-wrap;max-height:60vh;overflow:auto"></div>
+<script>
+setTimeout(function(){
+  var W=innerWidth,H=innerHeight,out=[],all=document.body.querySelectorAll('*');
+  for(var i=0;i<all.length;i++){
+    var el=all[i],r=el.getBoundingClientRect();
+    var area=r.width*r.height, ratio=area/(W*H);
+    if(ratio>0.35){
+      var cs=getComputedStyle(el);
+      var bg=cs.backgroundImage||'', tiny=bg==='none'?'':(' bg='+bg.slice(0,60));
+      var pa=el.parentElement, pcs=pa?getComputedStyle(pa):null, pr=pa?pa.getBoundingClientRect():{width:0,height:0};
+      out.push(ratio.toFixed(2)+' '+el.tagName+(el.id?('#'+el.id):'')+
+        (el.className?('.'+String(el.className).split(' ').join('.')):'')+
+        ' '+Math.round(r.width)+'x'+Math.round(r.height)+
+        ' pos='+cs.position+' disp='+cs.display+tiny+
+        ' | parent='+(pa?pa.tagName+(pa.id?('#'+pa.id):'')+(pa.className?('.'+String(pa.className).split(' ').join('.')):'')+
+        ' pos='+pcs.position+' '+Math.round(pr.width)+'x'+Math.round(pr.height)+
+        ' style='+String(pa.getAttribute('style')||'').slice(0,90):'无'));
+    }
+  }
+  document.getElementById('dbgbar').textContent =
+    'viewport '+W+'x'+H+'\\n'+(out.length?out.join('\\n'):'没有超过 35% 的元素');
+},1500);
+</script>
+</body>""", 1)
     return page
 
 
