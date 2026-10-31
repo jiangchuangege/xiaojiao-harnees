@@ -4496,6 +4496,85 @@ _INFLIGHT_LOCK = threading.Lock()
 # 这是一个**可验证的判据**，而不是"猜 Flask 有没有关掉生成器"。
 _INFLIGHT_HEARTBEAT_S = 5
 _INFLIGHT_DEAD_S = 20
+# ==================== 真思考流水（给前端看的） ====================
+# 用户原话：「思考的时候具体思考的内容和所有的细节没有显示出来，让他显示出来」。
+# 以前界面上那个「正在联网搜索…」是前端每 2.2 秒轮换的**假提示**（不管在干什么都念一遍）。
+# 现在改成真流水：这一轮里载体打的每条日志，都按会话收进一个环形队列，
+# 前端边等边轮询 /api/chat/think，把真实步骤（路由、检索词、工具、模型调用、融合）逐条显示。
+_THINK = {}                      # sid -> {"q": deque, "n": int, "at": ts}
+_THINK_LOCK = threading.Lock()
+_THINK_TH = threading.local()    # 当前线程正在为哪个 sid 记账（日志处理器据此归户）
+# 【为什么还要一个全局的】实测：流水只在"开张"那一行出现——说明真正干活的代码
+#   不一定在请求线程里跑（线程本地在那条线程上是空的）。所以再留一个全局当前队列兜底：
+#   本机同一时刻只有一轮在答（队列是串行的），这个兜底是安全且必要的。
+_THINK_CUR = {"q": None, "sid": ""}
+
+
+class _ThinkLogHandler(logging.Handler):
+    """把本轮日志按会话收进去。只收 INFO 及以上，且只在"这一轮"期间生效。"""
+
+    def emit(self, record):      # noqa: D401 — logging 接口
+        try:
+            dq = getattr(_THINK_TH, "q", None) or _THINK_CUR.get("q")
+            if dq is None:
+                return
+            if record.levelno < logging.INFO:
+                return
+            msg = record.getMessage()
+            if not msg:
+                return
+            dq.append({"t": time.strftime("%H:%M:%S"), "sec": round(record.created % 1, 2),
+                       "lvl": record.levelname, "msg": msg[:400]})
+        except Exception:      # noqa: silent-ok — 记账坏了不能影响生成
+            pass
+
+
+try:
+    _think_handler = _ThinkLogHandler()
+    _think_handler.setLevel(logging.INFO)
+    logging.getLogger("xiaojiao").addHandler(_think_handler)
+    LOG.info("思考流水：已挂上日志采集器")
+except Exception as _thk_e:      # noqa: silent-ok
+    _think_handler = None
+
+
+def _think_begin(sid):
+    """(线程内) 这一轮的流水队列开张。"""
+    from collections import deque
+    dq = deque(maxlen=400)
+    try:
+        _THINK_TH.q = dq
+    except Exception:      # noqa: silent-ok
+        pass
+    if sid:
+        with _THINK_LOCK:
+            _THINK[sid] = {"q": dq, "n": 0, "at": time.time(),
+                           "q_": "开始"}
+        # 全局兜底：真正干活的代码不一定在请求线程里跑（实测只在"开张"那一行出现）
+        try:
+            _THINK_CUR["q"] = dq
+            _THINK_CUR["sid"] = sid
+        except Exception:      # noqa: silent-ok
+            pass
+    LOG.info("思考流水开张：sid=%s（之后这一轮做的每一步都会出现在前端）", sid or "-")
+
+
+def _think_end(sid):
+    try:
+        _THINK_TH.q = None
+    except Exception:      # noqa: silent-ok
+        pass
+    try:
+        if _THINK_CUR.get("sid") == (sid or ""):
+            _THINK_CUR["q"] = None
+            _THINK_CUR["sid"] = ""
+    except Exception:      # noqa: silent-ok
+        pass
+    if sid:
+        with _THINK_LOCK:
+            _hit = _THINK.get(sid)
+            if _hit:
+                _hit["at"] = time.time()
 _INTERRUPTED_NOTE = ("⏹ 这条回答**中断了**（你切走了，或连接断了）。"
                      "已经生成的部分没能完整保留 —— 想接着要，直接重说一次就行。")
 
@@ -6143,6 +6222,14 @@ def llm_chat(messages, temperature=None):
     except Exception as e:      # noqa: silent-ok — 对账失败绝不许挡住说话
         LOG.debug("说话前的模型名对账失败（忽略）：%s", e)
     _energy_spend(why="模型调用")
+    # 【思考流水：让用户看见"模型真的开始想了"】
+    try:
+        _nmsg = len(messages or [])
+        _last = str(((messages or [{}])[-1] or {}).get("content") or "")[:60].replace("\n", " ")
+        _note("调用火种 %s（喂进去 %d 条消息）｜最后一条：%s" %
+              (str((_CTX.get("route") or {}).get("model") or MODEL_NAME or "?"), _nmsg, _last))
+    except Exception:      # noqa: silent-ok
+        pass
     _tok = MAX_TOKENS
     try:
         # ⚠️ **判据要看"用户这一句"**，不是 `messages[-1]` —— 实测踩到：那一栏常常是
@@ -6631,6 +6718,22 @@ def _group_delete_guard(name, args):
         return ""
 
 
+def _note(msg):
+    """往「这一轮的思考流水」里写一条前端能看到的真实记录。
+
+    为什么不用普通日志：日志里混着轮询/后台噪音，也常常只在 DEBUG；
+    用户要看的是「这一步它到底在做什么」，所以关键节点显式写一句人话。
+    """
+    try:
+        dq = getattr(_THINK_TH, "q", None) or _THINK_CUR.get("q")
+        _txt = str(msg or "").strip()
+        if dq is None or not _txt:
+            return
+        dq.append({"t": time.strftime("%H:%M:%S"), "lvl": "NOTE", "msg": _txt[:400]})
+    except Exception:      # noqa: silent-ok
+        pass
+
+
 def run_tool(name, args, force=False):
     """工具调用的**唯一入口**：红线拦截 → 本轮去重 → 真执行 → 留档。
 
@@ -6775,6 +6878,18 @@ def run_tool(name, args, force=False):
         # 插在前面会改变既有判据的行为 —— 这是"只加不改"的具体落法。
         _res = _res + _cw
     _round_remember(name, args, _res)
+    # 【把这一步写进给用户看的思考流水】名字 + 关键参数 + 结果长度/摘要，
+    #   这样界面上能看到"它到底调了什么、拿到多少东西"，而不是一句空的"正在思考"。
+    try:
+        _ks = [k for k in ("command", "query", "path", "url", "file", "name") if (args or {}).get(k)]
+        _argtxt = "，".join("%s=%s" % (k, str((args or {}).get(k))[:60]) for k in _ks[:3])
+        _reslen = len(_res) if isinstance(_res, str) else 0
+        _head = (str(_res)[:80].replace("\n", " ") if isinstance(_res, str) else "")
+        _note("调用工具 %s%s → 回来 %d 字%s" % (
+            name, ("（" + _argtxt + "）") if _argtxt else "", _reslen,
+            ("｜" + _head) if _head else ""))
+    except Exception:      # noqa: silent-ok
+        pass
     return _res
 
 
@@ -18363,6 +18478,29 @@ def _api_chat_body(user_input, data, ticket=None):
     })
 
 
+@app.route("/api/chat/think")
+def api_chat_think():
+    """这一轮**真实**走到哪了（前端边等边拉）。
+
+    返回 {"lines":[{"t","msg","lvl"}], "n":已给到第几条, "running":还在跑吗}
+    前端用 `from` 传上次的 n，只取增量。
+    """
+    sid = str(request.args.get("sid") or "")
+    try:
+        frm = int(request.args.get("from") or 0)
+    except Exception:      # noqa: silent-ok
+        frm = 0
+    with _THINK_LOCK:
+        hit = _THINK.get(sid)
+        if not hit:
+            return jsonify({"ok": True, "lines": [], "n": 0, "running": False})
+        q = hit["q"]
+        items = list(q)
+    new = items[frm:]
+    return jsonify({"ok": True, "lines": new, "n": len(items),
+                    "running": _inflight_generating(sid)})
+
+
 @app.route("/api/chat/stream", methods=["POST"])
 def api_chat_stream():
     """流式对话（SSE）—— 第 3 步：输出无限。
@@ -18451,6 +18589,11 @@ def api_chat_stream():
             _sid = ""
         # Bug 5：登记"这个会话正在生成"（唯一可信的判据，前端/接口据此判断要不要显示"正在回答"）
         _inflight_begin(_sid)
+        # 【真思考流水开张】这一线程里所有 INFO 日志都会进这个会话的队列，前端边等边拉
+        try:
+            _think_begin(_sid)
+        except Exception as _tbe:      # noqa: silent-ok
+            LOG.debug("思考流水开张失败（忽略）：%s", _tbe)
         # 把队列票号挂在会话上：前端 abort / 用户叫停时，另一个线程据此**真的取消**这一轮
         try:
             _tk_top = locals().get("_ticket")
@@ -18614,6 +18757,10 @@ def api_chat_stream():
             #              ③ 若没正常结束，把已经生成的那部分落盘。
             _hb_stop.set()
             _inflight_end(_sid)
+            try:
+                _think_end(_sid)
+            except Exception as _tee:      # noqa: silent-ok
+                LOG.debug("思考流水收尾失败（忽略）：%s", _tee)
             if not _finished[0]:
                 try:
                     _flush_partial_answer(_sid, "".join(flow) or "".join(buf))
@@ -21565,17 +21712,67 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
  const myGen=++GEN.seq;
  GEN.active=true;GEN.sid=null;
  try{GEN.ctrl=new AbortController();}catch(e){GEN.ctrl=null;}
- // 会动的"思考中"提示
- const th=document.createElement('div');th.className='think';th.innerHTML='<span class="spin"></span><span class="stag">正在理解你的问题…</span>';feed.appendChild(th);feed.scrollTop=feed.scrollHeight;
- const stages=['正在理解你的问题…','🌐 正在联网搜索…','💾 正在回忆记忆…','🧠 大脑正在思考…','✍️ 正在组织回答…'];let si=0;
- const timer=setInterval(()=>{si=(si+1)%stages.length;const s=th.querySelector('.stag');if(s)s.textContent=stages[si];},2200);
+ // 会动的"思考中"提示：**显示真实流水**（以前是每 2.2 秒轮换的假标签，不管在干什么都念
+ // 「正在联网搜索…」—— 那就是骗人）。现在边等边拉 /api/chat/think，把载体真正做的事逐条显示。
+ const th=document.createElement('div');th.className='think';th._t0=Date.now();
+ th.innerHTML='<span class="spin"></span><span class="stag">正在理解你的问题…</span>'+
+   '<div class="tlog" style="margin-top:6px;font-size:12px;color:#8b93a5;max-height:9.5em;'+
+   'overflow:auto;white-space:pre-wrap;line-height:1.55"></div>';
+ feed.appendChild(th);feed.scrollTop=feed.scrollHeight;
+ const tlog=th.querySelector('.tlog');let thinkN=0;
+ const pullThink=async(sid)=>{
+   if(!sid)return;
+   try{
+     const r=await fetch('/api/chat/think?sid='+encodeURIComponent(sid)+'&from='+thinkN);
+     const d=await r.json();
+     if(d&&d.lines&&d.lines.length){
+       thinkN=d.n||(thinkN+d.lines.length);
+       d.lines.forEach(function(x){
+         const line=document.createElement('div');
+         line.textContent='· '+(x.msg||'');
+         tlog.appendChild(line);
+       });
+       tlog.scrollTop=tlog.scrollHeight;
+       const s=th.querySelector('.stag');if(s)s.textContent='正在做事…（下面是真的在做）';
+     }
+   }catch(e){}
+ };
+ const timer=setInterval(()=>{pullThink(GEN.sid);},700);
  // 流式接收：一个气泡、边到边追加 —— 长文也是"一次连续输出"，用户看不到分段痕迹
  let bubble=null,body=null,buf='',meta=null;
  const stopBtn=document.createElement('button');stopBtn.className='icon-btn';stopBtn.textContent='⏹ 停止';
  stopBtn.onclick=()=>{try{fetch('/api/chat/stop',{method:'POST'});}catch(e){}
    try{GEN.ctrl&&GEN.ctrl.abort();}catch(e){}          // 停 = 真的停：连流一起断
    stopBtn.remove();};
- const ensureBubble=()=>{if(bubble)return;if(th.parentNode)th.remove();
+ // 【思考过程不删掉，收成可展开的一段】用户要求看到"具体思考内容和所有细节"，所以答案开始
+ //   输出时把真实流水折成「思考过程（N 条）」放在气泡上方，而不是抹掉。
+ const foldThink=()=>{
+   try{
+     if(!th.parentNode)return;
+     const n=tlog?tlog.children.length:0;
+     if(!n){th.remove();return;}
+     const secs=Math.max(1,Math.round((Date.now()-(th._t0||Date.now()))/1000));
+     const det=document.createElement('details');
+     det.className='thinkfold';
+     // 【别冒充"模型内心独白"】本地火种不输出推理轨迹（我直接打 llama.cpp 的流式接口验过：
+     //   delta 里只有 role/content，没有 reasoning_content）。所以这里显示的是载体真实做了什么，
+     //   标题也如实写成"执行步骤"，不写成"思考"。
+     det.innerHTML='<summary>已执行 '+n+' 步（用时 '+secs+' 秒）▾</summary>'+
+       '<div style="font-size:11px;color:#6b7280;margin:2px 0 4px">'+
+       '这是载体真实做的事：路由判定、检索词、工具调用与返回、模型调用次数、自评结论。'+
+       '不是模型的内心独白 —— 本地这颗火种不输出推理轨迹，装了会思考的模型才会显示那一段。</div>';
+     const box=document.createElement('div');
+     box.className='tlog';
+     box.style.cssText='font-size:12px;color:#8b93a5;white-space:pre-wrap;line-height:1.55;'+
+       'max-height:16em;overflow:auto;';
+     box.textContent=Array.prototype.map.call(tlog.children,function(c){return c.textContent})
+       .join('\n');
+     det.appendChild(box);
+     th.parentNode.insertBefore(det,th);
+     th.remove();
+   }catch(e){try{th.remove()}catch(e2){}}
+ };
+ const ensureBubble=()=>{if(bubble)return;foldThink();
    bubble=document.createElement('div');bubble.className='m bot';bubble.innerHTML='<div class="b"></div>';
    body=bubble.querySelector('.b');feed.appendChild(bubble);};
  // **停止按钮的生命周期只由 cleanup() 管**。
