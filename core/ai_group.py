@@ -994,20 +994,30 @@ def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
                 sys_p += "\n本群文件：" + "、".join(_fl) + \
                     "\n（可以就这些文件讨论；需要读内容就用 read_file。）"
             _kind_now = topic_kind(g.get("topic") or g.get("name") or "")
-            _ds = []
+            # 【共识要分"已证实"和"未证实"】用户指出「蒸馏出来的东西都是假的」——
+            #   旧实现把蒸馏结果一律当权威塞进 prompt（"别重复讨论，直接用"），
+            #   于是编造会被下一轮当成事实继续用。现在分开写：
+            #   已证实的才叫共识；未证实的明确标注"不许当结论"。
+            _ds_ok, _ds_bad = [], []
             for _x in (g.get("distilled") or [])[-6:]:
                 _note = str(_x.get("note") or "").strip()
                 if not _note:
                     continue
-                # 旧话题的共识别拿来污染新话题：技术词只在 dev/study 群里带
                 _tech = any(w in _note for w in ("代码", "接口", "部署", "服务", "数据库", "语法",
                                                  "框架", "性能", "并发", "锁", "测试"))
                 if _tech and _kind_now not in ("dev", "study"):
                     continue
-                _ds.append(_note)
-            if _ds:
-                sys_p += "\n本群已有的共识（别重复讨论，直接用）：\n" + "\n".join(
-                    "· " + str(x)[:120] for x in _ds)
+                if "【已证实】" in _note and "【未证实" not in _note:
+                    _ds_ok.append(_note)
+                else:
+                    _ds_bad.append(_note)
+            if _ds_ok:
+                sys_p += ("\n本群已经核实的共识（可以直接用）：\n"
+                          + "\n".join("· " + str(x)[:120] for x in _ds_ok))
+            if _ds_bad:
+                sys_p += ("\n下面这些是**没核实的旧记录**（可能是编的）："
+                          "不要当事实复述，要用它之前先查证；想查就写〔提议：search 关键词〕。\n"
+                          + "\n".join("· " + str(x)[:100] for x in _ds_bad[-3:]))
             if _can_act:
                 sys_p += ("\n如果你认为该做一件具体的事（写文件/跑命令/查资料/造插件），"
                           "就在回答末尾单独写一行：〔提议：工具名 + 一句话说明〕，"

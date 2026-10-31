@@ -742,9 +742,21 @@ async function fillSettings(){
       const d=await P('/api/aigroups/'+CUR+'/pace',{pace:b.dataset.pace});
       toast(document.getElementById('setMsg'),d.ok?'节奏已切':'失败',!!d.ok);loadChat();}});
   const ds=g.distilled||[];
-  document.getElementById('distillBox').innerHTML=ds.length?
-    ds.slice(-6).map(function(x){return '· '+esc(x.note||'')}).join('<br>'):
-    '（还没有。聊几轮就会自己蒸馏出来）';
+  // 【共识要分开显示】用户问「蒸馏出来的东西为何都是假的」——旧共识里混着编造，
+  //   以前一律当结论列出来。现在分成「已证实」「未证实」两组，未证实的明确写着别当事实。
+  (function(){
+    const ok=[],bad=[];
+    ds.slice(-8).forEach(function(x){
+      const n=String(x.note||'');
+      if(n.indexOf('【已证实】')>=0 && n.indexOf('【未证实')<0){ok.push(n)}else{bad.push(n)}
+    });
+    let h='';
+    h+='<div style="margin-bottom:4px"><b>已核实（有来源）</b> '+(ok.length?ok.length+' 条':'暂无')+'</div>';
+    h+=ok.length?ok.map(function(n){return '· '+esc(n)}).join('<br>'):'<span class="muted">还没有。真查过、有工具或你原话支持的东西才会进这里。</span>';
+    h+='<div style="margin:8px 0 4px"><b>未证实（可能是编的，别当事实）</b> '+bad.length+' 条</div>';
+    h+=bad.length?bad.map(function(n){return '<span style="color:#e0a33e">· '+esc(n)+'</span>'}).join('<br>'):'<span class="muted">没有。</span>';
+    document.getElementById('distillBox').innerHTML=h;
+  })();
 }
 document.getElementById('glist').addEventListener('click',function(ev){
   const it=ev.target.closest('[data-gid]');if(!it)return;openGroup(it.dataset.gid);

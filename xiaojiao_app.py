@@ -3088,21 +3088,60 @@ def _maybe_post_moment(user_input="", answer=""):
 
 
 def _group_distill(messages):
-    """把一轮群聊蒸馏成几条可复用经验（写入本群共识，下一轮带进 prompt）。
+    """把一轮群聊蒸馏成**带来源标注**的经验（写入本群共识，下一轮带进 prompt）。
 
-    为什么要它：用户要「让他们聊天的时候互相蒸馏，这样模型会越来越强」——
-    光有聊天记录不算变强；要压成**能带回去的结论**，下一轮直接站在这个结论上。
+    【为什么改写】用户指出：「蒸馏出来的东西为何都是假的而并不是去分析案情」。
+    根因很直接：旧实现把整段聊天（里面本来就有编造）丢给模型"压成结论"，
+    模型于是**在编造之上再编一层**，而且被存成"本群共识"、下一轮还当权威带进去。
+    现在的规矩：
+      ① 只压**有依据的东西**——用户原话、带工具动作（actions）的消息、以及被重复提到的同一说法；
+      ② 蒸馏只许"压缩已有的说法"，**不许新增任何事实**（prompt 里写死）；
+      ③ 每条结论打来源标记：有工具/用户依据 = 已证实；纯成员之间互相说的 = 未证实（推断）；
+      ④ 出现具体人名/年份/机构/数字而没有依据 → 一律标成"未证实"，不许当结论用。
     """
     try:
-        _lines = "\n".join("%s：%s" % (m.get("who"), str(m.get("text"))[:120])
-                           for m in (messages or [])[-8:])
-        if len(_lines.strip()) < 10:
+        _msgs = [m for m in (messages or [])[-10:] if str(m.get("text") or "").strip()]
+        if len(_msgs) < 2:
             return ""
-        _sys = ("把下面这段群聊压成 1~3 条**可复用的结论**（要具体、能用、别空话），"
-                "每条一行、不要编号、不要复述谁说了什么。只输出结论本身。")
+        # 逐条判断"这句话有没有依据"
+        _grounded, _ungrounded = [], []
+        for m in _msgs:
+            _who = str(m.get("who") or "")
+            _txt = str(m.get("text") or "")[:140]
+            _acts = [str((a or {}).get("tool") or "") for a in (m.get("actions") or [])]
+            _is_user = _who in ("你", "user")
+            _has_fact = bool(re.search(r"\d{4}\s*年|案|判决|通报|据.{0,4}(报道|统计|悉|警方)|"
+                                       r"第[一二三四五六七八九十百]+条|CVE-|某(省|市|局|大学|公司)", _txt))
+            if _is_user:
+                _grounded.append("【用户原话】" + _txt)
+            elif _acts:
+                _grounded.append("【真做过 %s】%s" % ("、".join(_acts[:3]), _txt))
+            elif _has_fact:
+                _ungrounded.append("【无来源】%s：%s" % (_who, _txt))
+            else:
+                _ungrounded.append("【无来源】%s：%s" % (_who, _txt))
+        _lines = "\n".join(_grounded + _ungrounded)
+        if not _lines.strip():
+            return ""
+        _sys = ("你在整理一段群聊的**要点**。硬规矩：\n"
+                "1) 只许压缩已经出现过的说法，**不许新增任何事实**（不许补人名、年份、机构、数字）；\n"
+                "2) 每条前面必须带标签：【已证实】只在有工具动作或用户原话支持时用；其余一律【未证实】；\n"
+                "3) 没有依据的具体细节，写成【未证实·推断】并且不要当结论，最好写成待查问题；\n"
+                "4) 每条一行，最多 3 行，不要复述谁说了什么。")
         _t = str(llm_chat([{"role": "system", "content": _sys},
-                           {"role": "user", "content": _lines}], temperature=0.3) or "").strip()
-        _out = [x.strip(" -·\t") for x in _t.splitlines() if len(x.strip()) >= 6]
+                           {"role": "user", "content": _lines}], temperature=0.2) or "").strip()
+        _out = []
+        for x in _t.splitlines():
+            x = x.strip(" -·\t")
+            if len(x) < 6:
+                continue
+            # 载体兜底：没打标签的一律按"未证实"处理，绝不默认成结论
+            if "【已证实】" not in x and "【未证实" not in x:
+                x = "【未证实·推断】" + x
+            # 带具体事实却没有依据的那几行 → 强制降级
+            if "【已证实】" in x and not _grounded:
+                x = x.replace("【已证实】", "【未证实·推断】")
+            _out.append(x)
         return "；".join(_out[:3])[:400]
     except Exception as e:      # noqa: silent-ok — 蒸馏失败不影响群聊
         LOG.debug("群组蒸馏失败：%s", e)
