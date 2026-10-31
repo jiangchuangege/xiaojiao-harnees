@@ -558,11 +558,13 @@ def set_group(gid, name=None, topic=None, notice=None, avatar=None):
             if g.get("id") != gid:
                 continue
             if name is not None and str(name).strip():
-                g["name"] = str(name).strip()
+                g["name"] = str(name).strip()[:60]
             if topic is not None:
-                g["topic"] = str(topic).strip()
+                # 【主题不是公告】实测有把一大段案情说明塞进主题的，标题栏被撑满、
+                #   聊天区被挤下去（用户原话：设定把聊天屏幕给放大了）。这里限量。
+                g["topic"] = " ".join(str(topic).split())[:240]
             if notice is not None:
-                g["notice"] = str(notice).strip()
+                g["notice"] = str(notice).strip()[:600]
             if avatar is not None:
                 g["avatar"] = str(avatar).strip()
             _save(d)

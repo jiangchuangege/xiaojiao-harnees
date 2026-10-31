@@ -613,8 +613,21 @@ async function loadChat(){
     pm.title=isRP?'这个群的主题写了虚构/扮演，所以允许编剧情':
       '这个群没写角色扮演：讲具体案情/数字必须有出处，没查到就不许编';
   }catch(e){}
-  document.getElementById('pSub').textContent=(g.topic||'无主题')+' ｜ '+(g.members||[]).length+' 人'+
-    ((g.files||[]).length?(' ｜ 文件 '+(g.files||[]).length):'');
+  // 【标题栏只占两行】实测：主题被写成一长段说明时，标题栏会撑得比聊天区还高，
+  //   整个聊天屏被挤下去（用户原话：设定把聊天屏幕给放大了）。这里夹两行，全文进 title。
+  try{
+    const sub=document.getElementById('pSub');
+    const full=(g.topic||'无主题')+' ｜ '+(g.members||[]).length+' 人'+
+      ((g.files||[]).length?(' ｜ 文件 '+(g.files||[]).length):'');
+    sub.textContent=full;
+    sub.title=full;
+    sub.style.display='-webkit-box';
+    sub.style.webkitLineClamp='2';
+    sub.style.webkitBoxOrient='vertical';
+    sub.style.overflow='hidden';
+    sub.style.whiteSpace='normal';
+    sub.style.maxHeight='2.9em';
+  }catch(e){}
   const pav=document.getElementById('pav');
   if(g.avatar){
     pav.innerHTML='';            // 有照片就不要再压首字
