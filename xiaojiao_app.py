@@ -18523,6 +18523,15 @@ def api_chat_stream():
     user_input = (data.get("message") or "").strip()
     if not user_input:
         return jsonify({"ok": False, "error": "空消息"}), 400
+    # 【要它把自己的思考写出来】用户要求看到"模型自己思考的内容"。本地火种没有
+    # reasoning_content 字段（实测 delta 只有 role/content），但它**会**把推理写进正文
+    # （"## 推理过程…"）。所以这里要求它用 <思考>…</思考> 单独包一段，载体拆出来单独显示。
+    _want_reason = bool(data.get("think"))
+    _run_input = user_input
+    if _want_reason:
+        _run_input = (user_input + "\n\n【回答格式，务必遵守】先用 <思考> 和 </思考> 包住你的"
+                                    "推理过程（可以分点、可以自我怀疑、可以推翻自己），"
+                                    "然后在 </思考> 之后写最终回答。不要复述题目。")
 
     def _sse(obj):
         return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
@@ -18682,7 +18691,7 @@ def api_chat_stream():
 
             def _work():
                 try:
-                    holder["r"] = agent_run(user_input, on_chunk=_on_chunk,
+                    holder["r"] = agent_run(_run_input, on_chunk=_on_chunk,
                                             on_progress=_on_progress, on_delta=_on_delta)
                 except Exception as e:
                     holder["err"] = str(e)
@@ -21716,8 +21725,8 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
  // 「正在联网搜索…」—— 那就是骗人）。现在边等边拉 /api/chat/think，把载体真正做的事逐条显示。
  const th=document.createElement('div');th.className='think';th._t0=Date.now();
  th.innerHTML='<span class="spin"></span><span class="stag">正在理解你的问题…</span>'+
-   '<div class="tlog" style="margin-top:6px;font-size:12px;color:#8b93a5;max-height:9.5em;'+
-   'overflow:auto;white-space:pre-wrap;line-height:1.55"></div>';
+   '<div class="tlog" style="margin-top:6px;font-size:12px;color:#8b93a5;'+
+   'white-space:pre-wrap;line-height:1.6"></div>';
  feed.appendChild(th);feed.scrollTop=feed.scrollHeight;
  const tlog=th.querySelector('.tlog');let thinkN=0;
  const pullThink=async(sid)=>{
@@ -21763,11 +21772,14 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
        '不是模型的内心独白 —— 本地这颗火种不输出推理轨迹，装了会思考的模型才会显示那一段。</div>';
      const box=document.createElement('div');
      box.className='tlog';
-     box.style.cssText='font-size:12px;color:#8b93a5;white-space:pre-wrap;line-height:1.55;'+
-       'max-height:16em;overflow:auto;';
+     // 【不要小框】用户要求"全部展示、别塞进一个滚动小框"，所以这里不限高、不内滚，
+     //   整段直接铺开（页面本身可以往下滚）。
+     box.style.cssText='font-size:12px;color:#8b93a5;white-space:pre-wrap;line-height:1.6;'
+       +'overflow:visible;max-height:none';
      box.textContent=Array.prototype.map.call(tlog.children,function(c){return c.textContent})
        .join('\n');
      det.appendChild(box);
+     det.open=true;      // 默认展开，不用再点一下
      th.parentNode.insertBefore(det,th);
      th.remove();
    }catch(e){try{th.remove()}catch(e2){}}
@@ -21784,11 +21796,58 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
    if(th.parentNode)th.remove();
    if(stopBtn.parentNode)stopBtn.remove();
    if(myGen===GEN.seq){GEN.active=false;GEN.ctrl=null;}};
- const appendText=(s)=>{ensureBubble();buf+=s;body.textContent=buf;feed.scrollTop=feed.scrollHeight;};
+ // 【把模型的"思考段"和正文分开】请求带 think:1，模型会用 <思考>…</思考> 包住推理。
+ //   这里边收边拆：思考进上面的可展开块，正文进气泡。模型不吐标记就整段当正文（不猜）。
+ let rawAll='', thinkBuf='', phase='pre', thinkBox=null;
+ const ensureThinkBox=()=>{
+   if(thinkBox&&thinkBox.parentNode)return thinkBox;
+   const det=document.createElement('details');
+   det.className='thinkfold';det.open=true;
+   det.innerHTML='<summary>模型的思考</summary>';
+   const b=document.createElement('div');
+   b.style.cssText='font-size:13px;color:#b9c3d6;white-space:pre-wrap;line-height:1.7;'+
+     'margin-top:4px';
+   det.appendChild(b);
+   if(th.parentNode)th.parentNode.insertBefore(det,th);else feed.appendChild(det);
+   thinkBox=b;return b;
+ };
+ const feedStream=()=>{
+   // 从 rawAll 里切出 思考/正文 两段
+   if(phase==='pre'){
+     const s=rawAll.replace(/^\s+/,'');
+     const i=s.indexOf('<思考>');
+     if(i===0){
+       phase='think';
+       rawAll=s.slice(4);
+     }else if(s.length>8||/<思考>/.test(s)){
+       phase='body';      // 不是从开头就写思考 → 当正文
+     }else{
+       return;            // 还看不出，再等等
+     }
+   }
+   if(phase==='think'){
+     const j=rawAll.indexOf('</思考>');
+     if(j>=0){
+       thinkBuf=rawAll.slice(0,j);
+       rawAll=rawAll.slice(j+5);
+       phase='body';
+       const b=ensureThinkBox();b.textContent=thinkBuf;
+     }else{
+       thinkBuf=rawAll;
+       const b=ensureThinkBox();b.textContent=thinkBuf;
+       return;
+     }
+   }
+   const rest=rawAll.replace(/^\s*\n/,'');
+   ensureBubble();
+   buf=rest;if(body)body.textContent=buf;
+   feed.scrollTop=feed.scrollHeight;
+ };
+ const appendText=(s)=>{rawAll+=s;feedStream();};
  feed.appendChild(stopBtn);feed.scrollTop=feed.scrollHeight;
  try{
   const r=await fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({message:t}),signal:(GEN.ctrl?GEN.ctrl.signal:undefined)});
+    body:JSON.stringify({message:t,think:1}),signal:(GEN.ctrl?GEN.ctrl.signal:undefined)});
   if(!r.ok||!r.body){throw new Error('HTTP '+r.status);}
   const rd=r.body.getReader(),dec=new TextDecoder();let acc='',ended=false;
   for(;;){const s=await rd.read();if(s.done)break;
@@ -21811,7 +21870,32 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
     else if(d.type==='error'){appendText((buf?'\n\n':'')+'⚠️ '+d.error);}
     // done 里的 answer 是**权威全文**：流式过程中为了接缝去重可能少显示几个字，
     // 结束时用权威全文对齐一次，保证"屏幕上看到的"和"存下来的"完全一致。
-    else if(d.type==='done'){meta=meta||d;if(d.answer){buf=d.answer;if(body)body.textContent=buf;}}
+       // done 里的 answer 是权威全文：收尾时把"模型的思考段"拆出来单独显示。
+    // 【为什么要靠拆文本】本地这颗火种的推理是写在正文里的（实测开头就是「## 推理过程」），
+    //   没有 reasoning_content 字段，也不会老老实实按 <思考> 包。所以这里按它真实出现的
+    //   结构拆：<思考> 包着的优先；否则找「## 推理过程 / 解题思路 / 分析过程」这类段落标题。
+    else if(d.type==='done'){meta=meta||d;if(d.answer){
+      let _a=String(d.answer);
+      let _think='';
+      const _tag=_a.match(/^\s*<思考>([\s\S]*?)<\/思考>\s*/);
+      if(_tag){_think=_tag[1].trim();_a=_a.slice(_tag[0].length);}
+      else{
+        // 「## 答案：X ... ## 推理过程 ...」这种：正文取答案段，推理段进思考块
+        const _ansHdr=_a.search(/^\s*#{1,4}\s*答案/);
+        const _thHdr=_a.search(/#{1,4}\s*(推理过程|思考过程|解题思路|分析过程|思路|推理)/);
+        if(_ansHdr>=0&&_thHdr>_ansHdr){
+          _think=_a.slice(_thHdr).trim();
+          _a=_a.slice(0,_thHdr).trim();
+        }else if(_thHdr>=0&&/^\s*#{1,4}\s*(推理过程|思考过程|解题思路|分析过程)/.test(_a)){
+          // 一开头就是推理段：把推理段收进思考块，正文从「答案」标题开始
+          const _ans2=_a.search(/#{1,4}\s*答案/);
+          if(_ans2>0){_think=_a.slice(0,_ans2).trim();_a=_a.slice(_ans2).trim();}
+        }
+      }
+      if(_think){const b=ensureThinkBox();b.textContent=_think;
+        const sm=thinkBox&&thinkBox.parentNode&&thinkBox.parentNode.querySelector('summary');
+        if(sm)sm.textContent='模型的思考（它自己写出来的推理段）';}
+      buf=_a;if(body)body.textContent=buf;}}
    }
    if(ended)break;
   }
