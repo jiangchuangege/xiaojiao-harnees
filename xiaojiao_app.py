@@ -18691,6 +18691,58 @@ def api_chat_stream():
 
             def _work():
                 try:
+                    # ================== 深度模式：同题多跑 + 载体择优 ==================
+                    # 用户要求「必须超过现在」。单颗 4B 一次前向的天花板不是换句话能抬的；
+                    # 能做的是：同一道题换几个角度各答一遍，再由载体按**可核判据**挑一个。
+                    # （README 能力对照表里那条「同题跑 N 次 + 投票择一」一直标着未落地，现在落地。）
+                    _qn = int(data.get("quality") or 0)
+                    _ENS = None
+                    if _qn >= 2:
+                        try:
+                            from core import ensemble as _ENS
+                        except Exception as _ie:      # noqa: silent-ok
+                            _note("深度模式不可用：%s" % str(_ie)[:80])
+                            _ENS = None
+                    if _ENS is not None:
+                        _n = max(2, min(4, _qn))
+                        _cands, _last = [], None
+                        # 第 1 遍：走完整载体流水（工具/检索/护栏全在），拿到"正规答案"
+                        _note("深度模式：第 1/%d 遍｜走完整流水（工具+检索+护栏）" % _n)
+                        try:
+                            _r1 = agent_run(_run_input, on_chunk=_on_chunk,
+                                            on_progress=_on_progress, on_delta=_on_delta)
+                            _last = _r1
+                            _cands.append(str((_r1 or ("",))[0] or ""))
+                            _note("第 1 遍答完（%d 字）" % len(str(_cands[-1])))
+                        except Exception as _ee:      # noqa: silent-ok
+                            _note("第 1 遍失败：%s" % str(_ee)[:80])
+                        # 第 2..N 遍：**快速采样**（只调一次模型、不带工具），换角度重答。
+                        # 为什么不每遍都走完整流水：实测一遍要 1~3 分钟，三遍就是十倍等待。
+                        # 深度模式要的是"多一个视角来交叉校验"，不是把整条流水跑三遍。
+                        for _i in range(1, _n):
+                            _hn = _ENS.angle_hint(_i)
+                            _note("深度模式：第 %d/%d 遍｜快速采样（%s）"
+                                  % (_i + 1, _n, _hn[:20]))
+                            try:
+                                _msg2 = [
+                                    {"role": "system", "content":
+                                     "你在回答用户的问题。直接给答案，不要客套、不要复述题目。"},
+                                    {"role": "user", "content":
+                                     user_input + "\n\n（这次换个答法：" + _hn + "）"}]
+                                _t2 = str(llm_chat(_msg2, temperature=0.8) or "").strip()
+                                if _t2:
+                                    _cands.append(_t2)
+                                    _note("第 %d 遍答完（%d 字）" % (_i + 1, len(_t2)))
+                            except Exception as _ee:      # noqa: silent-ok
+                                _note("第 %d 遍失败：%s" % (_i + 1, str(_ee)[:80]))
+                        if _cands:
+                            _best, _meta = _ENS.pick(_cands, user_input)
+                            _note("择优：" + str(_meta.get("why") or "")[:160])
+                            _tail = list(_last[1:]) if _last else [True, {}, False, []]
+                            # 若选中的不是第 1 遍（完整流水那条），就把它作为最终回答
+                            holder["r"] = tuple([_best] + _tail)
+                            return
+                        _note("深度模式没有拿到任何候选 → 退回普通回答")
                     holder["r"] = agent_run(_run_input, on_chunk=_on_chunk,
                                             on_progress=_on_progress, on_delta=_on_delta)
                 except Exception as e:
@@ -21016,6 +21068,9 @@ HTML = r"""<!DOCTYPE html>
       <span class="ws-ind" id="wsInd" onclick="toggleAccess()" title="点击：Full access(所有命令直接执行)/Read-only(每次执行都询问)">🔐 Full access</span>
       <button class="chip-btn" onclick="openVideo()" title="本地零算力生成视频">🎬 视频</button>
       <button class="chip-btn" id="toolsBtn" onclick="toggleTools()" title="工具调用开关">🛠️ 工具</button>
+      <!-- 深度模式：同一道题跑 3 遍，载体按可核判据择优（慢一些，但明显更稳） -->
+      <button class="chip-btn" id="deepBtn" onclick="toggleDeep()"
+              title="深度模式：同题跑 3 遍 + 交叉校验择一（慢一些，更稳）">🎯 深度：开</button>
     </div>
     <div class="cmp-input">
       <textarea id="inp" rows="1" placeholder="向小焦提问…（Enter 发送，Shift+Enter 换行）" autocomplete="off"
@@ -21847,7 +21902,8 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';
  feed.appendChild(stopBtn);feed.scrollTop=feed.scrollHeight;
  try{
   const r=await fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({message:t,think:1}),signal:(GEN.ctrl?GEN.ctrl.signal:undefined)});
+    body:JSON.stringify({message:t,think:1,quality:(window.DEEP&&DEEP.on)?DEEP.n:0}),
+    signal:(GEN.ctrl?GEN.ctrl.signal:undefined)});
   if(!r.ok||!r.body){throw new Error('HTTP '+r.status);}
   const rd=r.body.getReader(),dec=new TextDecoder();let acc='',ended=false;
   for(;;){const s=await rd.read();if(s.done)break;
@@ -21962,6 +22018,18 @@ function setToolsOn(on){const b=document.getElementById('toolsBtn');b.className=
  const r=document.getElementById('toolsRow');if(r)r.style.color=on?'#4ade80':'#f87171';
  const w=document.getElementById('wsInd');if(w){w.textContent=on?'🔐 Full access':'🔒 Read-only';} }
 async function toggleTools(){const r=await fetch('/api/tools_toggle',{method:'POST'});const d=await r.json();setToolsOn(d.tools_on);}
+// 深度模式开关（同题 3 遍 + 载体择优）。默认开：用户要的是"更稳"，不是"更快"。
+window.DEEP={on:true,n:3};
+function toggleDeep(){
+  DEEP.on=!DEEP.on;
+  const b=document.getElementById('deepBtn');
+  if(b){b.textContent='🎯 深度：'+(DEEP.on?'开':'关');
+    b.style.opacity=DEEP.on?'1':'0.55';}
+  try{localStorage.setItem('xj_deep',DEEP.on?'1':'0');}catch(e){}
+}
+try{if(localStorage.getItem('xj_deep')==='0'){DEEP.on=false;
+  const _db=document.getElementById('deepBtn');
+  if(_db){_db.textContent='🎯 深度：关';_db.style.opacity='0.55';}}}catch(e){}
 async function loadModels(){try{const r=await fetch('/api/models');const d=await r.json();const sel=document.getElementById('modelSel');let ms=(d&&d.models)||[];
   // 没有显式配置模型时，不要显示"未配置模型"误导用户 —— 自动模式其实用的是本地大脑/llama-swap
   if(!ms.length){
