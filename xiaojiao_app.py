@@ -3143,6 +3143,19 @@ def _group_act(member, messages):
         if member.get("model"):
             _CTX["force_model"] = str(member.get("model"))
         _CTX["user_input"] = "群聊：%s" % (member.get("name") or "")
+        # 【检索词的来源要真实】以前这里只给「群聊：名字」，搜索层拿不到任何主题内容，
+        #   4B 只好自己编一个查询词 —— 实测给回来的是"2025年AI技术发展趋势"，
+        #   跟群里在聊的案子毫无关系。现在把这一轮真实的上下文（含群主题）带过去。
+        try:
+            _hint = ""
+            for _msg in (messages or []):
+                if str(_msg.get("role") or "") == "user":
+                    _hint = str(_msg.get("content") or "")
+            _hint = " ".join(_hint.split())[:600]
+            if _hint:
+                _CTX["user_input"] = "群聊·%s：%s" % (member.get("name") or "", _hint)
+        except Exception as _he:      # noqa: silent-ok
+            LOG.debug("群组动手·上下文提示失败：%s", _he)
         _CTX["intent"] = "chat"
         # 【为什么只给一小撮工具】实测：一次把 124 个工具全摆给一颗 4B，它干脆一个都不调
         #   （事件账里 act_try 中了 5 次，tools 全是空）。干活常用的是这几个。

@@ -80,6 +80,13 @@ text-align:left;min-width:2em}
 .msg .b .mh,.mtext .mh{font-weight:600;color:#fff;margin:6px 0 2px}
 .msg .b .mli,.mtext .mli{padding-left:2px}
 .msg .b .mmark,.mtext .mmark{color:#a9b8ff}
+/* markdown 表格：竖线不再糊成一片 */
+.msg .b table.mtab,.mtext table.mtab{border-collapse:collapse;margin:8px 0;font-size:13px;
+ width:100%;display:table}
+.msg .b table.mtab th,.mtext table.mtab th{background:#232c40;color:#fff;font-weight:600;
+ text-align:left;padding:6px 9px;border:1px solid #2c3550}
+.msg .b table.mtab td,.mtext table.mtab td{padding:6px 9px;border:1px solid #2c3550;
+ vertical-align:top}
 /* ---- 朋友圈 ---- */
 .mpost{display:flex;gap:11px}
 .mpost .body{flex:1;min-width:0}
@@ -184,6 +191,23 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,
 function md(s){
   var t=esc(s);
   t=t.replace(/```([\\s\\S]*?)```/g,'<pre class="mcode">$1</pre>');
+  // 【表格】聊天里模型很爱甩 markdown 表格，以前整块糊成一片竖线，现在真画成表。
+  //   判据：表头一行 + 分隔行（|---|---|）+ 若干数据行。
+  t=t.replace(/(^|\\n)(\\|[^\\n]*\\|)[ \\t]*\\n\\|?[ \\t]*:?-{2,}:?[ \\t]*(\\|[ \\t]*:?-{2,}:?[ \\t]*)+\\|?[ \\t]*(?:\\n((?:\\|[^\\n]*\\|[ \\t]*(?:\\n|$))+))?/g,
+    function(_m, pre, head, _sep, body){
+      function cells(line){
+        return line.replace(/^\\s*\\|/,'').replace(/\\|\\s*$/,'').split('|')
+                   .map(function(c){return c.trim()});
+      }
+      var hs=cells(head);
+      var rows=(body||'').split('\\n').filter(function(x){return x.indexOf('|')>=0}).map(cells);
+      var h='<table class="mtab"><thead><tr>'+
+        hs.map(function(c){return '<th>'+c+'</th>'}).join('')+'</tr></thead><tbody>';
+      rows.forEach(function(r){
+        h+='<tr>'+hs.map(function(_c,i){return '<td>'+(r[i]||'')+'</td>'}).join('')+'</tr>';
+      });
+      return pre+h+'</tbody></table>';
+    });
   t=t.replace(/`([^`\\n]+)`/g,'<code>$1</code>');
   t=t.replace(/\\*\\*([^*\\n]+)\\*\\*/g,'<b>$1</b>');
   t=t.replace(/__([^_\\n]+)__/g,'<b>$1</b>');

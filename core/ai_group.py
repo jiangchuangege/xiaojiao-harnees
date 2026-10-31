@@ -870,6 +870,54 @@ def _has_evidence(msgs, n=6):
     return False
 
 
+def _topic_words(g):
+    """从群主题里抠出能用来判断"有没有跑题"的关键词。"""
+    raw = str(g.get("topic") or "") + " " + str(g.get("name") or "")
+    raw = re.sub(r"[，。、；：！？,.;:!?（）()\[\]【】\s]+", " ", raw)
+    _stop = set("的一起了吧呢吗啊呀和跟与就都也还很最这那一个我们你们他们什么怎么为什么"
+                "探讨一起真实案件案件分析信息在里的是不是要要有从网互联联网")
+    out = []
+    for tok in raw.split():
+        tok = tok.strip("的了吧呢")
+        if len(tok) < 2 or tok in _stop:
+            continue
+        out.append(tok)
+    for chunk in re.findall(r"[\u4e00-\u9fa5]{2,8}", raw):
+        if chunk in _stop or len(chunk) < 2:
+            continue
+        out.append(chunk)
+    seen, res = set(), []
+    for w in out:
+        if w not in seen:
+            seen.add(w)
+            res.append(w)
+    return res[:12]
+
+
+def _off_topic(g, text, extra=None):
+    """有主题却没沾到任何主题词 → 判跑题（宁可少说，不许换题）。
+
+    extra：用户自己在群里点过名的词（主题只写「南大碎尸案」，用户说了「刁爱青」，
+    那「刁爱青」也算在题上），否则会把对的发言误杀。
+    """
+    if not str(g.get("topic") or "").strip():
+        return False
+    words = _topic_words(g)
+    for t in (extra or []):
+        if t and t not in words:
+            words.append(t)
+    if not words:
+        return False
+    t = str(text or "")
+    if any(w in t for w in words):
+        return False
+    for w in words:
+        for i in range(len(w) - 1):
+            if w[i:i + 2] in t:
+                return False
+    return True
+
+
 def _is_role_play(g):
     """这个群到底是不是在「演」？用户原话：
     「如果我没有在主题去写角色扮演，我不要他们在群里去演……探讨网络案件就必须根据真实案件，
@@ -975,8 +1023,17 @@ def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
             sys_p += ("\n【硬规矩】你没真的执行过的事，绝不能说「我已经跑了/我查过了/我扫过了/"
                       "结果有配置/已安装」这类话。你只有一张嘴：想让它发生，就写"
                       "〔提议：具体命令或动作〕，载体替你真做，做完再把真实结果贴出来。")
-            usr = "群主题：%s\n\n最近的聊天记录：\n%s\n\n现在轮到你（%s）说话：" % (
-                g.get("topic") or "（没设主题，随意聊）",
+            # 【把主题钉在最前面】实测：主题只写在 system 末尾时，4B 会顺着前几句的细节一路漂走
+            #   （用户例子：规定主题是绑架，它们聊起了雪地徒步；破案群串成两个案子）。
+            #   所以主题既进 system，也放在 user 消息最前面，并且明确"跑题就是错"。
+            _topic_txt = str(g.get("topic") or "").strip()
+            if _topic_txt:
+                sys_p += ("\n【本群唯一的主题】%s\n"
+                          "只许围绕这个主题说话。禁止引入和它无关的话题（换话题就是跑题）。"
+                          "分不清就问一句，别自己编一个方向。" % _topic_txt[:200])
+            usr = "%s最近的聊天记录：\n%s\n\n现在轮到你（%s）说话：" % (
+                ("【必须围绕的主题】%s\n\n" % _topic_txt[:200]) if _topic_txt else
+                "群主题：（没设主题，随意聊）\n\n",
                 _transcript(recent) or "（还没有人说话，你起个头）",
                 m.get("name"))
             if focus:
@@ -1073,6 +1130,30 @@ def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
                 txt = ("〔没来源·这是推断，不是查到的〕" + txt +
                        "\n\n（想让这条变成有出处的事实：让它写〔提议：search 关键词〕，载体去查。"
                        "本群没设角色扮演，所以不编案情。）")
+            # 【跑题就不发】用户原话：「我明明是规定绑架这个，他们莫名其妙说起了什么雪地徒步」。
+            #   判据在载体：有主题、但这句话一个主题词都没沾到 → 先让它重说一次，还跑题就丢。
+            _uvocab = []
+            for _um in (recent or []):
+                if str(_um.get("who")) in ("你", "user"):
+                    _uvocab += _topic_words({"topic": _um.get("text") or ""})
+            if _off_topic(g, txt, _uvocab):
+                _event("off_topic_retry", gid=gid, member=m.get("name"), text=txt[:100])
+                try:
+                    _fix = list(_msgs_for_model) + [
+                        {"role": "user",
+                         "content": "你刚才那句跑题了（本群主题：%s）。"
+                                    "只用一到两句，严格围绕这个主题，重新说一遍。"
+                                    % str(g.get("topic") or "")[:120]}]
+                    txt3, who3 = _ask(m.get("model") or "", _fix)
+                    if txt3:
+                        txt = _strip_name_prefix(str(txt3).strip().strip("“”\"'"), m.get("name"))
+                        who = who3 or who
+                except Exception as _oe:      # noqa: silent-ok
+                    LOG.debug("群组·跑题重说失败：%s", _oe)
+                if _off_topic(g, txt, _uvocab):
+                    _event("off_topic_dropped", gid=gid, member=m.get("name"), text=txt[:100])
+                    LOG.info("群组：%s 说了两句都跑题 → 丢掉不记", m.get("name"))
+                    continue
             # 【拦住复读】实测：后一个人把前一个人那句一字不差抄一遍，看着像两个 AI 互相复读。
             #   判据落在载体（提示词拦不住小模型），重合度 ≥0.8 就丢这条并记账。
             _dup, _dup_who, _ratio = _too_similar(txt, msgs)
