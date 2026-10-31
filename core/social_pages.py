@@ -704,14 +704,26 @@ document.querySelectorAll('button[data-drawer]').forEach(function(b){
   b.onclick=function(){openDrawer(b.dataset.drawer)}});
 document.querySelectorAll('button[data-close]').forEach(function(b){
   b.onclick=function(){closeDrawer(b.dataset.close)}});
+// 【失败要说明原因】以前不管什么原因都只弹一个字「失败」，用户没法判断是没选群、
+//   还是这个人已经在群里、还是服务端 404。现在把真实原因原样报出来。
+async function doInvite(payload){
+  const el=document.getElementById('invMsg');
+  if(!CUR){toast(el,'先在左边点一个群，再邀请',false);return}
+  const d=await P('/api/aigroups/'+CUR+'/invite',payload);
+  if(d.ok){
+    toast(el,'已邀请：'+((d.added||[]).join('、')||'成功'),true);
+    try{await loadChat()}catch(e){}
+    return;
+  }
+  const why=(d.failed&&d.failed.length)?d.failed.join('；'):(d.error||'服务端没说原因');
+  toast(el,'没邀进去：'+why,false);
+}
 document.getElementById('invModels').addEventListener('click',async function(ev){
-  const b=ev.target.closest('button[data-kind]');if(!b||b.disabled||!CUR)return;
-  const d=await P('/api/aigroups/'+CUR+'/invite',{model:b.dataset.val});
-  toast(document.getElementById('invMsg'),d.ok?'已邀请':'失败',!!d.ok);if(d.ok)loadChat();});
+  const b=ev.target.closest('button[data-kind]');if(!b||b.disabled)return;
+  await doInvite({model:b.dataset.val});});
 document.getElementById('invPersonas').addEventListener('click',async function(ev){
-  const b=ev.target.closest('button[data-kind]');if(!b||b.disabled||!CUR)return;
-  const d=await P('/api/aigroups/'+CUR+'/invite',{name:b.dataset.val});
-  toast(document.getElementById('invMsg'),d.ok?'已邀请':'失败',!!d.ok);if(d.ok)loadChat();});
+  const b=ev.target.closest('button[data-kind]');if(!b||b.disabled)return;
+  await doInvite({name:b.dataset.val});});
 document.getElementById('mlist').addEventListener('click',async function(ev){
   const b=ev.target.closest('button[data-act]');if(!b||!CUR)return;
   const act=b.dataset.act,v=b.dataset.val;
