@@ -464,7 +464,8 @@ def _groups_inner():
     <div class="phead">
       <div class="gav" id="pav" style="width:44px;height:44px;flex:0 0 auto">焦</div>
       <div style="flex:1;min-width:0">
-        <div class="row"><b id="pName">选一个群</b><span class="pill" id="pPace"></span></div>
+        <div class="row"><b id="pName">选一个群</b><span class="pill" id="pPace"></span>
+          <span class="pill" id="pMode" title="主题里没写角色扮演，就按真事讨论：不许编案情"></span></div>
         <div class="muted" id="pSub" style="font-size:12px">左边点一个群进来</div>
       </div>
       <button class="sm" data-drawer="inv">＋ 邀请</button>
@@ -577,6 +578,17 @@ async function loadChat(){
   document.getElementById('pName').textContent=g.name||'';
   document.title=(g.name||'群')+' · 小焦';
   document.getElementById('pPace').textContent=({chat:'聊天群',mixed:'混合',dev:'开发群'})[g.pace||'mixed'];
+  // 【这群是在演还是在讲真事】判据跟载体一致：主题/群名/公告里没明说虚构，就按真事讨论。
+  try{
+    const rpTxt=[g.name||'',g.topic||'',g.notice||''].join(' ');
+    const rpKeys=['角色扮演','扮演','剧本','剧本杀','虚构','小说','同人','跑团','设定','来演','演一个','cos','RP','剧情'];
+    const isRP=rpKeys.some(function(k){return rpTxt.indexOf(k)>=0});
+    const pm=document.getElementById('pMode');
+    pm.textContent=isRP?'角色扮演':'真事讨论';
+    pm.style.color=isRP?'#ffcf7a':'#7ce0b0';
+    pm.title=isRP?'这个群的主题写了虚构/扮演，所以允许编剧情':
+      '这个群没写角色扮演：讲具体案情/数字必须有出处，没查到就不许编';
+  }catch(e){}
   document.getElementById('pSub').textContent=(g.topic||'无主题')+' ｜ '+(g.members||[]).length+' 人'+
     ((g.files||[]).length?(' ｜ 文件 '+(g.files||[]).length):'');
   const pav=document.getElementById('pav');

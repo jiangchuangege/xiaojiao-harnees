@@ -42,7 +42,9 @@ _LLM = None
 _ALT = None
 _MODEL = ""
 
-MAX_MEMBERS = 8
+# 【不设人数上限】用户原话：「一个群最多8人???谁规定的???没有限制」。
+#   这里留一个很大的安全值，只为防止某个 bug 无限加人把界面卡死，不是产品限制。
+MAX_MEMBERS = 200
 ACT_PROB = 0.45        # 默认几率（群没设节奏时用）
 
 # 【分工发言】同一颗火种被问同一个问题，只会给相似答案 → 由载体给每个人分配不同角度。
@@ -325,6 +327,14 @@ _FAIL_MARK = re.compile(
     r"拒绝访问|Access is denied|exit code [1-9]|Exit code: [1-9]|退出码 [1-9]")
 # 产物类工具：路径在不在，是最硬的证据
 _PATH_TOOLS = ("write_file", "edit_file", "create_file", "append_file")
+# 能带来"外部事实"的工具：这几样跑过，才允许在真事群里讲具体事实
+_EVID_TOOLS = ("web_search", "search", "fetch", "get", "http_get", "scrape", "scrapling",
+               "read_file", "list_files", "workspace_search", "get_weather", "ip")
+# 【讲真事时的"具体事实"特征】年份、案号、法条、CVE、统计口径、具体机构
+_FACT_SIG = re.compile(
+    r"\d{4}\s*年|\d+\s*(万|亿|元|人|起|例|次|%|％)|CVE-\d{4}-\d+|第[一二三四五六七八九十百]+条|"
+    r"案(件|发|情)|判决|裁定|通报|公告|据(统计|报道|悉|警方)|数据(显示|表明)|"
+    r"某(省|市|县|公司|平台|银行|医院|学校)|\b[A-Z]{2,}-?\d{2,}")
 
 
 def _verify_actions(actions, workdir=""):
@@ -848,6 +858,31 @@ def run_round(gid, rounds=1, speakers=None, allow_act=True, focus=""):
             pass
 
 
+def _has_evidence(msgs, n=6):
+    """最近几条消息里有没有真的查过外部事实（web_search / 读文件 之类）。
+
+    「讲真事的群里，具体事实必须有出处」—— 没出处就不能当事实说。
+    """
+    for m in (msgs or [])[-n:]:
+        for a in (m.get("actions") or []):
+            if str(a.get("tool")) in _EVID_TOOLS:
+                return True
+    return False
+
+
+def _is_role_play(g):
+    """这个群到底是不是在「演」？用户原话：
+    「如果我没有在主题去写角色扮演，我不要他们在群里去演……探讨网络案件就必须根据真实案件，
+     而不是假的自己模拟这种，要十分严格。」
+
+    判据只看群名/主题/公告里有没有明说要虚构。默认 = **不演**（讲真实的事）。
+    """
+    _txt = " ".join(str(g.get(k) or "") for k in ("name", "topic", "notice"))
+    _rp = ("角色扮演", "扮演", "剧本", "剧本杀", "虚构", "小说", "同人", "跑团", "设定",
+           "来演", "演一个", "cos", "RP", "剧情")
+    return any(w in _txt for w in _rp)
+
+
 def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
     g = get(gid)
     if not g:
@@ -927,8 +962,16 @@ def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
                 sys_p += ("\n如果你认为该做一件具体的事（写文件/跑命令/查资料/造插件），"
                           "就在回答末尾单独写一行：〔提议：工具名 + 一句话说明〕，"
                           "载体会把提议记下来并执行。不要删除或移动任何文件。")
-            # 【不许空口说做过】实测：4B 成员爱说「我刚才在机器上跑了一下 grep…结果有配置」，
-            #   而它这一轮根本没调过工具 —— 那是演给用户看的。这里把规矩写死。
+            # 【没有明说要演，就不许演】用户的原话：
+            #   「如果我没有在主题去写角色扮演，我不要他们在群里去演，例如探讨一个网络案件，
+            #    他们就必须根据真实的案件去探讨，而不是假的自己模拟这种，要十分严格。」
+            _ROLEPLAY = _is_role_play(g)
+            if not _ROLEPLAY:
+                sys_p += ("\n【这是真事，不是剧本】本群没有设定角色扮演，讨论的是现实里的东西。硬规矩：\n"
+                          "1) 不许编案情、不许编人名/公司名/时间/数字/法条——没查到就说没查到。\n"
+                          "2) 需要事实就写一行〔提议：search 要查的关键词〕，载体去查，查到的内容会带回群里。\n"
+                          "3) 可以说推理和判断，但必须标明这是推断，不能伪装成已证实的事实。\n"
+                          "4) 不许假装自己办过案、扫过机器、查过数据库——那些只能通过〔提议〕由载体真做。")
             sys_p += ("\n【硬规矩】你没真的执行过的事，绝不能说「我已经跑了/我查过了/我扫过了/"
                       "结果有配置/已安装」这类话。你只有一张嘴：想让它发生，就写"
                       "〔提议：具体命令或动作〕，载体替你真做，做完再把真实结果贴出来。")
@@ -1018,6 +1061,18 @@ def _run_round_locked(gid, rounds=1, speakers=None, allow_act=True, focus=""):
                     LOG.info("群组：%s 把失败说成成功，已按事实改写（%s）", m.get("name"), _evid[:80])
                     txt = ("〔核验：这一下其实没成〕%s\n\n（它原本写的成功结论不算数，下面是它原话）\n%s"
                            % (_evid[:200], txt))
+            # 【讲真事：具体事实必须有出处】用户原话：「探讨一个网络案件，就必须根据真实的案件，
+            #   而不是假的自己模拟这种，要十分严格」。这里在载体侧判：说了具体事实（年份/案号/
+            #   法条/数字/机构），但这一轮既没调工具、最近也没查过任何外部资料 → 不许当事实发出去。
+            _no_source = False
+            if (not _ROLEPLAY) and (not (_actions or [])) and \
+                    _FACT_SIG.search(txt) and not _has_evidence(msgs):
+                _no_source = True
+                _event("claim_no_source", gid=gid, member=m.get("name"), text=txt[:120])
+                LOG.info("群组：%s 讲了具体事实但没有来源 → 标成推断", m.get("name"))
+                txt = ("〔没来源·这是推断，不是查到的〕" + txt +
+                       "\n\n（想让这条变成有出处的事实：让它写〔提议：search 关键词〕，载体去查。"
+                       "本群没设角色扮演，所以不编案情。）")
             # 【拦住复读】实测：后一个人把前一个人那句一字不差抄一遍，看着像两个 AI 互相复读。
             #   判据落在载体（提示词拦不住小模型），重合度 ≥0.8 就丢这条并记账。
             _dup, _dup_who, _ratio = _too_similar(txt, msgs)
