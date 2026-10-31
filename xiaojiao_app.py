@@ -21894,6 +21894,11 @@ def bind_host(port=None):
 def main():
     print("=" * 46)
     print("  小焦 · XiaoJiao Web")
+    # 【直接跑 app 会另开一份数据】实测踩过：在仓库目录里 `python xiaojiao_app.py`
+    #   会把本目录的 logs/ 当成数据目录（群是空的），还会抢 5000 端口，
+    #   于是前端问旧群 id 全是 404。这里大声说清楚，别让人以为"数据没了"。
+    _cwd = os.getcwd()
+    print("  数据目录: %s（logs/ 按当前目录算）" % _cwd)
     print(f"  大脑(模型): {'✔ 小焦模型已加载' if XJ_READY else '✘ 未加载'}")
     print(f"  联网搜索:   ✔ Bing/Sogou")
     print(f"  记忆自学习: ✔ (xiaojiao_knowledge_memory.json)")
@@ -21957,6 +21962,11 @@ def main():
 
 
 if __name__ == "__main__":
+    # 【直接跑 app 会另开一份数据】实测踩过：在仓库目录里 `python xiaojiao_app.py`，
+    #   数据目录就成了这个目录（群是空的），还会抢 5000 端口，前端问旧群 id 全 404。
+    #   正常用法是 start_xiaojiao.py：它会把火种、端口、预检一起对齐。
+    print("  ⚠ 你是直接跑 xiaojiao_app.py：数据目录按当前目录算，火种(llama-swap)也不会自动拉起。")
+    print("  ⚠ 要用真实那套数据，请在装好的目录跑 start_xiaojiao.py")
     main()
 
 
